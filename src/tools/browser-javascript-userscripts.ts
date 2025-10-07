@@ -576,24 +576,20 @@ This ensures reliable execution.`,
 					injectImmediately: true,
 				});
 			} else {
-				// Fallback for Firefox (doesn't have userScripts.execute yet):
-				// Use scripting.executeScript() with func parameter
-				// The func gets serialized and executed in ISOLATED world (has DOM access but not page JS)
-				results = await browser.scripting.executeScript({
-					target: { tabId: tab.id },
-					world: "ISOLATED",
-					injectImmediately: true,
-					// The function receives the wrapper code as a string and evaluates it
-					// This is safe because the wrapper code already includes all security safeguards
-					// eslint-disable-next-line @typescript-eslint/no-implied-eval, no-eval, no-sequences
-					func: (code: string) => {
-						// Use indirect eval to execute in ISOLATED world context
-						// In Firefox, window.eval() would run in page context, but we want ISOLATED
-						// So we use (0, eval) which is indirect eval in the current scope
-						return (0, eval)(code);
-					},
-					args: [wrapperCode],
-				});
+				// Firefox doesn't have userScripts.execute() yet, and scripting.executeScript()
+				// cannot bypass page CSP to use eval. We have no workaround.
+				// See: https://bugzilla.mozilla.org/show_bug.cgi?id=1930776
+				return {
+					output: `Error: Firefox is currently not supported for the browser_javascript tool.
+
+Firefox does not yet support the userScripts.execute() API, which is required to execute arbitrary JavaScript code while bypassing page Content Security Policy.
+
+Please use Chrome 138+ with the "Allow User Scripts" toggle enabled, or wait for Firefox to implement userScripts.execute().
+
+Track Firefox implementation: https://bugzilla.mozilla.org/show_bug.cgi?id=1930776`,
+					isError: true,
+					details: { files: [] },
+				};
 			}
 
 			const result = results[0]?.result as
