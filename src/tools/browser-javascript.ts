@@ -5,7 +5,6 @@ import {
 	type ArtifactsPanel,
 	ArtifactsRuntimeProvider,
 	type Attachment,
-	type ConsoleLog,
 	ConsoleRuntimeProvider,
 	FileDownloadRuntimeProvider,
 	RUNTIME_MESSAGE_ROUTER,
@@ -414,24 +413,6 @@ function buildWrapperCode(
 }
 
 /**
- * Format console log entry with appropriate prefix
- */
-function formatConsoleEntry(entry: ConsoleLog, includeLog = false): string {
-	const prefix =
-		entry.type === "error"
-			? "[ERROR]"
-			: entry.type === "warn"
-				? "[WARN]"
-				: entry.type === "info"
-					? "[INFO]"
-					: includeLog
-						? "[LOG]"
-						: "";
-	const text = entry.args ? entry.args.join(" ") : entry.text;
-	return prefix ? `${prefix} ${text}` : text;
-}
-
-/**
  * Check if userScripts API is available, and provide helpful error messages if not.
  * For Firefox, attempts to request the permission if not granted.
  */
@@ -794,43 +775,36 @@ Track Firefox implementation: https://bugzilla.mozilla.org/show_bug.cgi?id=19307
 				const _isCompleted = consoleProvider.isCompleted();
 				const _completionError = consoleProvider.getCompletionError();
 
-				if (!result.success) {
-					// Build error output with console logs if any
-					let errorOutput = `Error: ${result.error}\n\nStack trace:\n${result.stack || "No stack trace available"}`;
-
-					if (consoleLogs.length > 0) {
-						errorOutput += "\n\nConsole output:\n";
-						for (const entry of consoleLogs) {
-							const line = formatConsoleEntry(entry, true);
-							errorOutput += `${line}\n`;
-						}
-					}
-
-					return {
-						output: errorOutput,
-						isError: true,
-						details: { files: [] },
-					};
-				}
-
 				// Build output with console logs
 				let output = "";
 
 				// Add console output
 				if (consoleLogs.length > 0) {
 					for (const entry of consoleLogs) {
-						const line = formatConsoleEntry(entry);
-						output += `${line}\n`;
+						const text = entry.args ? entry.args.join(" ") : entry.text;
+						output += `${text}\n`;
 					}
+				}
+
+				if (!result.success) {
+					if (output) output += "\n";
+					output += `Error: ${result.error}\n${result.stack || "No stack trace available"}`;
+
+					return {
+						output: output.trim(),
+						isError: true,
+						details: { files: [] },
+					};
 				}
 
 				// Add last expression value if present and not undefined
 				if (result.lastValue !== undefined) {
+					if (output) output += "\n";
 					const formatted =
 						typeof result.lastValue === "string"
 							? result.lastValue
 							: JSON.stringify(result.lastValue, null, 2);
-					output += `${(output ? "\n" : "") + formatted}\n`;
+					output += `=> ${formatted}`;
 				}
 
 				// Get files from provider

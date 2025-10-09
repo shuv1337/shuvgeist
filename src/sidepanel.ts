@@ -397,6 +397,17 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
 });
 
 // ============================================================================
+// KEYBOARD SHORTCUTS
+// ============================================================================
+window.addEventListener("keydown", (e) => {
+	// Cmd+U (Mac) or Ctrl+U (Windows/Linux) to open debug page
+	if ((e.metaKey || e.ctrlKey) && e.key === "u") {
+		e.preventDefault();
+		window.location.href = "./debug.html";
+	}
+});
+
+// ============================================================================
 // INIT
 // ============================================================================
 async function initApp() {
