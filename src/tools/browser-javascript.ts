@@ -22,6 +22,7 @@ import { Globe } from "lucide";
 import { BROWSER_JAVASCRIPT_DESCRIPTION } from "../prompts/tool-prompts.js";
 import { getSitegeistStorage } from "../storage/app-storage.js";
 import "../utils/i18n-extension.js";
+import type { AgentToolResult } from "@mariozechner/pi-ai/dist/agent/types.js";
 
 // Cross-browser API compatibility
 // @ts-expect-error - browser global exists in Firefox, chrome in Chrome
@@ -107,170 +108,6 @@ export async function requestUserScriptsPermission(): Promise<{
 	};
 }
 
-// Security safeguards function - will be converted to string with .toString()
-function securitySafeguards() {
-	// Lock down access to sensitive APIs by deleting them from window
-	delete (window as any).localStorage;
-	delete (window as any).sessionStorage;
-	delete (window as any).indexedDB;
-	delete (window as any).fetch;
-	delete (window as any).XMLHttpRequest;
-	delete (window as any).WebSocket;
-	delete (window as any).EventSource;
-	delete (window as any).caches;
-	delete (window as any).cookieStore;
-
-	// Block WebRTC for network exfiltration prevention
-	delete (window as any).RTCPeerConnection;
-	delete (window as any).RTCDataChannel;
-	delete (window as any).RTCSessionDescription;
-	delete (window as any).RTCIceCandidate;
-	delete (window as any).webkitRTCPeerConnection;
-
-	// CRITICAL: Block iframe and window creation to prevent API bypass via iframe.contentWindow
-	const blockedError = () => {
-		throw new Error("Creating new browsing contexts is blocked for security");
-	};
-	delete (window as any).HTMLIFrameElement;
-	delete (window as any).HTMLFrameElement;
-	delete (window as any).HTMLObjectElement;
-	delete (window as any).HTMLEmbedElement;
-	(window as any).open = blockedError;
-	(window as any).showModalDialog = blockedError;
-
-	// Block document.createElement for iframes, frames, objects, embeds
-	const originalCreateElement = document.createElement.bind(document);
-	document.createElement = ((tagName: string, options?: any) => {
-		const tag = tagName.toLowerCase();
-		if (
-			tag === "iframe" ||
-			tag === "frame" ||
-			tag === "object" ||
-			tag === "embed"
-		) {
-			throw new Error(`Creating ${tag} elements is blocked for security`);
-		}
-		return originalCreateElement(tagName, options);
-	}) as any;
-
-	// Block createElementNS (for SVG/XML iframes)
-	const originalCreateElementNS = document.createElementNS.bind(document);
-	document.createElementNS = ((
-		namespaceURI: string,
-		qualifiedName: string,
-		options?: any,
-	) => {
-		const tag = qualifiedName.toLowerCase();
-		if (
-			tag === "iframe" ||
-			tag === "frame" ||
-			tag === "object" ||
-			tag === "embed"
-		) {
-			throw new Error(`Creating ${tag} elements is blocked for security`);
-		}
-		return originalCreateElementNS(namespaceURI, qualifiedName, options);
-	}) as any;
-
-	// Block innerHTML/outerHTML that could inject iframes
-	const blockIframeHTML = (value: string) => {
-		if (typeof value === "string" && /<i?frame|<object|<embed/i.test(value)) {
-			throw new Error(
-				"HTML containing iframe/frame/object/embed is blocked for security",
-			);
-		}
-		return value;
-	};
-
-	// Override Element.prototype.innerHTML setter
-	const originalInnerHTMLDesc = Object.getOwnPropertyDescriptor(
-		Element.prototype,
-		"innerHTML",
-	)!;
-	Object.defineProperty(Element.prototype, "innerHTML", {
-		set: function (value: string) {
-			blockIframeHTML(value);
-			originalInnerHTMLDesc.set?.call(this, value);
-		},
-		get: originalInnerHTMLDesc.get,
-	});
-
-	// Override Element.prototype.outerHTML setter
-	const originalOuterHTMLDesc = Object.getOwnPropertyDescriptor(
-		Element.prototype,
-		"outerHTML",
-	)!;
-	Object.defineProperty(Element.prototype, "outerHTML", {
-		set: function (value: string) {
-			blockIframeHTML(value);
-			originalOuterHTMLDesc.set?.call(this, value);
-		},
-		get: originalOuterHTMLDesc.get,
-	});
-
-	// Block insertAdjacentHTML
-	const originalInsertAdjacentHTML = Element.prototype.insertAdjacentHTML;
-	Element.prototype.insertAdjacentHTML = function (
-		position: InsertPosition,
-		html: string,
-	) {
-		blockIframeHTML(html);
-		return originalInsertAdjacentHTML.call(this, position, html);
-	};
-
-	// Block document.write/writeln which could inject iframes
-	(document as any).write = blockedError;
-	(document as any).writeln = blockedError;
-
-	// CRITICAL: Block modification of existing iframe src to prevent exfiltration via navigation
-	try {
-		const existingIframes = document.querySelectorAll(
-			"iframe, frame, object, embed",
-		);
-		existingIframes.forEach((element) => {
-			try {
-				// Make src property read-only
-				Object.defineProperty(element, "src", {
-					get: function () {
-						return this.getAttribute("src");
-					},
-					set: () => {
-						throw new Error(
-							"Modifying iframe/frame/object/embed src is blocked for security",
-						);
-					},
-					configurable: false,
-				});
-
-				// Also block setAttribute for src
-				const originalSetAttribute = element.setAttribute.bind(element);
-				element.setAttribute = (name: string, value: string) => {
-					if (name.toLowerCase() === "src") {
-						throw new Error(
-							"Modifying iframe/frame/object/embed src is blocked for security",
-						);
-					}
-					return originalSetAttribute(name, value);
-				};
-			} catch (_e) {
-				// Ignore errors for individual elements (may be cross-origin or protected)
-			}
-		});
-	} catch (_e) {
-		// Ignore if querySelectorAll fails
-	}
-
-	// Also block document.cookie access
-	Object.defineProperty(document, "cookie", {
-		get: () => {
-			throw new Error("Access to document.cookie is blocked for security");
-		},
-		set: () => {
-			throw new Error("Access to document.cookie is blocked for security");
-		},
-	});
-}
-
 // Wrapper function that executes user code - will be converted to string with .toString()
 async function wrapperFunction() {
 	let timeoutId: number;
@@ -304,16 +141,22 @@ async function wrapperFunction() {
 		const lastValue = await Promise.race([codePromise, timeoutPromise]);
 
 		// Call completion callbacks before returning (success path)
-		// @ts-expect-error
-		if (window.__completionCallbacks && window.__completionCallbacks.length > 0) {
+		if (
+			// @ts-expect-error
+			window.__completionCallbacks &&
+			// @ts-expect-error
+			window.__completionCallbacks.length > 0
+		) {
 			try {
 				await Promise.race([
 					// @ts-expect-error
-					Promise.all(window.__completionCallbacks.map(cb => cb(true))),
-					new Promise((_, reject) => setTimeout(() => reject(new Error('Completion timeout')), 5000))
+					Promise.all(window.__completionCallbacks.map((cb) => cb(true))),
+					new Promise((_, reject) =>
+						setTimeout(() => reject(new Error("Completion timeout")), 5000),
+					),
 				]);
 			} catch (e) {
-				console.error('Completion callback error:', e);
+				console.error("Completion callback error:", e);
 			}
 		}
 
@@ -322,18 +165,25 @@ async function wrapperFunction() {
 			success: true,
 			lastValue: lastValue,
 		};
+		// biome-ignore lint/suspicious/noExplicitAny: fine
 	} catch (error: any) {
 		// Call completion callbacks before returning (error path)
-		// @ts-expect-error
-		if (window.__completionCallbacks && window.__completionCallbacks.length > 0) {
+		if (
+			// @ts-expect-error
+			window.__completionCallbacks &&
+			// @ts-expect-error
+			window.__completionCallbacks.length > 0
+		) {
 			try {
 				await Promise.race([
 					// @ts-expect-error
-					Promise.all(window.__completionCallbacks.map(cb => cb(false))),
-					new Promise((_, reject) => setTimeout(() => reject(new Error('Completion timeout')), 5000))
+					Promise.all(window.__completionCallbacks.map((cb) => cb(false))),
+					new Promise((_, reject) =>
+						setTimeout(() => reject(new Error("Completion timeout")), 5000),
+					),
 				]);
 			} catch (e) {
-				console.error('Completion callback error:', e);
+				console.error("Completion callback error:", e);
 			}
 		}
 
@@ -581,11 +431,11 @@ export class BrowserJavaScriptTool
 		private agent: Agent,
 	) {}
 
-	execute = async (
+	async execute(
 		_toolCallId: string,
 		args: Static<typeof browserJavaScriptSchema>,
 		signal?: AbortSignal,
-	) => {
+	): Promise<AgentToolResult<BrowserJavaScriptToolResult>> {
 		try {
 			// Check if already aborted
 			if (signal?.aborted) {
@@ -595,7 +445,7 @@ export class BrowserJavaScriptTool
 			// Validate navigation commands
 			const validation = validateBrowserJavaScript(args.code);
 			if (!validation.valid) {
-				throw new Error(validation.error!);
+				throw new Error(validation.error || "Code validation failed");
 			}
 
 			// Get the active tab
@@ -613,7 +463,9 @@ export class BrowserJavaScriptTool
 				tab.url?.startsWith("chrome-extension://") ||
 				tab.url?.startsWith("about:")
 			) {
-				throw new Error(`Cannot execute scripts on ${tab.url}. Extension pages and internal URLs are protected.`);
+				throw new Error(
+					`Cannot execute scripts on ${tab.url}. Extension pages and internal URLs are protected.`,
+				);
 			}
 
 			// Check if userScripts API is available
@@ -622,11 +474,15 @@ export class BrowserJavaScriptTool
 				if (apiCheck.shouldRetry) {
 					// This is a non-error case where the user granted permission - return success
 					return {
-						output: apiCheck.message!,
+						output:
+							apiCheck.message ||
+							"Permission granted, please retry your request.",
 						details: { files: [] },
 					};
 				}
-				throw new Error(apiCheck.message!);
+				throw new Error(
+					apiCheck.message || "browser.userScripts API is not available.",
+				);
 			}
 
 			// Load all skills for current domain and prepend libraries
@@ -646,28 +502,8 @@ export class BrowserJavaScriptTool
 			// Create runtime providers
 			const consoleProvider = new ConsoleRuntimeProvider();
 			const artifactsProvider = new ArtifactsRuntimeProvider(
-				() => this.artifactsPanel.artifacts,
-				async (filename: string, content: string, _title?: string) => {
-					await this.artifactsPanel.tool.execute("", {
-						command: "create",
-						filename,
-						content,
-					});
-				},
-				async (filename: string, content: string, _title?: string) => {
-					await this.artifactsPanel.tool.execute("", {
-						command: "rewrite",
-						filename,
-						content,
-					});
-				},
-				async (filename: string) => {
-					await this.artifactsPanel.tool.execute("", {
-						command: "delete",
-						filename,
-					});
-				},
-				(message: any) => this.agent.appendMessage(message),
+				this.artifactsPanel,
+				this.agent,
 			);
 			const fileDownloadProvider = new FileDownloadRuntimeProvider();
 
@@ -680,7 +516,6 @@ export class BrowserJavaScriptTool
 			// Register sandbox with RUNTIME_MESSAGE_ROUTER before building wrapper
 			RUNTIME_MESSAGE_ROUTER.registerSandbox(sandboxId, providers, []);
 
-			// Build the wrapper code using the function-based approach with providers
 			// TODO: Add user setting to enable/disable safeguards
 			const wrapperCode = buildWrapperCode(
 				args.code,
@@ -688,8 +523,9 @@ export class BrowserJavaScriptTool
 				false,
 				providers,
 				sandboxId,
-			); // Safeguards enabled now that we have isolated worlds
+			);
 
+			// biome-ignore lint/suspicious/noExplicitAny: <explanation>
 			let results: any[];
 
 			try {
@@ -699,9 +535,6 @@ export class BrowserJavaScriptTool
 					browser.userScripts &&
 					typeof browser.userScripts.execute === "function"
 				) {
-					// Chrome 135+ or future Firefox: Use userScripts.execute() API
-					// This provides proper USER_SCRIPT world with configurable CSP
-
 					// Configure this specific world with CSP that allows eval but blocks network
 					try {
 						await browser.userScripts.configureWorld({
@@ -711,7 +544,6 @@ export class BrowserJavaScriptTool
 							csp: "script-src 'unsafe-eval'; connect-src 'none'; default-src 'none';",
 						});
 					} catch (e) {
-						// May fail if already configured or not supported - non-fatal
 						console.warn("Failed to configure userScripts world:", e);
 					}
 
@@ -761,13 +593,13 @@ Track Firefox implementation: https://bugzilla.mozilla.org/show_bug.cgi?id=19307
 					| undefined;
 
 				if (!result) {
-					throw new Error("No result returned from script execution. Need to reload page.");
+					throw new Error(
+						"No result returned from script execution. Need to reload page.",
+					);
 				}
 
 				// Get console logs from provider
 				const consoleLogs = consoleProvider.getLogs();
-				const _isCompleted = consoleProvider.isCompleted();
-				const _completionError = consoleProvider.getCompletionError();
 
 				// Build output with console logs
 				let output = "";
@@ -869,7 +701,7 @@ Track Firefox implementation: https://bugzilla.mozilla.org/show_bug.cgi?id=19307
 			// All errors (including abort) are re-thrown so the agent framework marks the tool call as failed
 			throw err;
 		}
-	};
+	}
 }
 
 // Legacy export - creates a dummy instance (won't have artifacts support)
