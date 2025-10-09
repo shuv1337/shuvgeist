@@ -304,12 +304,26 @@ async function wrapperFunction() {
 		// Race between execution and timeout
 		const lastValue = await Promise.race([codePromise, timeoutPromise]);
 
+		// Call completion callbacks before returning (success path)
+		// @ts-expect-error
+		if (window.__completionCallbacks) {
+			// @ts-expect-error
+			await Promise.all(window.__completionCallbacks.map(cb => cb(true)));
+		}
+
 		cleanup();
 		return {
 			success: true,
 			lastValue: lastValue,
 		};
 	} catch (error: any) {
+		// Call completion callbacks before returning (error path)
+		// @ts-expect-error
+		if (window.__completionCallbacks) {
+			// @ts-expect-error
+			await Promise.all(window.__completionCallbacks.map(cb => cb(false)));
+		}
+
 		cleanup();
 		return {
 			success: false,
