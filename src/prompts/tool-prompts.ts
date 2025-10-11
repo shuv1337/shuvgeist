@@ -270,6 +270,17 @@ Then use it efficiently:
 1. **get** - View skill description and examples
    { action: "get", name: "gmail-basics" }
 
+   **IMPORTANT:** By default, get returns ONLY description and examples (NOT library code).
+   This is intentional for token efficiency - you don't need to see implementation to use a skill.
+
+   Only add includeLibraryCode: true if you need to:
+   - Debug errors in the skill's implementation
+   - Modify/update the skill's library code
+   - Understand internal implementation details
+
+   Example with library code:
+   { action: "get", name: "gmail-basics", includeLibraryCode: true }
+
 2. **list** - List skills
    { action: "list" } - Lists skills for current tab URL
    { action: "list", url: "https://example.com" } - Lists skills for specific URL
