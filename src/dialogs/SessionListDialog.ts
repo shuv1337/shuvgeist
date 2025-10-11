@@ -47,7 +47,7 @@ export class SitegeistSessionListDialog extends DialogBase {
 			const currentWindow = await browserAPI.windows.getCurrent();
 			this.currentWindowId = currentWindow.id;
 
-			// Load sessions
+			// Load sessions (already sorted by lastModified index)
 			const storage = getAppStorage();
 			this.sessions = await storage.sessions.getAllMetadata();
 

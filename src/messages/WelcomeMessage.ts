@@ -27,7 +27,7 @@ export class WelcomeMessageElement extends LitElement {
 	@property({ attribute: false }) agentInterface!: AgentInterface;
 	@property({ attribute: false }) message!: WelcomeMessage;
 
-	private taglineWords = ["automate", "research", "create"];
+	private taglineWords = ["automate", "write", "transform", "research", "scrape", "create"];
 	private currentWordIndex = 0;
 	private intervalId?: number;
 

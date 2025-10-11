@@ -70,6 +70,23 @@ export function getPort(): chrome.runtime.Port {
 	return port;
 }
 
+// Debug function to dump session metadata
+(window as any).dumpSessionMetadata = async () => {
+	const metadata = await storage.sessions.getAllMetadata();
+	console.log("=== SESSION METADATA ===");
+	console.log("Total sessions:", metadata.length);
+	console.table(
+		metadata.map((m) => ({
+			id: m.id,
+			title: m.title,
+			lastModified: m.lastModified,
+			createdAt: m.createdAt,
+			messageCount: m.messageCount,
+		})),
+	);
+	return metadata;
+};
+
 // ============================================================================
 // HELPERS
 // ============================================================================
@@ -193,6 +210,23 @@ const createAgent = async (initialState?: Partial<AgentState>, shouldSave = true
 				if (!currentSessionId && shouldSaveSession(messages)) {
 					currentSessionId = crypto.randomUUID();
 					updateUrl(currentSessionId);
+
+					// Acquire lock for newly created session
+					sendPortMessage(
+						{
+							type: "acquireLock",
+							sessionId: currentSessionId,
+							windowId: currentWindowId,
+						},
+						"lockResult",
+					).then((lockResponse: { success: boolean }) => {
+						if (!lockResponse?.success) {
+							console.warn(
+								"Failed to acquire lock for newly created session",
+								currentSessionId,
+							);
+						}
+					});
 				}
 
 				// Auto-save

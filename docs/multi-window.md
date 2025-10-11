@@ -130,7 +130,7 @@ async function initApp() {
 }
 ```
 
-**Lock Acquisition**:
+**Lock Acquisition (at init)**:
 ```typescript
 // Try to load latest session
 const lockResponse = await sendPortMessage({
@@ -145,6 +145,24 @@ if (lockResponse.success) {
   // Show landing page
 }
 ```
+
+**Lock Acquisition (on new session creation)**:
+```typescript
+// In agent state subscription handler
+if (!currentSessionId && shouldSaveSession(messages)) {
+  currentSessionId = crypto.randomUUID();
+  updateUrl(currentSessionId);
+
+  // Acquire lock for newly created session
+  sendPortMessage({
+    type: "acquireLock",
+    sessionId: currentSessionId,
+    windowId: currentWindowId,
+  }, "lockResult");
+}
+```
+
+New sessions don't have a sessionId until the first successful message exchange (user sends message + valid assistant response). Lock is automatically acquired when the sessionId is assigned.
 
 **No Manual Cleanup**:
 ```typescript
@@ -239,28 +257,34 @@ If service worker restarts and loses lock state, no ports exist → all locks tr
    - Navigate in Window A tabs → only Window A sees events
    - Navigate in Window B tabs → no effect on Window A
 
-2. **Lock Badges**
+2. **New Session Lock**
+   - Window A: Create new session, send first message
+   - Window A: Wait for response (sessionId assigned, lock acquired)
+   - Window B: Open sidepanel → landing page (Window A's session locked)
+   - Window B: Session list → Window A's session shows "Locked" badge
+
+3. **Lock Badges**
    - Window A: Open session list → session has "Current" badge
    - Window B: Open session list → same session has "Locked" badge, not clickable
 
-3. **Session Switching**
+4. **Session Switching**
    - Window A: Switch to different session
    - Window B: Session list → original session now selectable (lock released)
 
-4. **Sidepanel Close**
+5. **Sidepanel Close**
    - Window A: Close sidepanel with X button
    - Window B: Open sidepanel → session loads (lock released)
 
-5. **Window Close**
+6. **Window Close**
    - Window A: Close entire window
    - Window B: Session now available (lock released)
 
-6. **Keyboard Toggle**
+7. **Keyboard Toggle**
    - Sidepanel open: Cmd+Shift+P → closes
    - Sidepanel closed: Cmd+Shift+P → opens
    - Independent per window
 
-7. **Navigation**
+8. **Navigation**
    - Cmd+U to debug page → locks released
    - Session switch → locks released
    - All handled by port disconnect
