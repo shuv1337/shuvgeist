@@ -433,7 +433,7 @@ export class SitegeistSessionListDialog extends DialogBase {
 													this.handleDeleteOlderThan(7);
 												}}
 											>
-												${i18n("Delete older than 7 days")}
+												${i18n("Older than 7 days")}
 											</button>
 											<button
 												class="w-full px-3 py-2 text-left text-sm text-foreground hover:bg-secondary transition-colors"
@@ -442,7 +442,7 @@ export class SitegeistSessionListDialog extends DialogBase {
 													this.handleDeleteOlderThan(30);
 												}}
 											>
-												${i18n("Delete older than 30 days")}
+												${i18n("Older than 30 days")}
 											</button>
 											<button
 												class="w-full px-3 py-2 text-left text-sm text-foreground hover:bg-secondary transition-colors border-t border-border rounded-b-md"
@@ -451,7 +451,7 @@ export class SitegeistSessionListDialog extends DialogBase {
 													this.handleDeleteOlderThan(90);
 												}}
 											>
-												${i18n("Delete older than 90 days")}
+												${i18n("Older than 90 days")}
 											</button>
 										</div>
 									`
