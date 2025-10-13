@@ -108,16 +108,16 @@ const navigateRenderer: ToolRenderer<NavigateParams, NavigateResult> = {
 ## Built-in Renderers
 
 **web-ui Package:**
-- `bash` - Command execution with console output
-- `calculate` - Mathematical expressions
-- `get_current_time` - Time queries
-- `javascript_repl` - Sandboxed JavaScript REPL
-- `artifacts` - File artifact management
+- `bash` - Command execution with console output (BashRenderer)
+- `javascript_repl` - Sandboxed JavaScript REPL with console output
+- `extract_document` - Document extraction from web pages
+- `artifacts` - File artifact management (ArtifactsToolRenderer)
 
 **sitegeist Extension:**
-- `browser_javascript` - Page JavaScript execution
-- `skill` - Skill management operations
-- `navigate` - Page navigation
+- `browser_javascript` - Page JavaScript execution with collapsible code
+- `skill` - Skill management operations (list, get, create, update, delete, patch)
+- `navigate` - Page navigation with favicon display
+- `debugger` - Browser debugger tool
 
 ## Best Practices
 

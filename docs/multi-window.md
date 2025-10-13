@@ -56,160 +56,47 @@ Uses `chrome.runtime.connect()` for reliable lifecycle tracking. Port disconnect
 
 #### Background Service Worker ([background.ts](../src/background.ts))
 
-**State**:
-```typescript
-const sessionLocks = new Map<string, number>(); // sessionId -> windowId
-const windowPorts = new Map<number, Port>(); // windowId -> port
-```
+Manages session locks and port connections. See implementation for details.
 
-**Port Handler**:
-```typescript
-browserAPI.runtime.onConnect.addListener((port) => {
-  // Port name: "sidepanel:${windowId}"
-  const windowId = extractWindowId(port.name);
-  windowPorts.set(windowId, port);
+**Key responsibilities** (lines 21-122):
+- **State**: Tracks `sessionLocks` (sessionId → windowId) and `windowPorts` (windowId → port)
+- **Port handler** (line 26): Listens for connections with name format `sidepanel:${windowId}`
+  - `acquireLock` message: Grants lock if available or owner port is dead (stale lock detection)
+  - `getLockedSessions` message: Returns all current locks for session list UI
+  - `onDisconnect`: Auto-releases all locks for the disconnected window
+- **Window cleanup** (line 88): Belt-and-suspenders cleanup when entire window closes
+- **Keyboard shortcut** (line 98): Toggles sidepanel open/close via port existence check
 
-  port.onMessage.addListener((msg) => {
-    if (msg.type === "acquireLock") {
-      // Check if owner's port still exists (stale lock detection)
-      const ownerWindowId = sessionLocks.get(sessionId);
-      const ownerPortAlive = ownerWindowId && windowPorts.has(ownerWindowId);
+#### Port Module ([utils/port.ts](../src/utils/port.ts))
 
-      if (!ownerWindowId || !ownerPortAlive || ownerWindowId === requestingWindowId) {
-        sessionLocks.set(sessionId, requestingWindowId);
-        port.postMessage({ type: "lockResult", success: true });
-      } else {
-        port.postMessage({ type: "lockResult", success: false });
-      }
-    }
-  });
+Centralized port communication with automatic reconnection and type-safe messaging. See implementation for details.
 
-  port.onDisconnect.addListener(() => {
-    // Auto-release all locks for this window
-    for (const [sid, wid] of sessionLocks.entries()) {
-      if (wid === windowId) sessionLocks.delete(sid);
-    }
-    windowPorts.delete(windowId);
-  });
-});
-```
-
-**Keyboard Shortcut Toggle**:
-```typescript
-browserAPI.commands.onCommand.addListener(async (command) => {
-  const w = await browserAPI.windows.getCurrent();
-  const port = windowPorts.get(w.id);
-
-  if (port) {
-    // Sidepanel open → close it
-    port.postMessage({ type: "close-yourself" });
-  } else {
-    // Sidepanel closed → open it
-    sidePanel.open({ windowId: w.id });
-  }
-});
-```
+**Key features**:
+- **Initialization** (line 116): `initialize(windowId)` - must be called before sending messages
+- **Auto-reconnection** (line 173): 2-attempt retry with automatic reconnect on failure or ~5min inactivity timeout
+- **Type-safe messaging** (line 173): `sendMessage<TRequest>` infers response type from request type
+- **Message routing** (line 134): Dispatches responses to registered handlers, handles `close-yourself` command
+- **Connection management** (line 125): Creates port with name `sidepanel:${windowId}`, listens for disconnect
 
 #### Sidepanel ([sidepanel.ts](../src/sidepanel.ts))
 
-**Port Creation**:
-```typescript
-async function initApp() {
-  const currentWindow = await browserAPI.windows.getCurrent();
-  currentWindowId = currentWindow.id;
+Uses port module for session locking and tracks window-specific events. See implementation for details.
 
-  // Create port connection
-  port = browserAPI.runtime.connect({ name: `sidepanel:${currentWindowId}` });
-
-  // Handle close command from keyboard shortcut
-  port.onMessage.addListener((msg) => {
-    if (msg.type === "close-yourself") {
-      window.close(); // Only way to close sidepanel from within
-    }
-  });
-}
-```
-
-**Lock Acquisition (at init)**:
-```typescript
-// Try to load latest session
-const lockResponse = await sendPortMessage({
-  type: "acquireLock",
-  sessionId: latestSessionId,
-  windowId: currentWindowId,
-});
-
-if (lockResponse.success) {
-  // Load session
-} else {
-  // Show landing page
-}
-```
-
-**Lock Acquisition (on new session creation)**:
-```typescript
-// In agent state subscription handler
-if (!currentSessionId && shouldSaveSession(messages)) {
-  currentSessionId = crypto.randomUUID();
-  updateUrl(currentSessionId);
-
-  // Acquire lock for newly created session
-  sendPortMessage({
-    type: "acquireLock",
-    sessionId: currentSessionId,
-    windowId: currentWindowId,
-  }, "lockResult");
-}
-```
-
-New sessions don't have a sessionId until the first successful message exchange (user sends message + valid assistant response). Lock is automatically acquired when the sessionId is assigned.
-
-**No Manual Cleanup**:
-```typescript
-// Navigation automatically disconnects port and releases locks
-const loadSession = (sessionId: string) => {
-  window.location.href = `?session=${sessionId}`;
-  // Port disconnects → locks released automatically
-};
-```
-
-**Window ID Filtering**:
-```typescript
-chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
-  if (tab.windowId === currentWindowId && /* other conditions */) {
-    // Only track navigation in current window
-  }
-});
-```
+**Key behaviors**:
+- **Port init** (line 660): Calls `port.initialize(currentWindowId)` during app startup
+- **Lock on init** (line 703): Tries to acquire lock for latest session, shows landing page if locked
+- **Lock on session creation** (line 230): Acquires lock when first message creates a sessionId
+- **Window filtering** (line 518, 538): Only tracks tab navigation/activation in current window
+- **No manual cleanup**: Port disconnect automatically releases locks on navigation/close
 
 #### Session List Dialog ([dialogs/SessionListDialog.ts](../src/dialogs/SessionListDialog.ts))
 
-**Lock State Query**:
-```typescript
-const port = getPort(); // Import from sidepanel
-port.postMessage({ type: "getLockedSessions" });
+Displays session list with Current/Locked badges. See implementation for details.
 
-// Wait for response
-const lockResponse = await new Promise((resolve) => {
-  const listener = (msg) => {
-    if (msg.type === "lockedSessions") {
-      port.onMessage.removeListener(listener);
-      resolve(msg);
-    }
-  };
-  port.onMessage.addListener(listener);
-});
-
-this.sessionLocks = lockResponse.locks;
-```
-
-**Lock Detection**:
-```typescript
-private isSessionLocked(sessionId: string): boolean {
-  const lockWindowId = this.sessionLocks[sessionId];
-  return lockWindowId !== undefined && lockWindowId !== this.currentWindowId;
-}
-```
+**Key features**:
+- **Lock query** (line 78): Uses `port.sendMessage({ type: "getLockedSessions" })` to fetch all locks
+- **Badge logic** (line 153-163): `isSessionLocked()` and `isCurrentSession()` determine badge display
+- **UI rendering** (line 473-497): Locked sessions are dimmed and non-clickable, current session highlighted
 
 ## Technical Details
 
@@ -227,16 +114,7 @@ private isSessionLocked(sessionId: string): boolean {
 
 ### Stale Lock Detection
 
-Background checks if lock owner's port still exists:
-```typescript
-const ownerWindowId = sessionLocks.get(sessionId);
-const ownerPortAlive = ownerWindowId && windowPorts.has(ownerWindowId);
-
-if (!ownerPortAlive) {
-  // Stale lock - reassign to requester
-  sessionLocks.set(sessionId, requestingWindowId);
-}
-```
+Background checks if lock owner's port still exists before denying lock request. If owner port is dead (stale lock), lock is reassigned to requester. See [background.ts:80-81](../src/background.ts#L80-L81).
 
 If service worker restarts and loses lock state, no ports exist → all locks treated as available (good default).
 
@@ -246,8 +124,11 @@ If service worker restarts and loses lock state, no ports exist → all locks tr
 
 **Trade-off**: Lock loss on service worker restart is acceptable:
 - Service worker stays alive while sidepanels are open (ports keep it alive)
-- If it restarts, ports reconnect and locks are re-acquired
+- If it restarts, sidepanel port disconnects briefly and reconnects automatically
+- Port module handles automatic reconnection after ~5min inactivity disconnect (2-attempt retry logic)
 - User can always reopen session
+
+See [utils/port.ts:173-236](../src/utils/port.ts#L173-L236) for reconnection implementation.
 
 ## Test Scenarios
 
@@ -313,8 +194,15 @@ If service worker restarts and loses lock state, no ports exist → all locks tr
 
 ## Related Files
 
-- [background.ts](../src/background.ts) - Port handler, lock manager, keyboard shortcut toggle
-- [sidepanel.ts](../src/sidepanel.ts) - Port creation, window ID filtering, lock acquisition
-- [dialogs/SessionListDialog.ts](../src/dialogs/SessionListDialog.ts) - Lock badges UI
+**Core Implementation**:
+- [background.ts](../src/background.ts) - Port handler, lock manager, keyboard shortcut toggle, window close cleanup
+- [utils/port.ts](../src/utils/port.ts) - Centralized port communication with automatic reconnection, type-safe message handling
+- [sidepanel.ts](../src/sidepanel.ts) - Port initialization, window ID filtering, lock acquisition on init and session creation
+
+**UI Components**:
+- [dialogs/SessionListDialog.ts](../src/dialogs/SessionListDialog.ts) - Lock badges UI (Current/Locked), lock state querying
 - [utils/i18n-extension.ts](../src/utils/i18n-extension.ts) - "Current" and "Locked" translations
-- [problem.md](./problem.md) - Problem analysis and solution evaluation
+
+**Configuration**:
+- [static/manifest.chrome.json](../static/manifest.chrome.json) - Chrome keyboard shortcut: "toggle-sidepanel" with Cmd+Shift+P
+- [static/manifest.firefox.json](../static/manifest.firefox.json) - Firefox keyboard shortcut: "toggle-sidepanel" with Cmd+Shift+P

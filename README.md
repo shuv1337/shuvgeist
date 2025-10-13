@@ -95,3 +95,9 @@ MIT
 - ../pi-mono/packages/ai/README.md
 - ../pi-mono/packages/web-ui/README.md
 - ../mini-lit/llms.txt
+
+**Additional documentation** (read only when working on related features):
+- docs/tool-renderers.md - Tool renderer system for customizing how tool invocations appear in the chat UI
+- docs/storage.md - Storage architecture with IndexedDB backend, stores for sessions, settings, provider keys, and skills
+- docs/prompts.md - Centralized prompts and tool descriptions for the agent (system prompt, tool descriptions, guidelines)
+- docs/multi-window.md - Multi-window session management with port-based locking, automatic cleanup, and keyboard shortcuts

@@ -9,9 +9,10 @@ import {
 import { type Static, Type } from "@sinclair/typebox";
 import { Loader2 } from "lucide";
 import { SkillPill } from "../components/SkillPill.js";
-import { TabPill } from "../components/TabPill.js";
+import { NAVIGATE_TOOL_DESCRIPTION } from "../prompts/tool-prompts.js";
 import { getSitegeistStorage } from "../storage/app-storage.js";
 import type { Skill } from "../storage/stores/skills-store.js";
+import { TabPill } from "../components/TabPill.js";
 import "../utils/i18n-extension.js";
 
 // Track tool-initiated navigations to filter out duplicate navigation messages
@@ -80,23 +81,7 @@ export interface NavigateResult {
 export class NavigateTool implements AgentTool<typeof navigateSchema, NavigateResult> {
 	label = "Navigate";
 	name = "navigate";
-	description = `Navigate to URLs, manage tabs, or use browser history.
-
-Actions:
-- { url: "https://example.com" } - Navigate to URL in current tab
-- { url: "https://example.com", newTab: true } - Open URL in new tab
-- { history: "back" } or { history: "forward" } - Navigate browser history
-- { listTabs: true } - List all open tabs with IDs, URLs, and titles
-- { switchToTab: <tabId> } - Switch to a specific tab by its ID
-
-Returns final URL, page title, and available skills.
-
-Examples:
-- Open Google in new tab: { url: "https://google.com", newTab: true }
-- List all tabs: { listTabs: true }
-- Switch to tab 123: { switchToTab: 123 }
-
-CRITICAL: Use this instead of window.location, history.back/forward in browser_javascript.`;
+	description = NAVIGATE_TOOL_DESCRIPTION;
 	parameters = navigateSchema;
 
 	constructor(private agent: Agent) {}

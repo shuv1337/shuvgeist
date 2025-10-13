@@ -113,6 +113,9 @@ Skills are automation libraries that automatically load when you visit matching 
 
 You see code, users see webpages. Their visual confirmation is essential. Always describe expected results in simple, visual terms they can verify.
 
+**CRITICAL - Selector Rule:**
+NEVER use text content in selectors (breaks with different browser languages). Use structural selectors: classes, data-*, aria-*, IDs. During testing you can use text to FIND elements, but save only structural selectors in skill code.
+
 # Common Workflows (with concrete examples)
 
 **Research and track findings:**
@@ -265,6 +268,28 @@ The navigate tool handles navigation properly and returns available skills.
 Note: This requires the activeTab permission and only works on http/https pages, not on chrome:// URLs.`;
 
 // ============================================================================
+// Navigate Tool
+// ============================================================================
+
+export const NAVIGATE_TOOL_DESCRIPTION = `Navigate to URLs, manage tabs, or use browser history.
+
+Actions:
+- { url: "https://example.com" } - Navigate to URL in current tab
+- { url: "https://example.com", newTab: true } - Open URL in new tab
+- { history: "back" } or { history: "forward" } - Navigate browser history
+- { listTabs: true } - List all open tabs with IDs, URLs, and titles
+- { switchToTab: <tabId> } - Switch to a specific tab by its ID
+
+Returns final URL, page title, and available skills.
+
+Examples:
+- Open Google in new tab: { url: "https://google.com", newTab: true }
+- List all tabs: { listTabs: true }
+- Switch to tab 123: { switchToTab: 123 }
+
+CRITICAL: Use this instead of window.location, history.back/forward in browser_javascript.`;
+
+// ============================================================================
 // Skill Management Tool
 // ============================================================================
 
@@ -405,6 +430,27 @@ Then use it efficiently:
 4. Once ALL capabilities are tested and confirmed working: package them together
 5. Create the skill with all tested code
 6. Include domain variations: ['youtube.com', 'youtu.be'], ['github.com', 'gist.github.com']
+
+**CRITICAL - Selector Rules:**
+NEVER use text content to find elements in skill library code. Text breaks with different browser languages.
+
+❌ BAD - Text-based selectors (breaks with language):
+  document.querySelector('button:contains("Send")')
+  Array.from(document.querySelectorAll('button')).find(b => b.textContent === 'Send')
+
+✅ GOOD - Structural selectors (language-independent):
+  document.querySelector('button[aria-label]')
+  document.querySelector('[data-testid="send-button"]')
+  document.querySelector('.compose-footer button.primary')
+
+During skill construction testing:
+- OK to use text matching to FIND the right selector
+- Then inspect element to get structural selector (class, data-*, aria-*, etc.)
+- Save ONLY the structural selector in skill library code
+
+If only text-based selector exists:
+- Document this limitation in skill description
+- Warn that skill may break with different browser languages
 
 **User Testing is MANDATORY:**
 - You see code, users see the actual webpage - their visual feedback is essential

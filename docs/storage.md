@@ -2,7 +2,7 @@
 
 ## Overview
 
-Sitegeist uses a unified IndexedDB storage system with multiple object stores for different data types. The base storage infrastructure is defined in `@mariozechner/pi-web-ui` and extended in Sitegeist with additional stores for skills, memories, and prompts.
+Sitegeist uses a unified IndexedDB storage system with multiple object stores for different data types. The base storage infrastructure is defined in `@mariozechner/pi-web-ui` and extended in Sitegeist with additional stores for skills.
 
 ## Current Implementation
 
@@ -15,9 +15,7 @@ Single IndexedDB database `sitegeist-storage` with multiple object stores:
 - `provider-keys` - API keys for LLM providers
 
 **Extension stores** (Sitegeist-specific):
-- `memories` - Session-scoped key-value pairs for agent memory
 - `skills` - Skill definitions with library code
-- `prompts` - User prompt templates
 
 **Benefits**:
 - **Quota**: ~10GB vs 10MB chrome.storage limit (60% disk on Chrome, 50% on Firefox)
@@ -227,39 +225,6 @@ export class SessionsStore extends Store {
 
 ## Extension Stores (Sitegeist)
 
-### MemoriesStore
-
-Location: `src/storage/stores/memories-store.ts`
-
-Session-scoped key-value pairs for agent memory (see [memories.md](memories.md)).
-
-```typescript
-export class MemoriesStore extends Store {
-  getConfig(): StoreConfig {
-    return { name: 'memories' };
-  }
-
-  private makeKey(sessionId: string, key: string): string {
-    return `${sessionId}_${key}`;
-  }
-
-  async get(sessionId: string, key: string): Promise<unknown | null>
-  async set(sessionId: string, key: string, value: unknown): Promise<void>
-  async delete(sessionId: string, key: string): Promise<void>
-
-  // Efficient session-scoped listing using prefix queries
-  async list(sessionId: string): Promise<string[]> {
-    const prefix = `${sessionId}_`;
-    const keys = await this.getBackend().keys('memories', prefix);
-    return keys.map(k => k.slice(prefix.length));
-  }
-}
-```
-
-**Key format**: `${sessionId}_${key}`
-- Enables efficient prefix queries with `IDBKeyRange.bound()`
-- All memories for a session can be listed without full scan
-
 ### SkillsStore
 
 Location: `src/storage/stores/skills-store.ts`
@@ -282,28 +247,12 @@ export class SkillsStore extends Store {
 **Key fields**:
 - `name` - Unique skill identifier
 - `domainPatterns` - URL patterns where skill applies
-- `description` - What the skill does
+- `shortDescription` - Brief description of the skill
+- `description` - Detailed description (markdown supported)
 - `library` - JavaScript code to inject
-- `parameters` - Function parameters and types
-
-### PromptsStore
-
-Location: `src/storage/stores/prompts-store.ts`
-
-User-defined prompt templates.
-
-```typescript
-export class PromptsStore extends Store {
-  getConfig(): StoreConfig {
-    return { name: 'prompts' };
-  }
-
-  async save(prompt: UserPrompt): Promise<void>
-  async get(id: string): Promise<UserPrompt | null>
-  async delete(id: string): Promise<void>
-  async list(): Promise<UserPrompt[]>
-}
-```
+- `examples` - Example usage code
+- `createdAt` - Timestamp when skill was created
+- `lastUpdated` - Timestamp when skill was last modified
 
 ## AppStorage Wiring
 
@@ -349,62 +298,6 @@ export function setAppStorage(storage: AppStorage): void {
 Location: `src/storage/app-storage.ts`
 
 Extends base storage with Sitegeist-specific stores.
-
-```typescript
-export class SitegeistAppStorage extends AppStorage {
-  readonly memories: MemoriesStore;
-  readonly skills: SkillsStore;
-  readonly prompts: PromptsStore;
-
-  constructor() {
-    // 1. Create all stores (no backend yet)
-    const settings = new SettingsStore();
-    const providerKeys = new ProviderKeysStore();
-    const sessions = new SessionsStore();
-    const memories = new MemoriesStore();
-    const skills = new SkillsStore();
-    const prompts = new PromptsStore();
-
-    // 2. Gather configs from all stores
-    const configs = [
-      settings.getConfig(),
-      SessionsStore.getMetadataConfig(),
-      providerKeys.getConfig(),
-      sessions.getConfig(),
-      memories.getConfig(),
-      skills.getConfig(),
-      prompts.getConfig(),
-    ];
-
-    // 3. Create backend with all configs
-    const backend = new IndexedDBStorageBackend({
-      dbName: 'sitegeist-storage',
-      version: 1,
-      stores: configs,
-    });
-
-    // 4. Wire backend to all stores
-    settings.setBackend(backend);
-    providerKeys.setBackend(backend);
-    sessions.setBackend(backend);
-    memories.setBackend(backend);
-    skills.setBackend(backend);
-    prompts.setBackend(backend);
-
-    // 5. Pass base stores to parent
-    super(settings, providerKeys, sessions, backend);
-
-    // 6. Store references to sitegeist-specific stores
-    this.memories = memories;
-    this.skills = skills;
-    this.prompts = prompts;
-  }
-}
-
-export function getSitegeistStorage(): SitegeistAppStorage {
-  return getAppStorage() as SitegeistAppStorage;
-}
-```
 
 **Initialization order**:
 1. Create store instances (no backend)
@@ -464,22 +357,6 @@ const sessions = await storage.sessions.getAllMetadata();
 // sessions is now sorted newest-first without any JS sorting!
 ```
 
-### Working with Memories
-
-```typescript
-const storage = getSitegeistStorage();
-const sessionId = 'abc-123';
-
-// Store a memory
-await storage.memories.set(sessionId, 'user_name', 'Alice');
-
-// Retrieve a memory
-const name = await storage.memories.get(sessionId, 'user_name');
-
-// List all memories for session
-const keys = await storage.memories.list(sessionId);
-```
-
 ### Managing Skills
 
 ```typescript
@@ -488,10 +365,13 @@ const storage = getSitegeistStorage();
 // Save a skill
 await storage.skills.save({
   name: 'gmail-search',
-  domainPatterns: ['mail.google.com'],
-  description: 'Search Gmail messages',
-  library: 'function searchGmail(query) { ... }',
-  parameters: [{ name: 'query', type: 'string' }],
+  domainPatterns: ['mail.google.com/**'],
+  shortDescription: 'Search Gmail messages',
+  description: 'Comprehensive Gmail search functionality',
+  library: 'window.gmail = { search: function(query) { ... } }',
+  examples: '// Search for emails\nconst results = gmail.search("from:boss");',
+  createdAt: new Date().toISOString(),
+  lastUpdated: new Date().toISOString(),
 });
 
 // Load skill by name
@@ -499,6 +379,9 @@ const skill = await storage.skills.get('gmail-search');
 
 // List all skills
 const allSkills = await storage.skills.list();
+
+// Get skills for a specific URL
+const matchingSkills = await storage.skills.getSkillsForUrl('https://mail.google.com/mail/u/0/#inbox');
 ```
 
 ## Quota Management
@@ -533,24 +416,6 @@ if (granted) {
 ```
 
 **Note**: Chrome/Edge grant persistence automatically for installed extensions.
-
-## Debug Tools
-
-### Dumping Session Metadata
-
-Console function available in sidepanel:
-
-```javascript
-// In sidepanel console
-const sessions = await dumpSessionMetadata();
-
-// Outputs table with:
-// - id
-// - title
-// - lastModified (sorted!)
-// - createdAt
-// - messageCount
-```
 
 ### Inspecting IndexedDB
 
@@ -589,15 +454,15 @@ Loading session list with metadata only:
 
 ### Prefix Queries vs Full Scan
 
-Getting all memories for a session:
+Getting items with a specific prefix:
 
 ```typescript
 // ❌ Slow: Full scan
-const allKeys = await backend.keys('memories');
-const sessionKeys = allKeys.filter(k => k.startsWith(`${sessionId}_`));
+const allKeys = await backend.keys('skills');
+const filteredKeys = allKeys.filter(k => k.startsWith('google-'));
 
 // ✅ Fast: Prefix query with IDBKeyRange
-const keys = await backend.keys('memories', `${sessionId}_`);
+const keys = await backend.keys('skills', 'google-');
 ```
 
 ## Future Extensions
@@ -676,10 +541,4 @@ export class DataExporter {
 
 ### Extension Storage (sitegeist)
 - [app-storage.ts](../src/storage/app-storage.ts) - SitegeistAppStorage
-- [stores/memories-store.ts](../src/storage/stores/memories-store.ts)
-- [stores/skills-store.ts](../src/storage/stores/skills-store.ts)
-- [stores/prompts-store.ts](../src/storage/stores/prompts-store.ts)
-
-### Related Docs
-- [memories.md](memories.md) - Agent memory system using MemoriesStore
-- [prompts.md](prompts.md) - Prompt templates system
+- [stores/skills-store.ts](../src/storage/stores/skills-store.ts) - Skills repository

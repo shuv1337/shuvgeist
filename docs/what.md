@@ -206,11 +206,11 @@ Extensible skill system for specialized automation:
   - Interactive artifacts (HTML previews, data tables)
   - Collapsible tool execution logs
   - Inline images and screenshots
-- **Message attachments**: Upload PDFs, images, Excel files directly
+- **Message attachments**: Upload PDFs, images, Word, Excel files directly
 - **Quick prompts**: Pre-built prompts for common tasks (visible on empty state)
 
 #### **Artifacts Panel**
-- **Live previews**: HTML/SVG run in isolated sandboxes with console output
+- **Live previews**: HTML run in isolated sandboxes with console output
 - **File management**: Create, edit, download multiple artifacts
 - **Export formats**: PDF, Excel, Word, text, code files
 - **Code editing**: Basic syntax highlighting and validation
