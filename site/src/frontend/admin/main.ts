@@ -180,6 +180,10 @@ async function showLoginDialog(): Promise<void> {
 async function authGuard(context: { pathname: string }, commands: Commands) {
 	console.log("[Auth Guard] Starting auth check for:", context.pathname);
 
+	// Hide sidebar during auth
+	const sidebar = document.querySelector("mini-sidebar") as HTMLElement;
+	if (sidebar) sidebar.style.display = "none";
+
 	// Check if setup is needed
 	const status = await api.status();
 	console.log("[Auth Guard] Status:", status);
@@ -189,6 +193,8 @@ async function authGuard(context: { pathname: string }, commands: Commands) {
 		// Show setup dialog
 		await showSetupDialog();
 		console.log("[Auth Guard] Setup complete, redirecting to:", context.pathname);
+		// Show sidebar after auth
+		if (sidebar) sidebar.style.display = "";
 		return commands.redirect(context.pathname);
 	}
 
@@ -202,9 +208,13 @@ async function authGuard(context: { pathname: string }, commands: Commands) {
 		// No valid cookie, show login dialog
 		await showLoginDialog();
 		console.log("[Auth Guard] Login complete, redirecting to:", context.pathname);
+		// Show sidebar after auth
+		if (sidebar) sidebar.style.display = "";
 		return commands.redirect(context.pathname);
 	}
 
+	// Show sidebar after auth
+	if (sidebar) sidebar.style.display = "";
 	console.log("[Auth Guard] Auth check complete, allowing route");
 	return undefined; // Continue to route
 }
