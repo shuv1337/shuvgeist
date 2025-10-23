@@ -3,8 +3,10 @@
 sync_files() {
     echo "Syncing files to $SERVER..."
     rsync -avz \
-      --include="dist/***" \
-      --include="infra/***" \
+      --include="dist/" \
+      --include="dist/**" \
+      --include="infra/" \
+      --include="infra/**" \
       --include="run.sh" \
       --include="package-lock.json" \
       --include="package.json" \
