@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import cookieParser from "cookie-parser";
 import cors from "cors";
 import express from "express";
+import rateLimit from "express-rate-limit";
 import type { EmailSignup } from "../shared/types.js";
 import { createApiRouter } from "./api-server.js";
 import { createAuthMiddleware } from "./auth-middleware.js";
@@ -49,6 +50,18 @@ async function startServer() {
 	app.use(cors());
 	app.use(cookieParser());
 	app.use(express.json());
+
+	// Rate limiter for login endpoint
+	const loginLimiter = rateLimit({
+		windowMs: 15 * 60 * 1000, // 15 minutes
+		max: 5, // Limit each IP to 5 requests per windowMs
+		message: "Too many login attempts. Please try again in 15 minutes.",
+		standardHeaders: true,
+		legacyHeaders: false,
+	});
+
+	// Apply rate limiter to login endpoint
+	app.use("/api/login", loginLimiter);
 
 	// Auth middleware (protects admin routes) - uses lazy evaluation
 	app.use(

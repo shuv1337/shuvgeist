@@ -11,32 +11,6 @@ import type { FileStore } from "./storage.js";
 // Email validation regex (basic)
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-// Simple in-memory rate limiter for login attempts
-const loginAttempts = new Map<string, { count: number; resetAt: number }>();
-const MAX_LOGIN_ATTEMPTS = 5;
-const RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
-
-function checkRateLimit(ip: string): void {
-	const now = Date.now();
-	const attempt = loginAttempts.get(ip);
-
-	if (attempt && now < attempt.resetAt) {
-		if (attempt.count >= MAX_LOGIN_ATTEMPTS) {
-			const minutesLeft = Math.ceil((attempt.resetAt - now) / 60000);
-			throw new Error(
-				`Too many login attempts. Please try again in ${minutesLeft} minute${minutesLeft > 1 ? "s" : ""}`,
-			);
-		}
-		attempt.count++;
-	} else {
-		loginAttempts.set(ip, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS });
-	}
-}
-
-function resetRateLimit(ip: string): void {
-	loginAttempts.delete(ip);
-}
-
 /**
  * Create API handlers
  */
@@ -84,12 +58,8 @@ export function createHandlers(signupsStore: FileStore<EmailSignup[] | string>, 
 			console.log("✓ Setup completed, admin session created");
 		},
 
-		async login(request: AuthRequest, req: Request, res: Response): Promise<void> {
+		async login(request: AuthRequest, _req: Request, res: Response): Promise<void> {
 			const { password } = request;
-			const ip = req.ip || req.socket.remoteAddress || "unknown";
-
-			// Check rate limit
-			checkRateLimit(ip);
 
 			// Check if setup is required first
 			if (settings.isSetupRequired()) {
@@ -108,9 +78,6 @@ export function createHandlers(signupsStore: FileStore<EmailSignup[] | string>, 
 			if (!valid) {
 				throw new Error("Invalid password");
 			}
-
-			// Reset rate limit on successful login
-			resetRateLimit(ip);
 
 			// Create session cookie
 			const sessionData: SessionData = { authenticated: true };
