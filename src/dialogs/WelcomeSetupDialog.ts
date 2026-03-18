@@ -32,7 +32,7 @@ export class WelcomeSetupDialog extends DialogBase {
 				className: "flex flex-col gap-4",
 				children: html`
 					${DialogHeader({
-						title: "Welcome to Sitegeist",
+						title: "Welcome to Shuvgeist",
 					})}
 					<p class="text-sm text-foreground">
 						To get started, you need to connect at least one AI provider.

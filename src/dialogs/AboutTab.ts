@@ -49,7 +49,7 @@ export class AboutTab extends SettingsTab {
 		return html`
 			<div class="flex flex-col gap-4">
 				<div class="space-y-2">
-					<h3 class="text-lg font-semibold text-foreground">Sitegeist</h3>
+					<h3 class="text-lg font-semibold text-foreground">Shuvgeist</h3>
 					<p class="text-sm text-muted-foreground">${i18n("AI-powered browser extension for web navigation and interaction")}</p>
 				</div>
 
