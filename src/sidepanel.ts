@@ -9,7 +9,7 @@ import {
 	type AgentState,
 	type AgentTool,
 } from "@mariozechner/pi-agent-core";
-import { getModel, getModels, type Model } from "@mariozechner/pi-ai";
+import { getModel, getModels, type Model, registerModels } from "@mariozechner/pi-ai";
 import {
 	ChatPanel,
 	createExtractDocumentTool,
@@ -105,6 +105,45 @@ const recordedCostMessages = new Set<AgentMessage>();
 // Cached auth type label for the current provider
 let authLabel = "";
 
+const MINIMAX_EXTENSION_MODELS: Model<"anthropic-messages">[] = [
+	{
+		id: "MiniMax-M2.7",
+		name: "MiniMax M2.7",
+		api: "anthropic-messages",
+		provider: "minimax",
+		baseUrl: "https://api.minimax.io/anthropic",
+		reasoning: true,
+		input: ["text"],
+		cost: {
+			input: 0.3,
+			output: 1.2,
+			cacheRead: 0.06,
+			cacheWrite: 0.375,
+		},
+		contextWindow: 204800,
+		maxTokens: 8192,
+	},
+	{
+		id: "MiniMax-M2.7-highspeed",
+		name: "MiniMax M2.7 Highspeed",
+		api: "anthropic-messages",
+		provider: "minimax",
+		baseUrl: "https://api.minimax.io/anthropic",
+		reasoning: true,
+		input: ["text"],
+		cost: {
+			input: 0.6,
+			output: 2.4,
+			cacheRead: 0.06,
+			cacheWrite: 0.375,
+		},
+		contextWindow: 204800,
+		maxTokens: 8192,
+	},
+];
+
+registerModels(MINIMAX_EXTENSION_MODELS);
+
 const DEFAULT_MODELS: Record<string, string> = {
 	"amazon-bedrock": "us.anthropic.claude-opus-4-6-v1",
 	anthropic: "claude-sonnet-4-6",
@@ -118,7 +157,7 @@ const DEFAULT_MODELS: Record<string, string> = {
 	groq: "openai/gpt-oss-20b",
 	huggingface: "moonshotai/Kimi-K2.5",
 	"kimi-coding": "kimi-k2-thinking",
-	minimax: "MiniMax-M2.1",
+	minimax: "MiniMax-M2.7",
 	"minimax-cn": "MiniMax-M2.1",
 	mistral: "devstral-medium-latest",
 	openai: "gpt-4o-mini",
