@@ -92,6 +92,7 @@ declare module "@mariozechner/mini-lit" {
 		"Update Required": string;
 		"A new version ({version}) is available. Please update to continue.": string;
 		"Update Now": string;
+		Theme: string;
 	}
 }
 
@@ -184,6 +185,7 @@ const sitegeistTranslations = {
 		"A new version ({version}) is available. Please update to continue.":
 			"A new version ({version}) is available. Please update to continue.",
 		"Update Now": "Update Now",
+		Theme: "Theme",
 	},
 	de: {
 		"Permission request failed": "Berechtigungsanfrage fehlgeschlagen",
@@ -275,6 +277,7 @@ const sitegeistTranslations = {
 		"A new version ({version}) is available. Please update to continue.":
 			"Eine neue Version ({version}) ist verfügbar. Bitte aktualisieren Sie, um fortzufahren.",
 		"Update Now": "Jetzt aktualisieren",
+		Theme: "Design",
 	},
 };
 

@@ -1,4 +1,5 @@
 import { i18n } from "@mariozechner/mini-lit/dist/i18n.js";
+import "@mariozechner/mini-lit/dist/ThemeToggle.js";
 import { SettingsTab } from "@mariozechner/pi-web-ui";
 import { html, type TemplateResult } from "lit";
 import { customElement, state } from "lit/decorators.js";
@@ -83,6 +84,13 @@ export class AboutTab extends SettingsTab {
 									`
 								: ""
 				}
+
+				<div class="pt-4 border-t border-border space-y-2">
+					<div class="flex items-center justify-between">
+						<span class="text-sm font-medium text-foreground">${i18n("Theme")}</span>
+						<theme-toggle includeSystem></theme-toggle>
+					</div>
+				</div>
 
 				<div class="pt-4 space-y-2">
 					<div class="text-xs text-muted-foreground space-x-3">

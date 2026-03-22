@@ -77,10 +77,7 @@ export class BridgeClient {
 			clearTimeout(this.reconnectTimer);
 			this.reconnectTimer = null;
 		}
-		if (this.ws) {
-			this.ws.close();
-			this.ws = null;
-		}
+		this.closeAndDetachWebSocket();
 		this.pendingAborts.clear();
 		this.setState("disabled");
 	}
@@ -96,8 +93,27 @@ export class BridgeClient {
 	// Internal
 	// -----------------------------------------------------------------------
 
+	/**
+	 * Detach all event handlers from the current WebSocket (preventing stale
+	 * `onclose` callbacks from triggering spurious reconnects) and close it.
+	 */
+	private closeAndDetachWebSocket(): void {
+		if (this.ws) {
+			this.ws.onopen = null;
+			this.ws.onclose = null;
+			this.ws.onmessage = null;
+			this.ws.onerror = null;
+			this.ws.close();
+			this.ws = null;
+		}
+	}
+
 	private doConnect(): void {
 		if (!this.enabled || !this.options) return;
+
+		// Close any orphaned WebSocket from a previous cycle to avoid two
+		// live connections racing against each other on the server.
+		this.closeAndDetachWebSocket();
 
 		const { url, token, windowId, sessionId, debuggerEnabled } = this.options;
 		this.setState("connecting");
@@ -109,8 +125,9 @@ export class BridgeClient {
 			url,
 		} as LogFields);
 
+		let ws: WebSocket;
 		try {
-			this.ws = new WebSocket(url);
+			ws = new WebSocket(url);
 		} catch (err: any) {
 			bridgeLog("error", "failed to create WebSocket", {
 				role: "extension",
@@ -120,8 +137,9 @@ export class BridgeClient {
 			this.scheduleReconnect();
 			return;
 		}
+		this.ws = ws;
 
-		this.ws.onopen = () => {
+		ws.onopen = () => {
 			const registration = {
 				type: "register",
 				role: "extension",
@@ -130,10 +148,10 @@ export class BridgeClient {
 				sessionId,
 				capabilities: getBridgeCapabilities(debuggerEnabled),
 			};
-			this.ws?.send(JSON.stringify(registration));
+			ws.send(JSON.stringify(registration));
 		};
 
-		this.ws.onmessage = (event: MessageEvent) => {
+		ws.onmessage = (event: MessageEvent) => {
 			let msg: Record<string, unknown>;
 			try {
 				msg = JSON.parse(event.data as string);
@@ -144,7 +162,15 @@ export class BridgeClient {
 			this.handleMessage(msg);
 		};
 
-		this.ws.onclose = () => {
+		ws.onclose = () => {
+			// Ignore close events from a WebSocket that has already been
+			// superseded by a newer connection (e.g. after connect() replaced
+			// it).  Without this guard the stale onclose triggers
+			// scheduleReconnect(), creating a second live connection that the
+			// server replaces, whose onclose fires again — an infinite 1-second
+			// reconnect loop.
+			if (this.ws !== ws) return;
+
 			bridgeLog("info", "bridge connection closed", { role: "extension" });
 			if (this.enabled) {
 				this.setState("disconnected", this.state === "error" ? this.stateDetail : undefined);
@@ -152,7 +178,8 @@ export class BridgeClient {
 			}
 		};
 
-		this.ws.onerror = () => {
+		ws.onerror = () => {
+			if (this.ws !== ws) return;
 			bridgeLog("warn", "bridge connection error", { role: "extension" });
 			if (this.state !== "error") {
 				this.setState("error", "Connection failed");

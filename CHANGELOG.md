@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+### Added
+
+- Providers & Models settings tab for configuring built-in API key providers and custom model gateways like `proxx`
+
+### Changed
+
+- Subscription OAuth moved to a dedicated Subscriptions settings tab
+- Model selection and default model resolution now include configured custom providers
+- Theme toggle moved from the sidebar header into settings, with dark mode as the default
+
+### Fixed
+
+- Custom provider API keys now resolve correctly at runtime so OpenAI-compatible gateways can be used without extension-side OAuth
+- Bridge reconnect race that could trigger an infinite 1-second connection replacement loop after session changes
+
 ## [1.0.1] - 2026-03-20
 
 ### Added

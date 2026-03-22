@@ -1,7 +1,6 @@
 import { icon } from "@mariozechner/mini-lit";
 import { Button } from "@mariozechner/mini-lit/dist/Button.js";
 import { Input } from "@mariozechner/mini-lit/dist/Input.js";
-import "@mariozechner/mini-lit/dist/ThemeToggle.js";
 import {
 	Agent,
 	type AgentEvent,
@@ -15,6 +14,7 @@ import {
 	createExtractDocumentTool,
 	createStreamFn,
 	ModelSelector,
+	ProvidersModelsTab,
 	SettingsDialog,
 	// PersistentStorageDialog,
 	setAppStorage,
@@ -216,8 +216,43 @@ const DEFAULT_MODELS: Record<string, string> = {
 	zai: "glm-4.6",
 };
 
+async function getCustomProviderByName(providerName: string) {
+	const customProviders = await storage.customProviders.getAll();
+	return customProviders.find((provider) => provider.name === providerName);
+}
+
+async function getAvailableProviderNames(): Promise<string[]> {
+	const providers = new Set<string>();
+
+	for (const provider of await storage.providerKeys.list()) {
+		const key = await storage.providerKeys.get(provider);
+		if (key) providers.add(provider);
+	}
+
+	for (const provider of await storage.customProviders.getAll()) {
+		const hasModels = (provider.models?.length || 0) > 0;
+		if (hasModels || provider.apiKey) {
+			providers.add(provider.name);
+		}
+	}
+
+	return [...providers];
+}
+
+async function getApiKeyForProvider(providerName: string): Promise<string | undefined> {
+	const stored = await storage.providerKeys.get(providerName);
+	if (stored) {
+		const proxyEnabled = await storage.settings.get<boolean>("proxy.enabled");
+		const proxyUrl = proxyEnabled ? (await storage.settings.get<string>("proxy.url")) || undefined : undefined;
+		return resolveApiKey(stored, providerName, storage.providerKeys, proxyUrl);
+	}
+
+	const customProvider = await getCustomProviderByName(providerName);
+	return customProvider?.apiKey;
+}
+
 async function selectDefaultModelForAvailableProvider() {
-	const providers = await getProvidersWithKeys();
+	const providers = await getAvailableProviderNames();
 	if (providers.length === 0 || !agent) return;
 
 	// Try each provider with keys and find a default model
@@ -235,7 +270,7 @@ async function selectDefaultModelForAvailableProvider() {
 		}
 	}
 
-	// If no default found, try the first model for the first provider with a key
+	// If no default found, try the first model for the first available provider
 	for (const provider of providers) {
 		const models = getModels(provider as any);
 		if (models.length > 0) {
@@ -245,28 +280,39 @@ async function selectDefaultModelForAvailableProvider() {
 			renderApp();
 			return;
 		}
+
+		const customProvider = await getCustomProviderByName(provider);
+		const customModel = customProvider?.models?.[0];
+		if (customModel) {
+			agent.setModel(customModel);
+			await storage.settings.set("lastUsedModel", customModel);
+			await updateAuthLabel();
+			renderApp();
+			return;
+		}
 	}
 }
 
 async function getProvidersWithKeys(): Promise<string[]> {
-	const providers = await storage.providerKeys.list();
-	const result: string[] = [];
-	for (const provider of providers) {
-		const key = await storage.providerKeys.get(provider);
-		if (key) result.push(provider);
-	}
-	return result;
+	return getAvailableProviderNames();
 }
 
 async function hasAnyApiKey(): Promise<boolean> {
-	const providers = await storage.providerKeys.list();
+	const providers = await getAvailableProviderNames();
 	return providers.length > 0;
 }
 
 function openApiKeysDialog(): Promise<void> {
 	return new Promise((resolve) => {
 		SettingsDialog.open(
-			[new ApiKeysOAuthTab(), new CostsTab(), new SkillsTab(), new BridgeTab(), new AboutTab()],
+			[
+				new ProvidersModelsTab(),
+				new ApiKeysOAuthTab(),
+				new CostsTab(),
+				new SkillsTab(),
+				new BridgeTab(),
+				new AboutTab(),
+			],
 			resolve,
 		);
 	});
@@ -279,13 +325,13 @@ async function updateAuthLabel() {
 	}
 	const provider = agent.state.model.provider;
 	const stored = await storage.providerKeys.get(provider);
-	if (!stored) {
-		authLabel = "";
-	} else if (isOAuthCredentials(stored)) {
-		authLabel = "subscription";
-	} else {
-		authLabel = "api key";
+	if (stored) {
+		authLabel = isOAuthCredentials(stored) ? "subscription" : "api key";
+		return;
 	}
+
+	const customProvider = await getCustomProviderByName(provider);
+	authLabel = customProvider?.apiKey ? "api key" : customProvider ? "custom" : "";
 }
 
 // Export getter for message transformer
@@ -611,11 +657,7 @@ const createAgent = async (initialState?: Partial<AgentState>, shouldSave = true
 			return (await storage.settings.get<string>("proxy.url")) || undefined;
 		}),
 		getApiKey: async (provider: string) => {
-			const stored = await storage.providerKeys.get(provider);
-			if (!stored) return undefined;
-			const proxyEnabled = await storage.settings.get<boolean>("proxy.enabled");
-			const proxyUrl = proxyEnabled ? (await storage.settings.get<string>("proxy.url")) || undefined : undefined;
-			return resolveApiKey(stored, provider, storage.providerKeys, proxyUrl);
+			return getApiKeyForProvider(provider);
 		},
 	});
 
@@ -732,10 +774,15 @@ const createAgent = async (initialState?: Partial<AgentState>, shouldSave = true
 			return chrome.runtime.getURL("sandbox.html");
 		},
 		onApiKeyRequired: async (provider: string) => {
+			const customProvider = await getCustomProviderByName(provider);
+			if (customProvider) {
+				await openApiKeysDialog();
+				return Boolean((await getCustomProviderByName(provider))?.apiKey);
+			}
 			return await ApiKeyOrOAuthDialog.prompt(provider);
 		},
 		onModelSelect: async () => {
-			const providers = await getProvidersWithKeys();
+			const providers = await getAvailableProviderNames();
 			if (providers.length === 0) {
 				openApiKeysDialog();
 				return;
@@ -980,13 +1027,13 @@ const renderApp = () => {
 										? html`<span class="w-2 h-2 rounded-full bg-gray-500" title="Bridge disconnected"></span>`
 										: html``
 					}
-					<theme-toggle></theme-toggle>
 					${Button({
 						variant: "ghost",
 						size: "sm",
 						children: icon(Settings, "sm"),
 						onClick: () =>
 							SettingsDialog.open([
+								new ProvidersModelsTab(),
 								new ApiKeysOAuthTab(),
 								new CostsTab(),
 								new SkillsTab(),
