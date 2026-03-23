@@ -5,7 +5,8 @@ If the user did not give you a concrete task, read README.md first.
 
 ## Commands
 - After code changes: run `./check.sh`. Fix all errors and warnings before committing.
-- The user runs `./dev.sh` in a separate tmux session. Do not run `npm run dev` or `npm run build`.
+- After code changes that affect the extension UI or runtime: rebuild with `npm run build` so `dist-chrome/` is updated. There is no persistent dev watcher; the agent must rebuild explicitly.
+- After code changes that affect the CLI bridge: rebuild with `npm run build:cli`.
 - NEVER commit unless the user asks.
 - Keep the Shuvgeist bridge running via the user systemd unit `shuvgeist-bridge.service`, not an ad-hoc shell process.
 - The bridge unit should point at the development source tree (`node_modules/.bin/tsx src/bridge/cli.ts serve ...`), not the built `dist-cli` artifact, so a service restart picks up local bridge changes.
@@ -19,7 +20,7 @@ If the user did not give you a concrete task, read README.md first.
 
 ## Dependencies
 - `@mariozechner/mini-lit`, `@mariozechner/pi-ai`, `@mariozechner/pi-web-ui`, `@mariozechner/pi-agent-core` are linked via `file:` to sibling repos `../mini-lit` and `../pi-mono`
-- Changes to those packages require rebuilding them (the dev watcher handles this)
+- Changes to those packages require rebuilding them in the sibling repo first, then rebuilding shuvgeist with `npm run build`
 - If you need to modify upstream code, edit it in `../pi-mono` or `../mini-lit` directly and rebuild
 
 ## Changelog
@@ -81,6 +82,7 @@ src/
   components/           # UI components (Toast, TabPill, OrbAnimation)
 site/
   src/frontend/         # Static landing page and install instructions
+provider-presets/       # Importable custom provider JSON presets (proxx, etc.)
 static/
   manifest.chrome.json  # Extension manifest (version lives here)
 ```
