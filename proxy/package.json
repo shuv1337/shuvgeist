@@ -1,6 +1,6 @@
 {
   "name": "shuvgeist-cors-proxy",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "description": "Self-hosted CORS proxy for Shuvgeist browser extension",
   "type": "module",
   "engines": {

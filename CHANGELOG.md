@@ -6,6 +6,7 @@
 
 - Import/Export for custom providers in Providers & Models settings tab, with conflict resolution UI for overwrites
 - Proxx provider preset in `static/provider-presets/proxx.json` for quick setup after storage resets
+- Model favorites in the selector, with star toggles and pinned ordering so frequently used models stay at the top of the list
 
 ### Fixed
 
