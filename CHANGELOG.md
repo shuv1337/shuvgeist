@@ -11,6 +11,7 @@
 ### Fixed
 
 - Anthropic Max subscription login now uses a manual code or callback URL paste flow instead of the broken automatic token-exchange redirect flow, restoring Claude Pro/Max sign-in and clarifying the UI prompts.
+- Proxx model catalogs now include the current GPT-5 and Codex families in the shipped preset, and imported Proxx providers are backfilled so the latest models remain selectable even when discovery is incomplete.
 
 ## [1.0.7] - 2026-03-22
 

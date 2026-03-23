@@ -1,6 +1,5 @@
 import {
 	AppStorage as BaseAppStorage,
-	CustomProvidersStore,
 	getAppStorage,
 	IndexedDBStorageBackend,
 	ProviderKeysStore,
@@ -8,6 +7,7 @@ import {
 	SettingsStore,
 } from "@mariozechner/pi-web-ui";
 import { CostStore } from "./stores/cost-store.js";
+import { CustomProvidersStore } from "./stores/custom-providers-store.js";
 import { ShuvgeistSessionsStore } from "./stores/sessions-store.js";
 import { SkillsStore } from "./stores/skills-store.js";
 
