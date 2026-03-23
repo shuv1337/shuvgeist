@@ -31,6 +31,17 @@ DATE=$(date +%Y-%m-%d)
 
 echo "Bumping version: $CURRENT -> $NEW_VERSION"
 
+# Update package versions across the repo
+npm version --no-git-tag-version "$NEW_VERSION"
+(
+    cd site
+    npm version --no-git-tag-version "$NEW_VERSION"
+)
+(
+    cd proxy
+    npm version --no-git-tag-version "$NEW_VERSION"
+)
+
 # Update manifest
 node -e "
 const fs = require('fs');
@@ -52,7 +63,7 @@ echo "Running checks..."
 ./check.sh
 
 # Commit, tag, push
-git add "$MANIFEST" CHANGELOG.md
+git add "$MANIFEST" CHANGELOG.md package.json package-lock.json site/package.json site/package-lock.json proxy/package.json proxy/package-lock.json
 git commit -m "Release v$NEW_VERSION"
 git tag "$TAG"
 git push origin main

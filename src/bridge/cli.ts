@@ -26,6 +26,17 @@ import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { WebSocket } from "ws";
 import {
+	bridgeStatusUrl,
+	type CliFlags,
+	createCommandPlan,
+	exitCodeForResponse,
+	generateRequestId,
+	isNetworkOrConfigError,
+	parseTimeout,
+	resolveBridgeUrl,
+	resolveConfig,
+} from "./cli-core.js";
+import {
 	BridgeDefaults,
 	type BridgeEvent,
 	type BridgeMethod,
@@ -35,7 +46,6 @@ import {
 	type BridgeScreenshotResult,
 	type BridgeServerStatus,
 	type CliConfigFile,
-	ErrorCodes,
 	type RegisterResult,
 	type SessionHistoryResult,
 } from "./protocol.js";
@@ -56,90 +66,6 @@ function readConfigFile(): CliConfigFile {
 	} catch {
 		return {};
 	}
-}
-
-function resolveBridgeUrl(flags: { url?: string; host?: string; port?: string }): string {
-	const file = readConfigFile();
-	let url = flags.url || process.env.SHUVGEIST_BRIDGE_URL || file.url || "";
-	if (!url) {
-		const host = flags.host || process.env.SHUVGEIST_BRIDGE_HOST || "127.0.0.1";
-		const port = flags.port || process.env.SHUVGEIST_BRIDGE_PORT || String(BridgeDefaults.PORT);
-		url = `ws://${host}:${port}/ws`;
-	}
-	return url;
-}
-
-function resolveConfig(flags: { url?: string; host?: string; port?: string; token?: string }): {
-	url: string;
-	token: string;
-} {
-	const file = readConfigFile();
-	const token = flags.token || process.env.SHUVGEIST_BRIDGE_TOKEN || file.token || "";
-	if (!token) {
-		console.error("Error: bridge token is required.");
-		console.error("");
-		console.error("Set it via:");
-		console.error("  --token <token>");
-		console.error("  SHUVGEIST_BRIDGE_TOKEN env var");
-		console.error("  " + getConfigPath());
-		process.exit(3);
-	}
-	return { url: resolveBridgeUrl(flags), token };
-}
-
-function bridgeStatusUrl(wsUrl: string): string {
-	const url = new URL(wsUrl);
-	url.protocol = url.protocol === "wss:" ? "https:" : "http:";
-	url.pathname = "/status";
-	url.search = "";
-	url.hash = "";
-	return url.toString();
-}
-
-function generateRequestId(): number {
-	return Number(
-		`${Date.now().toString().slice(-10)}${Math.floor(Math.random() * 1000)
-			.toString()
-			.padStart(3, "0")}`,
-	);
-}
-
-function parseTimeout(value: string | undefined, fallbackMs?: number): number | undefined {
-	if (!value) return fallbackMs;
-	if (value === "0" || value === "none") return undefined;
-	const trimmed = value.trim().toLowerCase();
-	if (trimmed.endsWith("ms")) return Number.parseInt(trimmed.slice(0, -2), 10);
-	if (trimmed.endsWith("s")) return Number.parseInt(trimmed.slice(0, -1), 10) * 1000;
-	if (trimmed.endsWith("m")) return Number.parseInt(trimmed.slice(0, -1), 10) * 60_000;
-	const parsed = Number.parseInt(trimmed, 10);
-	return Number.isFinite(parsed) ? parsed : fallbackMs;
-}
-
-function isNetworkOrConfigError(err: unknown): boolean {
-	const code = typeof err === "object" && err && "code" in err ? String((err as { code?: string }).code) : "";
-	const message = err instanceof Error ? err.message : String(err || "");
-	const networkCodes = new Set([
-		"ECONNREFUSED",
-		"ECONNRESET",
-		"EHOSTUNREACH",
-		"ENOTFOUND",
-		"ETIMEDOUT",
-		"EAI_AGAIN",
-		"ERR_INVALID_URL",
-	]);
-	if (networkCodes.has(code)) return true;
-	return (
-		message.includes("ECONNREFUSED") ||
-		message.includes("ECONNRESET") ||
-		message.includes("EHOSTUNREACH") ||
-		message.includes("ENOTFOUND") ||
-		message.includes("ETIMEDOUT") ||
-		message.includes("EAI_AGAIN") ||
-		message.includes("timeout") ||
-		message.includes("Registration failed") ||
-		message.includes("Connection closed before response") ||
-		message.includes("Invalid URL")
-	);
 }
 
 function sendRequest(url: string, token: string, request: BridgeRequest, timeoutMs?: number): Promise<BridgeResponse> {
@@ -259,21 +185,8 @@ function printFollowEvent(event: BridgeEvent, jsonMode: boolean): void {
 	console.log(`event:${event.event} ${JSON.stringify(event.data || {})}`);
 }
 
-function exitCodeForResponse(response: BridgeResponse): number {
-	if (!response.error) return 0;
-	if (response.error.code === ErrorCodes.NO_EXTENSION_TARGET) return 2;
-	if (
-		response.error.code === ErrorCodes.AUTH_FAILED ||
-		response.error.code === ErrorCodes.INVALID_METHOD ||
-		response.error.code === ErrorCodes.REGISTRATION_REQUIRED
-	) {
-		return 3;
-	}
-	return 1;
-}
-
 async function fetchBridgeStatus(flags: { url?: string; host?: string; port?: string; json?: boolean }): Promise<void> {
-	const wsUrl = resolveBridgeUrl(flags);
+	const wsUrl = resolveBridgeUrl(flags, process.env, readConfigFile());
 	const statusUrl = bridgeStatusUrl(wsUrl);
 	const jsonMode = flags.json || false;
 	try {
@@ -342,7 +255,7 @@ async function cmdServe(args: string[]): Promise<void> {
 		console.log("");
 	}
 
-	new BridgeServer({ host: values.host!, port: Number.parseInt(values.port!, 10), token }).start();
+	await new BridgeServer({ host: values.host!, port: Number.parseInt(values.port!, 10), token }).start();
 }
 
 async function cmdOneShot(
@@ -351,7 +264,11 @@ async function cmdOneShot(
 	flags: { url?: string; host?: string; port?: string; token?: string; json?: boolean; timeout?: string },
 	defaultTimeoutMs?: number,
 ): Promise<BridgeResponse> {
-	const { url, token } = resolveConfig(flags);
+	const resolved = resolveConfig(flags, process.env, readConfigFile(), getConfigPath());
+	if (!resolved.ok) {
+		throw Object.assign(new Error(resolved.message), { code: "EAUTH" });
+	}
+	const { url, token } = resolved;
 	const timeoutMs = parseTimeout(flags.timeout, defaultTimeoutMs);
 	const request: BridgeRequest = {
 		id: generateRequestId(),
@@ -492,7 +409,12 @@ async function cmdSession(flags: {
 		}
 	}
 
-	const { url, token } = resolveConfig(flags);
+	const resolved = resolveConfig(flags, process.env, readConfigFile(), getConfigPath());
+	if (!resolved.ok) {
+		printError(resolved.message, jsonMode);
+		process.exit(3);
+	}
+	const { url, token } = resolved;
 	let lastSeen = -1;
 	const initialRequest: BridgeRequest = { id: generateRequestId(), method: "session_history", params };
 	const ws = new WebSocket(url);
@@ -653,7 +575,7 @@ async function main(): Promise<void> {
 
 	const command = args[0];
 	const rest = args.slice(1);
-	const globalFlags: Record<string, string | boolean | undefined> = {};
+	const globalFlags: CliFlags = {};
 	const positionals: string[] = [];
 	let i = 0;
 	while (i < rest.length) {
@@ -676,110 +598,40 @@ async function main(): Promise<void> {
 		i++;
 	}
 
-	const flags = globalFlags as Record<string, any>;
+	const flags = globalFlags;
+	const plan = createCommandPlan(command, positionals, flags, (path) => readFileSync(path, "utf-8"));
 
-	switch (command) {
+	switch (plan.kind) {
 		case "serve":
 			await cmdServe(rest);
 			break;
 		case "status":
 			await fetchBridgeStatus(flags);
 			break;
-		case "navigate": {
-			const url = positionals[0];
-			if (!url) {
-				console.error("Usage: shuvgeist navigate <url> [--new-tab]");
-				process.exit(1);
-			}
-			await runOneShot(
-				"navigate",
-				flags.newTab ? { url, newTab: true } : { url },
-				flags,
-				BridgeDefaults.REQUEST_TIMEOUT_MS,
-			);
+		case "one-shot":
+			await runOneShot(plan.method, plan.params, flags, plan.defaultTimeoutMs);
 			break;
-		}
-		case "tabs":
-			await runOneShot("navigate", { listTabs: true }, flags, BridgeDefaults.REQUEST_TIMEOUT_MS);
+		case "repl":
+			await cmdRepl(plan.code, flags);
 			break;
-		case "switch": {
-			const tabId = positionals[0];
-			if (!tabId) {
-				console.error("Usage: shuvgeist switch <tabId>");
-				process.exit(1);
-			}
-			await runOneShot(
-				"navigate",
-				{ switchToTab: Number.parseInt(tabId, 10) },
-				flags,
-				BridgeDefaults.REQUEST_TIMEOUT_MS,
-			);
-			break;
-		}
-		case "repl": {
-			let code = positionals.join(" ");
-			if (flags.file) code = readFileSync(flags.file as string, "utf-8");
-			if (!code) {
-				console.error("Usage: shuvgeist repl <code> or shuvgeist repl -f <file.js>");
-				process.exit(1);
-			}
-			await cmdRepl(code, flags);
-			break;
-		}
 		case "screenshot":
 			await cmdScreenshot(flags);
 			break;
-		case "eval": {
-			const code = positionals.join(" ");
-			if (!code) {
-				console.error("Usage: shuvgeist eval <code>");
-				process.exit(1);
-			}
-			await runOneShot("eval", { code }, flags, BridgeDefaults.SLOW_REQUEST_TIMEOUT_MS);
-			break;
-		}
-		case "select": {
-			const message = positionals.join(" ");
-			if (!message) {
-				console.error("Usage: shuvgeist select <message>");
-				process.exit(1);
-			}
-			await runOneShot("select_element", { message }, flags, undefined);
-			break;
-		}
 		case "session":
 			await cmdSession(flags);
 			break;
-		case "inject": {
-			const text = positionals.join(" ");
-			if (!text) {
-				console.error("Usage: shuvgeist inject <text> [--role user|assistant]");
-				process.exit(1);
+		case "inject":
+			await cmdInject(plan.text, { ...flags, role: plan.role });
+			break;
+		case "usage-error":
+			if (plan.message.startsWith("Unknown command:")) {
+				console.error(plan.message);
+				console.error("Run 'shuvgeist --help' for usage.");
+			} else {
+				console.error(plan.message);
 			}
-			await cmdInject(text, flags);
-			break;
-		}
-		case "new-session": {
-			const model = positionals[0];
-			await runOneShot("session_new", model ? { model } : {}, flags, BridgeDefaults.REQUEST_TIMEOUT_MS);
-			break;
-		}
-		case "set-model": {
-			const model = positionals[0];
-			if (!model) {
-				console.error("Usage: shuvgeist set-model <provider/model-id>");
-				process.exit(1);
-			}
-			await runOneShot("session_set_model", { model }, flags, BridgeDefaults.REQUEST_TIMEOUT_MS);
-			break;
-		}
-		case "artifacts":
-			await runOneShot("session_artifacts", {}, flags, BridgeDefaults.REQUEST_TIMEOUT_MS);
-			break;
-		default:
-			console.error("Unknown command: " + command);
-			console.error("Run 'shuvgeist --help' for usage.");
 			process.exit(1);
+			break;
 	}
 }
 

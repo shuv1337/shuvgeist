@@ -19,8 +19,19 @@ export function setBridgeStateForTab(state: BridgeConnectionState, detail?: stri
 	currentBridgeDetail = detail;
 }
 
+export function getBridgeStateForTab(): { state: BridgeConnectionState; detail?: string } {
+	return {
+		state: currentBridgeState,
+		detail: currentBridgeDetail,
+	};
+}
+
 export function setBridgeSettingsChangeCallback(cb: BridgeSettingsChangeCallback): void {
 	settingsChangeCallback = cb;
+}
+
+export function getBridgeSettingsChangeCallback(): BridgeSettingsChangeCallback | undefined {
+	return settingsChangeCallback;
 }
 
 @customElement("bridge-tab")

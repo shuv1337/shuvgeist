@@ -1,0 +1,136 @@
+name: Test
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  fast-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Clone mini-lit
+        run: git clone --depth 1 https://github.com/badlogic/mini-lit.git ../mini-lit
+
+      - name: Clone pi-mono
+        run: git clone --depth 1 https://github.com/badlogic/pi-mono.git ../pi-mono
+
+      - name: Install mini-lit
+        run: cd ../mini-lit && npm install && npm run build
+
+      - name: Install pi-mono
+        run: cd ../pi-mono && npm install && npm run build
+
+      - name: Install root deps
+        run: npm install
+
+      - name: Run fast checks
+        run: ./check.sh
+
+      - name: Run component tests
+        run: npm run test:component
+
+  browser-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Clone mini-lit
+        run: git clone --depth 1 https://github.com/badlogic/mini-lit.git ../mini-lit
+
+      - name: Clone pi-mono
+        run: git clone --depth 1 https://github.com/badlogic/pi-mono.git ../pi-mono
+
+      - name: Install mini-lit
+        run: cd ../mini-lit && npm install && npm run build
+
+      - name: Install pi-mono
+        run: cd ../pi-mono && npm install && npm run build
+
+      - name: Install root deps
+        run: npm install
+
+      - name: Install Playwright Chromium
+        run: npx playwright install chromium
+
+      - name: Build extension
+        run: npm run build:chrome
+
+      - name: Run extension smoke
+        run: npm run test:e2e:extension
+
+      - name: Upload extension traces
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: extension-playwright-traces
+          path: test-results
+
+  site-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install root deps
+        run: npm install
+
+      - name: Install Playwright Chromium
+        run: npx playwright install chromium
+
+      - name: Run site smoke
+        run: npm run test:e2e:site
+
+      - name: Upload site traces
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: site-playwright-traces
+          path: test-results
+
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Clone mini-lit
+        run: git clone --depth 1 https://github.com/badlogic/mini-lit.git ../mini-lit
+
+      - name: Clone pi-mono
+        run: git clone --depth 1 https://github.com/badlogic/pi-mono.git ../pi-mono
+
+      - name: Install mini-lit
+        run: cd ../mini-lit && npm install && npm run build
+
+      - name: Install pi-mono
+        run: cd ../pi-mono && npm install && npm run build
+
+      - name: Install root deps
+        run: npm install
+
+      - name: Run coverage
+        run: npm run test:coverage
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage

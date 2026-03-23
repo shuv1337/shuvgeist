@@ -97,6 +97,12 @@ let port: chrome.runtime.Port | null = null;
 let currentWindowId: number | undefined;
 const responseHandlers = new Map<string, (msg: BackgroundToSidepanelMessage) => void>();
 
+export function resetPortStateForTests(): void {
+	port = null;
+	currentWindowId = undefined;
+	responseHandlers.clear();
+}
+
 /**
  * Initialize port system with window ID.
  * Must be called before sending any messages.
@@ -110,7 +116,7 @@ export function initialize(windowId: number): void {
  * Create new port connection and set up listeners.
  * Background script will receive this connection via runtime.onConnect.
  */
-function connect(): chrome.runtime.Port {
+export function connect(): chrome.runtime.Port {
 	if (!currentWindowId) {
 		throw new Error("[Port] Cannot connect: windowId not initialized");
 	}
@@ -141,7 +147,7 @@ function connect(): chrome.runtime.Port {
  * Mark port as disconnected.
  * Next send attempt will create a new connection.
  */
-function disconnect(): void {
+export function disconnect(): void {
 	port = null;
 }
 

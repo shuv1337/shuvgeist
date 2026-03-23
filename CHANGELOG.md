@@ -5,6 +5,7 @@
 ### Added
 
 - Providers & Models settings tab for configuring built-in API key providers and custom model gateways like `proxx`
+- Comprehensive automated test suite with Vitest unit/integration coverage, expanded dialog/component tests, Playwright smoke tests, full proxy runtime coverage, CI jobs, and gated core-module coverage thresholds
 
 ### Changed
 

@@ -72,12 +72,14 @@ export class BridgeServer {
 	private nextRelayRequestId = 1;
 	private writerCliConnectionId?: string;
 	private writerSessionId?: string;
+	private httpServer?: ReturnType<typeof createServer>;
+	private wss?: WebSocketServer;
 
 	constructor(config: BridgeServerConfig) {
 		this.config = config;
 	}
 
-	start(): void {
+	async start(): Promise<void> {
 		const { host, port, token } = this.config;
 
 		// -- HTTP server for /status health endpoint --------------------------
@@ -103,7 +105,9 @@ export class BridgeServer {
 		});
 
 		// -- WebSocket server attached to /ws ----------------------------------
+		this.httpServer = httpServer;
 		const wss = new WebSocketServer({ server: httpServer, path: "/ws" });
+		this.wss = wss;
 		wss.on("error", (err: Error) => {
 			bridgeLog("error", "websocket server error", {
 				role: "server",
@@ -171,27 +175,62 @@ export class BridgeServer {
 		});
 
 		// -- Start listening ---------------------------------------------------
-		httpServer.listen(port, host, () => {
-			bridgeLog("info", "bridge server started", {
-				role: "server",
-				host,
-				port,
-			});
+		await new Promise<void>((resolve, reject) => {
+			httpServer.listen(port, host, () => {
+				bridgeLog("info", "bridge server started", {
+					role: "server",
+					host,
+					port,
+				});
 
-			const advertisedUrls = this.getAdvertisedUrls(host);
-			console.log("");
-			console.log(`Bridge server listening on ${host}:${port}`);
-			console.log("");
-			if (advertisedUrls.length > 0) {
-				console.log("Reachable at:");
-				for (const url of advertisedUrls) {
-					console.log(`  ws://${url}:${port}/ws`);
-				}
+				const advertisedUrls = this.getAdvertisedUrls(host);
 				console.log("");
-			}
-			console.log("V1 — intended for a trusted local network only.");
-			console.log("");
+				console.log(`Bridge server listening on ${host}:${port}`);
+				console.log("");
+				if (advertisedUrls.length > 0) {
+					console.log("Reachable at:");
+					for (const url of advertisedUrls) {
+						console.log(`  ws://${url}:${port}/ws`);
+					}
+					console.log("");
+				}
+				console.log("V1 — intended for a trusted local network only.");
+				console.log("");
+				resolve();
+			});
+			httpServer.once("error", reject);
 		});
+	}
+
+	async stop(): Promise<void> {
+		for (const client of this.clients.values()) {
+			client.ws.close();
+		}
+		this.clients.clear();
+		this.activeExtension = null;
+		this.pendingRequests.clear();
+		this.writerCliConnectionId = undefined;
+		this.writerSessionId = undefined;
+
+		if (this.wss) {
+			await new Promise<void>((resolve, reject) => {
+				this.wss?.close((err) => {
+					if (err) reject(err);
+					else resolve();
+				});
+			});
+			this.wss = undefined;
+		}
+
+		if (this.httpServer) {
+			await new Promise<void>((resolve, reject) => {
+				this.httpServer?.close((err) => {
+					if (err) reject(err);
+					else resolve();
+				});
+			});
+			this.httpServer = undefined;
+		}
 	}
 
 	// -----------------------------------------------------------------------

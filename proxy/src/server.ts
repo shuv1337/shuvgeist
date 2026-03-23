@@ -14,55 +14,18 @@
  * and request bodies are never logged.
  */
 
-import express from "express";
-import type { NextFunction, Request, Response } from "express";
-
-// ============================================================================
-// CONFIGURATION
-// ============================================================================
-
-const DEFAULT_ALLOWED_HOSTS = [
-  "platform.claude.com",
-  "api.anthropic.com",
-  "github.com",
-  "api.z.ai",
-  "chatgpt.com",
-];
-
-interface ProxyConfig {
-  readonly port: number;
-  readonly allowedHosts: readonly string[];
-  readonly proxySecret: string | null;
-  readonly rateLimitRpm: number;
-  readonly maxBodySize: string;
-  readonly requestTimeoutMs: number;
-}
-
-function loadConfig(): ProxyConfig {
-  const allowedHosts =
-    process.env["ALLOWED_HOSTS"] != null && process.env["ALLOWED_HOSTS"].trim() !== ""
-      ? process.env["ALLOWED_HOSTS"]
-          .split(",")
-          .map((h) => h.trim())
-          .filter(Boolean)
-      : DEFAULT_ALLOWED_HOSTS;
-
-  const proxySecret =
-    process.env["PROXY_SECRET"] != null && process.env["PROXY_SECRET"].trim() !== ""
-      ? process.env["PROXY_SECRET"].trim()
-      : null;
-
-  return {
-    port: parseInt(process.env["PORT"] ?? "3001", 10),
-    allowedHosts,
-    proxySecret,
-    rateLimitRpm: parseInt(process.env["RATE_LIMIT_RPM"] ?? "300", 10),
-    maxBodySize: process.env["MAX_BODY_SIZE"] ?? "10mb",
-    requestTimeoutMs: parseInt(process.env["REQUEST_TIMEOUT_MS"] ?? "120000", 10),
-  };
-}
-
-const config = loadConfig();
+import express, { type NextFunction, type Request, type Response } from "express";
+import { fileURLToPath } from "node:url";
+import {
+	addCorsHeaders,
+	clientIp,
+	createRateLimiter,
+	filterRequestHeaders,
+	filterResponseHeaders,
+	loadConfig,
+	parseTargetUrl,
+	type ProxyConfig,
+} from "./helpers.js";
 
 // ============================================================================
 // STRUCTURED LOGGING
@@ -71,496 +34,336 @@ const config = loadConfig();
 type LogLevel = "info" | "warn" | "error";
 
 interface LogEntry {
-  level: LogLevel;
-  time: string;
-  event: string;
-  reqId?: string;
-  method?: string;
-  upstreamHost?: string;
-  status?: number;
-  durationMs?: number;
-  error?: string;
-  // Startup fields
-  port?: number;
-  allowedHosts?: readonly string[];
-  authRequired?: boolean;
-  rateLimitRpm?: number;
+	level: LogLevel;
+	time: string;
+	event: string;
+	reqId?: string;
+	method?: string;
+	upstreamHost?: string;
+	status?: number;
+	durationMs?: number;
+	error?: string;
+	// Startup fields
+	port?: number;
+	allowedHosts?: readonly string[];
+	authRequired?: boolean;
+	rateLimitRpm?: number;
 }
 
 function log(entry: LogEntry): void {
-  // NEVER include: Authorization headers, request/response bodies, or full URLs
-  // with query strings — only the upstream hostname is logged.
-  process.stdout.write(JSON.stringify(entry) + "\n");
+	// NEVER include: Authorization headers, request/response bodies, or full URLs
+	// with query strings — only the upstream hostname is logged.
+	process.stdout.write(JSON.stringify(entry) + "\n");
 }
 
 function makeReqId(): string {
-  return Math.random().toString(36).slice(2, 10);
+	return Math.random().toString(36).slice(2, 10);
 }
 
-// ============================================================================
-// CORS HEADERS
-// ============================================================================
-
-const CORS_ALLOW_HEADERS = [
-  "Authorization",
-  "Content-Type",
-  "Accept",
-  "User-Agent",
-  "X-Api-Key",
-  "X-Proxy-Secret",
-  // GitHub Copilot
-  "Copilot-Integration-Id",
-  "Editor-Version",
-  "Editor-Plugin-Version",
-  // Anthropic
-  "Anthropic-Version",
-  "Anthropic-Beta",
-  // OpenAI
-  "OpenAI-Organization",
-].join(", ");
-
-function addCorsHeaders(res: Response): void {
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", CORS_ALLOW_HEADERS);
-  res.setHeader("Access-Control-Max-Age", "86400");
-}
-
-// ============================================================================
-// HEADER FILTERING
-// ============================================================================
-
-/**
- * Headers forwarded from the client to the upstream server.
- * All other request headers are stripped to avoid leaking browser state
- * and to prevent header injection.
- */
-const FORWARD_REQUEST_HEADERS = new Set([
-  "authorization",
-  "content-type",
-  "accept",
-  "accept-language",
-  "user-agent",
-  "x-api-key",
-  // GitHub Copilot integration headers
-  "copilot-integration-id",
-  "editor-version",
-  "editor-plugin-version",
-  // Anthropic API versioning headers
-  "anthropic-version",
-  "anthropic-beta",
-  // OpenAI org scoping
-  "openai-organization",
-]);
-
-/**
- * Headers stripped from the upstream response before forwarding to the client.
- * CORS headers are regenerated by this proxy. Encoding and transfer headers
- * are stripped because Node's fetch transparently decompresses responses,
- * making the upstream Content-Encoding stale and the stated Content-Length wrong.
- */
-const STRIP_RESPONSE_HEADERS = new Set([
-  "access-control-allow-origin",
-  "access-control-allow-methods",
-  "access-control-allow-headers",
-  "access-control-allow-credentials",
-  "access-control-expose-headers",
-  "access-control-max-age",
-  // Stripping these prevents double-decompression and length mismatches:
-  "content-encoding",
-  "content-length",
-  "transfer-encoding",
-]);
-
-function filterRequestHeaders(
-  raw: Record<string, string | string[] | undefined>,
-): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const [key, value] of Object.entries(raw)) {
-    if (value === undefined) continue;
-    if (!FORWARD_REQUEST_HEADERS.has(key.toLowerCase())) continue;
-    out[key.toLowerCase()] = Array.isArray(value) ? value.join(", ") : value;
-  }
-  return out;
-}
-
-function filterResponseHeaders(upstream: Headers): Record<string, string> {
-  const out: Record<string, string> = {};
-  upstream.forEach((value, key) => {
-    if (!STRIP_RESPONSE_HEADERS.has(key.toLowerCase())) {
-      out[key] = value;
-    }
-  });
-  return out;
-}
-
-// ============================================================================
-// RATE LIMITING
-// ============================================================================
-
-interface RateLimitWindow {
-  count: number;
-  windowStart: number;
-}
-
-const RATE_WINDOW_MS = 60_000;
-const rateLimitStore = new Map<string, RateLimitWindow>();
-
-// Purge expired windows every minute to bound memory growth.
-setInterval(() => {
-  const now = Date.now();
-  for (const [ip, entry] of rateLimitStore) {
-    if (now - entry.windowStart >= RATE_WINDOW_MS) {
-      rateLimitStore.delete(ip);
-    }
-  }
-}, RATE_WINDOW_MS).unref();
-
-function isRateLimited(ip: string): boolean {
-  const now = Date.now();
-  const entry = rateLimitStore.get(ip);
-
-  if (entry === undefined || now - entry.windowStart >= RATE_WINDOW_MS) {
-    rateLimitStore.set(ip, { count: 1, windowStart: now });
-    return false;
-  }
-
-  if (entry.count >= config.rateLimitRpm) {
-    return true;
-  }
-
-  entry.count++;
-  return false;
-}
-
-function clientIp(req: Request): string {
-  const forwarded = req.headers["x-forwarded-for"];
-  if (typeof forwarded === "string" && forwarded.trim() !== "") {
-    return forwarded.split(",")[0]?.trim() ?? "unknown";
-  }
-  return req.socket.remoteAddress ?? "unknown";
-}
-
-// ============================================================================
-// URL PARSING
-// ============================================================================
-
-/**
- * Extract the upstream target URL from the incoming request.
- *
- * Supports two formats:
- *   1. Primary:  /?url=<encoded-url>  (all Sitegeist proxy calls)
- *   2. Fallback: /<url>               (document extraction uses corsProxyUrl +
- *                                      encodeURIComponent(url) directly)
- */
-function parseTargetUrl(req: Request): string | null {
-  // Primary: ?url= query parameter
-  const urlParam = req.query["url"];
-  if (typeof urlParam === "string" && urlParam.trim() !== "") {
-    return urlParam;
-  }
-
-  // Fallback: URL embedded in the path (after the leading slash)
-  const rawPath = req.path;
-  if (rawPath.length > 1) {
-    const candidate = rawPath.slice(1);
-    // Try as-is (already decoded by Express)
-    if (candidate.startsWith("http://") || candidate.startsWith("https://")) {
-      return candidate;
-    }
-    // Try URL-decoded (double-encoded path)
-    try {
-      const decoded = decodeURIComponent(candidate);
-      if (decoded.startsWith("http://") || decoded.startsWith("https://")) {
-        return decoded;
-      }
-    } catch {
-      // not a valid encoded URL — fall through
-    }
-  }
-
-  return null;
+export interface ProxyServerDependencies {
+	fetchImpl?: typeof fetch;
+	log?: (entry: LogEntry) => void;
+	now?: () => number;
+	makeReqId?: () => string;
 }
 
 // ============================================================================
 // EXPRESS APP
 // ============================================================================
 
-const app = express();
+export function createProxyApp(
+	config: ProxyConfig = loadConfig(),
+	deps: ProxyServerDependencies = {},
+) {
+	const fetchImpl = deps.fetchImpl ?? fetch;
+	const logEntry = deps.log ?? log;
+	const now = deps.now ?? (() => Date.now());
+	const nextReqId = deps.makeReqId ?? makeReqId;
+	const isRateLimited = createRateLimiter(config.rateLimitRpm);
+	const app = express();
 
-// Parse raw request bodies for all content types so we can forward bytes
-// verbatim to the upstream without re-encoding.
-app.use(
-  express.raw({
-    type: () => true,
-    limit: config.maxBodySize,
-  }),
-);
+	// Parse raw request bodies for all content types so we can forward bytes
+	// verbatim to the upstream without re-encoding.
+	app.use(
+		express.raw({
+			type: () => true,
+			limit: config.maxBodySize,
+		}),
+	);
 
-// ============================================================================
-// HEALTH CHECK
-// ============================================================================
+	// ============================================================================
+	// HEALTH CHECK
+	// ============================================================================
 
-app.get("/health", (_req: Request, res: Response) => {
-  res.json({
-    status: "ok",
-    allowedHosts: config.allowedHosts,
-    rateLimitRpm: config.rateLimitRpm,
-    authRequired: config.proxySecret !== null,
-  });
-});
+	app.get("/health", (_req: Request, res: Response) => {
+		res.json({
+			status: "ok",
+			allowedHosts: config.allowedHosts,
+			rateLimitRpm: config.rateLimitRpm,
+			authRequired: config.proxySecret !== null,
+		});
+	});
 
-// ============================================================================
-// PROXY HANDLER
-// ============================================================================
+	// ============================================================================
+	// PROXY HANDLER
+	// ============================================================================
 
-app.use(async (req: Request, res: Response, _next: NextFunction) => {
-  const reqId = makeReqId();
-  const startMs = Date.now();
+	app.use(async (req: Request, res: Response, _next: NextFunction) => {
+		const reqId = nextReqId();
+		const startMs = now();
 
-  // CORS headers on every response, including error responses.
-  addCorsHeaders(res);
+		// CORS headers on every response, including error responses.
+		addCorsHeaders(res);
 
-  // Preflight: respond immediately without touching the upstream.
-  if (req.method === "OPTIONS") {
-    res.status(204).end();
-    return;
-  }
+		// Preflight: respond immediately without touching the upstream.
+		if (req.method === "OPTIONS") {
+			res.status(204).end();
+			return;
+		}
 
-  // ---- Rate limiting -------------------------------------------------------
+		// ---- Rate limiting -------------------------------------------------------
 
-  const ip = clientIp(req);
-  if (isRateLimited(ip)) {
-    log({
-      level: "warn",
-      time: new Date().toISOString(),
-      event: "rate_limited",
-      reqId,
-      method: req.method,
-      upstreamHost: "n/a",
-      status: 429,
-    });
-    res.status(429).json({ error: "Rate limit exceeded. Try again later." });
-    return;
-  }
+		const ip = clientIp(req);
+		if (isRateLimited(ip)) {
+			logEntry({
+				level: "warn",
+				time: new Date().toISOString(),
+				event: "rate_limited",
+				reqId,
+				method: req.method,
+				upstreamHost: "n/a",
+				status: 429,
+			});
+			res.status(429).json({ error: "Rate limit exceeded. Try again later." });
+			return;
+		}
 
-  // ---- Auth ----------------------------------------------------------------
+		// ---- Auth ----------------------------------------------------------------
 
-  if (config.proxySecret !== null) {
-    const provided = req.headers["x-proxy-secret"];
-    if (provided !== config.proxySecret) {
-      log({
-        level: "warn",
-        time: new Date().toISOString(),
-        event: "auth_failed",
-        reqId,
-        method: req.method,
-        upstreamHost: "n/a",
-        status: 401,
-      });
-      res.status(401).json({ error: "Unauthorized. Provide a valid X-Proxy-Secret header." });
-      return;
-    }
-  }
+		if (config.proxySecret !== null) {
+			const provided = req.headers["x-proxy-secret"];
+			if (provided !== config.proxySecret) {
+				logEntry({
+					level: "warn",
+					time: new Date().toISOString(),
+					event: "auth_failed",
+					reqId,
+					method: req.method,
+					upstreamHost: "n/a",
+					status: 401,
+				});
+				res.status(401).json({ error: "Unauthorized. Provide a valid X-Proxy-Secret header." });
+				return;
+			}
+		}
 
-  // ---- Target URL ----------------------------------------------------------
+		// ---- Target URL ----------------------------------------------------------
 
-  const rawUrl = parseTargetUrl(req);
-  if (rawUrl === null) {
-    res.status(400).json({
-      error: "Missing target URL. Use /?url=<encoded-url> or /<url>.",
-    });
-    return;
-  }
+		const rawUrl = parseTargetUrl(req);
+		if (rawUrl === null) {
+			res.status(400).json({
+				error: "Missing target URL. Use /?url=<encoded-url> or /<url>.",
+			});
+			return;
+		}
 
-  let targetUrl: URL;
-  try {
-    targetUrl = new URL(rawUrl);
-  } catch {
-    res.status(400).json({ error: "Invalid target URL — must be an absolute http/https URL." });
-    return;
-  }
+		let targetUrl: URL;
+		try {
+			targetUrl = new URL(rawUrl);
+		} catch {
+			res.status(400).json({ error: "Invalid target URL — must be an absolute http/https URL." });
+			return;
+		}
 
-  if (targetUrl.protocol !== "http:" && targetUrl.protocol !== "https:") {
-    res.status(400).json({ error: "Only http and https target URLs are supported." });
-    return;
-  }
+		if (targetUrl.protocol !== "http:" && targetUrl.protocol !== "https:") {
+			res.status(400).json({ error: "Only http and https target URLs are supported." });
+			return;
+		}
 
-  // ---- Allowlist -----------------------------------------------------------
+		// ---- Allowlist -----------------------------------------------------------
 
-  if (!config.allowedHosts.includes(targetUrl.hostname)) {
-    log({
-      level: "warn",
-      time: new Date().toISOString(),
-      event: "host_blocked",
-      reqId,
-      method: req.method,
-      // Log the host — it is not sensitive; full URL and query string are not logged.
-      upstreamHost: targetUrl.hostname,
-      status: 403,
-    });
-    res.status(403).json({
-      error: `Upstream host not allowed: ${targetUrl.hostname}`,
-      allowedHosts: config.allowedHosts,
-    });
-    return;
-  }
+		if (!config.allowedHosts.includes(targetUrl.hostname)) {
+			logEntry({
+				level: "warn",
+				time: new Date().toISOString(),
+				event: "host_blocked",
+				reqId,
+				method: req.method,
+				// Log the host — it is not sensitive; full URL and query string are not logged.
+				upstreamHost: targetUrl.hostname,
+				status: 403,
+			});
+			res.status(403).json({
+				error: `Upstream host not allowed: ${targetUrl.hostname}`,
+				allowedHosts: config.allowedHosts,
+			});
+			return;
+		}
 
-  // ---- Forward request -----------------------------------------------------
+		// ---- Forward request -----------------------------------------------------
 
-  const forwardHeaders = filterRequestHeaders(
-    req.headers as Record<string, string | string[] | undefined>,
-  );
+		const forwardHeaders = filterRequestHeaders(
+			req.headers as Record<string, string | string[] | undefined>,
+		);
 
-  // Only attach a body for methods that semantically carry one.
-  // Express raw() gives us a Buffer. Node's fetch BodyInit type (via lib.dom.d.ts)
-  // requires ArrayBufferView<ArrayBuffer> — Buffer's backing .buffer is ArrayBufferLike,
-  // so we extract a proper ArrayBuffer slice to satisfy the type checker without
-  // any unsafe cast.
-  const methodHasBody = !["GET", "HEAD", "OPTIONS"].includes(req.method);
-  const body: ArrayBuffer | undefined = (() => {
-    if (!methodHasBody) return undefined;
-    const raw = req.body as Buffer | undefined;
-    if (!Buffer.isBuffer(raw) || raw.length === 0) return undefined;
-    // raw.buffer is the shared Node pool buffer; slice to get only our bytes.
-    return raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength) as ArrayBuffer;
-  })();
+		// Only attach a body for methods that semantically carry one.
+		// Express raw() gives us a Buffer. Node's fetch BodyInit type (via lib.dom.d.ts)
+		// requires ArrayBufferView<ArrayBuffer> — Buffer's backing .buffer is ArrayBufferLike,
+		// so we extract a proper ArrayBuffer slice to satisfy the type checker without
+		// any unsafe cast.
+		const methodHasBody = !["GET", "HEAD", "OPTIONS"].includes(req.method);
+		const body: ArrayBuffer | undefined = (() => {
+			if (!methodHasBody) return undefined;
+			const raw = req.body as Buffer | undefined;
+			if (!Buffer.isBuffer(raw) || raw.length === 0) return undefined;
+			// raw.buffer is the shared Node pool buffer; slice to get only our bytes.
+			return raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength) as ArrayBuffer;
+		})();
 
-  const controller = new AbortController();
-  const timeoutHandle = setTimeout(
-    () => controller.abort(),
-    config.requestTimeoutMs,
-  );
+		const controller = new AbortController();
+		const timeoutHandle = setTimeout(() => controller.abort(), config.requestTimeoutMs);
 
-  try {
-    const upstream = await fetch(targetUrl.toString(), {
-      method: req.method,
-      headers: forwardHeaders,
-      body,
-      signal: controller.signal,
-      // Redirect: follow by default so the client always receives a final response.
-      redirect: "follow",
-    });
+		try {
+			const upstream = await fetchImpl(targetUrl.toString(), {
+				method: req.method,
+				headers: forwardHeaders,
+				body,
+				signal: controller.signal,
+				// Redirect: follow by default so the client always receives a final response.
+				redirect: "follow",
+			});
 
-    clearTimeout(timeoutHandle);
+			clearTimeout(timeoutHandle);
 
-    const durationMs = Date.now() - startMs;
+			const durationMs = now() - startMs;
 
-    log({
-      level: "info",
-      time: new Date().toISOString(),
-      event: "proxy_ok",
-      reqId,
-      method: req.method,
-      upstreamHost: targetUrl.hostname,
-      status: upstream.status,
-      durationMs,
-    });
+			logEntry({
+				level: "info",
+				time: new Date().toISOString(),
+				event: "proxy_ok",
+				reqId,
+				method: req.method,
+				upstreamHost: targetUrl.hostname,
+				status: upstream.status,
+				durationMs,
+			});
 
-    // Write status and filtered headers.
-    res.status(upstream.status);
-    const responseHeaders = filterResponseHeaders(upstream.headers);
-    for (const [key, value] of Object.entries(responseHeaders)) {
-      res.setHeader(key, value);
-    }
+			// Write status and filtered headers.
+			res.status(upstream.status);
+			const responseHeaders = filterResponseHeaders(upstream.headers);
+			for (const [key, value] of Object.entries(responseHeaders)) {
+				res.setHeader(key, value);
+			}
 
-    // Stream the response body back to the client. This ensures that
-    // server-sent event streams and large payloads are not fully buffered
-    // in this proxy process.
-    if (upstream.body === null) {
-      res.end();
-      return;
-    }
+			// Stream the response body back to the client. This ensures that
+			// server-sent event streams and large payloads are not fully buffered
+			// in this proxy process.
+			if (upstream.body === null) {
+				res.end();
+				return;
+			}
 
-    const reader = upstream.body.getReader();
+			const reader = upstream.body.getReader();
 
-    const pump = async (): Promise<void> => {
-      try {
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) {
-            res.end();
-            break;
-          }
-          // Respect backpressure: wait for the client socket to drain before
-          // reading the next chunk to avoid unbounded memory growth.
-          if (!res.write(value)) {
-            await new Promise<void>((resolve) => res.once("drain", resolve));
-          }
-        }
-      } catch {
-        reader.cancel().catch(() => {});
-        if (!res.writableEnded) {
-          res.end();
-        }
-      }
-    };
+			const pump = async (): Promise<void> => {
+				try {
+					for (;;) {
+						const { done, value } = await reader.read();
+						if (done) {
+							res.end();
+							break;
+						}
+						// Respect backpressure: wait for the client socket to drain before
+						// reading the next chunk to avoid unbounded memory growth.
+						if (!res.write(value)) {
+							await new Promise<void>((resolve) => res.once("drain", resolve));
+						}
+					}
+				} catch {
+					reader.cancel().catch(() => {});
+					if (!res.writableEnded) {
+						res.end();
+					}
+				}
+			};
 
-    pump();
-  } catch (err: unknown) {
-    clearTimeout(timeoutHandle);
+			void pump();
+		} catch (err: unknown) {
+			clearTimeout(timeoutHandle);
 
-    const durationMs = Date.now() - startMs;
-    const isTimeout = err instanceof Error && err.name === "AbortError";
-    const errorMessage = err instanceof Error ? err.message : String(err);
+			const durationMs = now() - startMs;
+			const isTimeout = err instanceof Error && err.name === "AbortError";
+			const errorMessage = err instanceof Error ? err.message : String(err);
 
-    log({
-      level: "error",
-      time: new Date().toISOString(),
-      event: isTimeout ? "upstream_timeout" : "upstream_error",
-      reqId,
-      method: req.method,
-      upstreamHost: targetUrl.hostname,
-      status: isTimeout ? 504 : 502,
-      durationMs,
-      // Safe to log: error message describes the network failure, not a secret.
-      error: isTimeout ? "Request timed out" : errorMessage,
-    });
+			logEntry({
+				level: "error",
+				time: new Date().toISOString(),
+				event: isTimeout ? "upstream_timeout" : "upstream_error",
+				reqId,
+				method: req.method,
+				upstreamHost: targetUrl.hostname,
+				status: isTimeout ? 504 : 502,
+				durationMs,
+				// Safe to log: error message describes the network failure, not a secret.
+				error: isTimeout ? "Request timed out" : errorMessage,
+			});
 
-    if (!res.headersSent) {
-      if (isTimeout) {
-        res.status(504).json({ error: "Upstream request timed out." });
-      } else {
-        res.status(502).json({ error: "Upstream request failed.", detail: errorMessage });
-      }
-    }
-  }
-});
+			if (!res.headersSent) {
+				if (isTimeout) {
+					res.status(504).json({ error: "Upstream request timed out." });
+				} else {
+					res.status(502).json({ error: "Upstream request failed.", detail: errorMessage });
+				}
+			}
+		}
+	});
 
-// ============================================================================
-// ERROR HANDLER — catches body-parser overflows and unhandled middleware errors
-// ============================================================================
+	// ============================================================================
+	// ERROR HANDLER — catches body-parser overflows and unhandled middleware errors
+	// ============================================================================
 
-// Express requires the 4-argument signature to recognise an error handler.
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-app.use((err: Error & { type?: string; status?: number }, _req: Request, res: Response, _next: NextFunction) => {
-  if (err.type === "entity.too.large") {
-    res.status(413).json({ error: "Request body exceeds the configured size limit." });
-    return;
-  }
-  log({
-    level: "error",
-    time: new Date().toISOString(),
-    event: "unhandled_middleware_error",
-    error: err.message,
-  });
-  if (!res.headersSent) {
-    res.status(500).json({ error: "Internal proxy error." });
-  }
-});
+	// Express requires the 4-argument signature to recognise an error handler.
+	// eslint-disable-next-line @typescript-eslint/no-unused-vars
+	app.use((err: Error & { type?: string; status?: number }, _req: Request, res: Response, _next: NextFunction) => {
+		if (err.type === "entity.too.large") {
+			res.status(413).json({ error: "Request body exceeds the configured size limit." });
+			return;
+		}
+		logEntry({
+			level: "error",
+			time: new Date().toISOString(),
+			event: "unhandled_middleware_error",
+			error: err.message,
+		});
+		if (!res.headersSent) {
+			res.status(500).json({ error: "Internal proxy error." });
+		}
+	});
+
+	return app;
+}
 
 // ============================================================================
 // START
 // ============================================================================
 
-app.listen(config.port, () => {
-  log({
-    level: "info",
-    time: new Date().toISOString(),
-    event: "server_start",
-    port: config.port,
-    allowedHosts: config.allowedHosts,
-    authRequired: config.proxySecret !== null,
-    rateLimitRpm: config.rateLimitRpm,
-  });
-});
+let app: ReturnType<typeof createProxyApp> | undefined;
+let server: ReturnType<ReturnType<typeof createProxyApp>["listen"]> | undefined;
+
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+	const config = loadConfig();
+	app = createProxyApp(config);
+	server = app.listen(config.port, () => {
+		log({
+			level: "info",
+			time: new Date().toISOString(),
+			event: "server_start",
+			port: config.port,
+			allowedHosts: config.allowedHosts,
+			authRequired: config.proxySecret !== null,
+			rateLimitRpm: config.rateLimitRpm,
+		});
+	});
+}
+
+export { app, server };
