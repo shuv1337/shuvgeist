@@ -4,7 +4,7 @@
  * Bundles `ws` into the output so it does not need to be a runtime dependency.
  * Output goes to dist-cli/ with a hashbang for direct execution.
  */
-import { mkdirSync, readFileSync, rmSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
@@ -67,5 +67,7 @@ await build({
 		"child_process",
 	],
 });
+
+chmodSync(join(outDir, "shuvgeist.mjs"), 0o755);
 
 console.log(`CLI built to ${outDir}/shuvgeist.mjs`);
