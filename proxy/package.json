@@ -1,6 +1,6 @@
 {
   "name": "sitegeist-cors-proxy",
-  "version": "1.0.0",
+  "version": "1.0.7",
   "description": "Self-hosted CORS proxy for Sitegeist browser extension",
   "type": "module",
   "engines": {

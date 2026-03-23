@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.0.7] - 2026-03-22
+
 ### Added
 
 - Providers & Models settings tab for configuring built-in API key providers and custom model gateways like `proxx`
