@@ -2,6 +2,7 @@ import { getModels, type Model } from "@mariozechner/pi-ai";
 import { CustomProvidersStore as BaseCustomProvidersStore, type CustomProvider } from "@mariozechner/pi-web-ui";
 
 const PROXX_PROVIDER_NAME = "proxx";
+const PROXX_CANONICAL_BASE_URL = "http://shuvdev:8789/v1";
 const PROXX_OPENAI_MODEL_IDS = [
 	"gpt-5",
 	"gpt-5-chat-latest",
@@ -31,6 +32,15 @@ function normalizeOpenAIBaseUrl(baseUrl: string): string {
 	return trimmed.endsWith("/v1") ? trimmed : `${trimmed}/v1`;
 }
 
+function normalizeProxxBaseUrl(baseUrl: string): string {
+	const normalized = normalizeOpenAIBaseUrl(baseUrl);
+	const withoutProtocol = normalized.replace(/^https?:\/\//i, "");
+	if (withoutProtocol === "127.0.0.1:8789/v1" || withoutProtocol === "localhost:8789/v1") {
+		return PROXX_CANONICAL_BASE_URL;
+	}
+	return normalized;
+}
+
 function isProxxProvider(provider: CustomProvider): boolean {
 	return provider.name.trim().toLowerCase() === PROXX_PROVIDER_NAME;
 }
@@ -40,7 +50,9 @@ function getBuiltInOpenAIModel(modelId: string): Model<any> | null {
 }
 
 function normalizeModelForProvider(provider: CustomProvider, model: Model<any>): Model<any> {
-	const normalizedBaseUrl = normalizeOpenAIBaseUrl(provider.baseUrl);
+	const normalizedBaseUrl = isProxxProvider(provider)
+		? normalizeProxxBaseUrl(provider.baseUrl)
+		: normalizeOpenAIBaseUrl(provider.baseUrl);
 	const builtInOpenAIModel = isProxxProvider(provider) ? getBuiltInOpenAIModel(model.id) : null;
 
 	if (builtInOpenAIModel) {
@@ -69,7 +81,7 @@ function buildProxxOpenAIModel(
 	return {
 		...builtInModel,
 		provider: provider.name,
-		baseUrl: normalizeOpenAIBaseUrl(provider.baseUrl),
+		baseUrl: normalizeProxxBaseUrl(provider.baseUrl),
 	};
 }
 
@@ -93,6 +105,7 @@ function augmentProvider(provider: CustomProvider): CustomProvider {
 
 	return {
 		...provider,
+		baseUrl: normalizeProxxBaseUrl(provider.baseUrl),
 		models: [...modelsById.values()],
 	};
 }

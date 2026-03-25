@@ -201,6 +201,21 @@ function isProxxProviderName(providerName: string): boolean {
 	return providerName.trim().toLowerCase() === "proxx";
 }
 
+function normalizeModelForRuntime(model: Model<any>): Model<any> {
+	if (!isProxxProviderName(model.provider)) return model;
+
+	const normalizedBaseUrl = model.baseUrl?.trim().replace(/\/+$/, "") || "";
+	const withoutProtocol = normalizedBaseUrl.replace(/^https?:\/\//i, "");
+	if (withoutProtocol === "127.0.0.1:8789/v1" || withoutProtocol === "localhost:8789/v1") {
+		return {
+			...model,
+			baseUrl: "http://shuvdev:8789/v1",
+		};
+	}
+
+	return model;
+}
+
 const DEFAULT_MODELS: Record<string, string> = {
 	"amazon-bedrock": "us.anthropic.claude-opus-4-6-v1",
 	anthropic: "claude-sonnet-4-6",
@@ -704,16 +719,17 @@ const resolveModelSpec = async (spec: string, providerHint?: string): Promise<Mo
 const bridgeSetModel = async (params: SessionSetModelParams): Promise<SessionSetModelResult> => {
 	const model = await resolveModelSpec(params.model, params.provider);
 
-	agent.setModel(model);
+	const normalizedModel = normalizeModelForRuntime(model);
+	agent.setModel(normalizedModel);
 	chatPanel.agentInterface?.requestUpdate();
-	await storage.settings.set("lastUsedModel", model);
+	await storage.settings.set("lastUsedModel", normalizedModel);
 	updateAuthLabel().catch(() => {});
 	emitSessionChanged();
 	renderApp();
 
 	return {
 		ok: true as const,
-		model: { provider: model.provider, id: model.id },
+		model: { provider: normalizedModel.provider, id: normalizedModel.id },
 	};
 };
 
@@ -778,7 +794,7 @@ const createAgent = async (initialState?: Partial<AgentState>, shouldSave = true
 	if (!initialState?.model) {
 		const savedModel = await storage.settings.get<Model<any>>("lastUsedModel");
 		if (savedModel) {
-			defaultModel = savedModel;
+			defaultModel = normalizeModelForRuntime(savedModel);
 		} else {
 			// Try to find a default model for a provider the user already has a key for
 			const providersWithKeys = await getProvidersWithKeys();
@@ -799,8 +815,15 @@ const createAgent = async (initialState?: Partial<AgentState>, shouldSave = true
 		defaultModel = getModel("anthropic", "claude-sonnet-4-6");
 	}
 
+	const normalizedInitialState = initialState
+		? {
+				...initialState,
+				model: initialState.model ? normalizeModelForRuntime(initialState.model) : initialState.model,
+			}
+		: initialState;
+
 	agent = new Agent({
-		initialState: initialState || {
+		initialState: normalizedInitialState || {
 			systemPrompt: SYSTEM_PROMPT,
 			model: defaultModel,
 			thinkingLevel: "medium",
@@ -872,7 +895,7 @@ const createAgent = async (initialState?: Partial<AgentState>, shouldSave = true
 			}
 
 			storage.settings
-				.set("lastUsedModel", agent.state.model)
+				.set("lastUsedModel", normalizeModelForRuntime(agent.state.model))
 				.catch((err) => console.error("Failed to save lastUsedModel:", err));
 
 			// Update auth label when model changes
@@ -953,7 +976,11 @@ const createAgent = async (initialState?: Partial<AgentState>, shouldSave = true
 			ModelSelector.open(
 				agent.state.model,
 				(model) => {
-					agent.setModel(model);
+					const normalizedModel = normalizeModelForRuntime(model);
+					agent.setModel(normalizedModel);
+					storage.settings
+						.set("lastUsedModel", normalizedModel)
+						.catch((err) => console.error("Failed to save lastUsedModel:", err));
 					chatPanel.agentInterface?.requestUpdate();
 					updateAuthLabel().catch(() => {});
 					emitSessionChanged();
