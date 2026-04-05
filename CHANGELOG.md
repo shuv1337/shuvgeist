@@ -2,6 +2,29 @@
 
 ## [Unreleased]
 
+### Added
+
+- Always-on bridge: BridgeClient and BrowserCommandExecutor moved from sidepanel to background service worker, keeping the WebSocket connection alive even when the sidepanel is closed
+- Offscreen document for REPL sandbox execution when the sidepanel is not open
+- Dynamic capability reporting based on sidepanel state (session commands require sidepanel, REPL works via sidepanel or offscreen)
+- Bridge keepalive via chrome.alarms (1-minute interval) to survive MV3 service worker suspension
+- Bridge settings mirrored to chrome.storage.local for background service worker access
+- Bridge connection state shared via chrome.storage.session for UI reactivity
+- `shuvgeist launch` command to start a Chromium browser with the extension loaded
+- `shuvgeist close` command to shut down a CLI-launched browser
+- Auto-start bridge server when any CLI command needs it
+- Multi-tier extension discovery (flag, env, config, dev build, installed extensions)
+- Multi-tier browser discovery (flag, env, config, PATH, known locations)
+- `--browser`, `--extension-path`, `--profile`, `--headless`, `--foreground` flags for launch command
+- PID tracking for launched browsers (~/.shuvgeist/launch.pid) and auto-started bridge (~/.shuvgeist/bridge.pid)
+
+### Changed
+
+- Bridge status indicator in sidepanel now reads from chrome.storage.session instead of direct BridgeClient state
+- BridgeClient supports dynamic capabilities via `capabilitiesProvider` callback
+- BrowserCommandExecutor supports `ReplRouter` for delegated REPL execution
+- BridgeTab settings dialog reads state from chrome.storage.session instead of module-level variables
+
 ## [1.1.0] - 2026-03-26
 
 ### Breaking Changes
