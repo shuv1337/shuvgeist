@@ -38,7 +38,9 @@
 		"webNavigation",
 		"debugger",
 		"cookies",
-		"declarativeNetRequest"
+		"declarativeNetRequest",
+		"offscreen",
+		"alarms"
 	],
 	"host_permissions": [
 		"<all_urls>"

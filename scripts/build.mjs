@@ -18,6 +18,7 @@ const entryPoints = {
 	debug: join(packageRoot, "src/debug.ts"),
 	icons: join(packageRoot, "src/icons.ts"),
 	background: join(packageRoot, "src/background.ts"),
+	offscreen: join(packageRoot, "src/offscreen.ts"),
 };
 
 rmSync(outDir, { recursive: true, force: true });
