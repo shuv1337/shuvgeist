@@ -46,6 +46,7 @@ await build({
 	define: {
 		"process.env.NODE_ENV": JSON.stringify(process.env.NODE_ENV ?? "production"),
 		__SHUVGEIST_VERSION__: JSON.stringify(version),
+		__SHUVGEIST_DEV_ROOT__: JSON.stringify(packageRoot),
 	},
 	// Bundle ws but keep Node builtins external (they're available at runtime)
 	external: [

@@ -1,3 +1,4 @@
+import type { LaunchOptions } from "./launcher.js";
 import type { BridgeMethod, BridgeResponse, CliConfigFile } from "./protocol.js";
 import { BridgeDefaults, ErrorCodes } from "./protocol.js";
 
@@ -37,6 +38,11 @@ export interface CliFlags {
 	touch?: boolean;
 	userAgent?: string;
 	autoStop?: string;
+	browser?: string;
+	extensionPath?: string;
+	profile?: string;
+	headless?: boolean;
+	foreground?: boolean;
 }
 
 export interface CliEnvironment {
@@ -65,6 +71,8 @@ export type CliCommandPlan =
 	  }
 	| { kind: "session"; follow: boolean; params: Record<string, unknown>; defaultTimeoutMs: number }
 	| { kind: "inject"; text: string; role: "user" | "assistant" }
+	| { kind: "launch"; options: LaunchOptions }
+	| { kind: "close" }
 	| { kind: "usage-error"; message: string };
 
 function parseNumberFlag(value: string | undefined): number | undefined {
@@ -608,6 +616,20 @@ export function createCommandPlan(
 			}
 			return { kind: "usage-error", message: "Usage: shuvgeist perf <metrics|trace-start|trace-stop>" };
 		}
+		case "launch":
+			return {
+				kind: "launch",
+				options: {
+					browser: flags.browser,
+					extensionPath: flags.extensionPath,
+					profile: flags.profile,
+					url: positionals[0],
+					headless: flags.headless,
+					foreground: flags.foreground,
+				},
+			};
+		case "close":
+			return { kind: "close" };
 		default:
 			return { kind: "usage-error", message: `Unknown command: ${command}` };
 	}

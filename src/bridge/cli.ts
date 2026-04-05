@@ -21,6 +21,7 @@
  *   3 — auth/configuration/network error
  */
 
+import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -37,6 +38,7 @@ import {
 	resolveBridgeUrl,
 	resolveConfig,
 } from "./cli-core.js";
+import { closeBrowser, type LaunchOptions, launchBrowser, setupForegroundHandlers } from "./launcher.js";
 import {
 	BridgeDefaults,
 	type BridgeEvent,
@@ -599,11 +601,155 @@ function generateToken(): string {
 	return result;
 }
 
+const BRIDGE_PID_FILE = join(homedir(), ".shuvgeist", "bridge.pid");
+
+/**
+ * Ensure the bridge server is running. If not, auto-start it.
+ */
+async function ensureBridgeServer(flags: {
+	url?: string;
+	host?: string;
+	port?: string;
+	token?: string;
+}): Promise<void> {
+	const wsUrl = resolveBridgeUrl(flags, process.env, readConfigFile());
+	const statusUrl = bridgeStatusUrl(wsUrl);
+
+	// Check if bridge is already running
+	if (await isBridgeRunning(statusUrl)) return;
+
+	// Resolve token for the new server
+	let token = flags.token || process.env.SHUVGEIST_BRIDGE_TOKEN || readConfigFile().token || "";
+	if (!token) {
+		// Generate a token
+		token = generateToken();
+		const configDir = join(homedir(), ".shuvgeist");
+		mkdirSync(configDir, { recursive: true });
+		const configPath = getConfigPath();
+		const existing = readConfigFile();
+		existing.token = token;
+		writeFileSync(configPath, JSON.stringify(existing, null, 2) + "\n");
+	}
+
+	const host = flags.host || process.env.SHUVGEIST_BRIDGE_HOST || BridgeDefaults.HOST;
+	const port = flags.port || process.env.SHUVGEIST_BRIDGE_PORT || String(BridgeDefaults.PORT);
+
+	// Fork a bridge server process
+	const child = spawn(process.execPath, [process.argv[1], "serve", "--host", host, "--port", port, "--token", token], {
+		detached: true,
+		stdio: "ignore",
+	});
+
+	if (child.pid) {
+		writeFileSync(BRIDGE_PID_FILE, String(child.pid));
+	}
+	child.unref();
+
+	// Wait for bridge to become available
+	const deadline = Date.now() + 5000;
+	let delay = 100;
+	while (Date.now() < deadline) {
+		await new Promise((r) => {
+			setTimeout(r, delay);
+		});
+		delay = Math.min(delay * 2, 1000);
+		if (await isBridgeRunning(statusUrl)) return;
+	}
+}
+
+async function isBridgeRunning(statusUrl: string): Promise<boolean> {
+	try {
+		const controller = new AbortController();
+		const timeout = setTimeout(() => controller.abort(), 3000);
+		const response = await fetch(statusUrl, { signal: controller.signal });
+		clearTimeout(timeout);
+		return response.ok;
+	} catch {
+		return false;
+	}
+}
+
+async function cmdLaunch(
+	options: LaunchOptions,
+	flags: { url?: string; host?: string; port?: string; token?: string; json?: boolean },
+): Promise<void> {
+	const jsonMode = flags.json || false;
+	try {
+		// Auto-start bridge first
+		await ensureBridgeServer(flags);
+
+		const wsUrl = resolveBridgeUrl(flags, process.env, readConfigFile());
+		const statusUrl = bridgeStatusUrl(wsUrl);
+		const result = await launchBrowser(options, statusUrl);
+
+		if (result.alreadyRunning) {
+			if (jsonMode) {
+				console.log(JSON.stringify({ alreadyRunning: true, browser: result.browserName }));
+			} else {
+				console.log("Browser already running with extension connected.");
+			}
+			process.exit(0);
+		}
+
+		if (jsonMode) {
+			console.log(
+				JSON.stringify({
+					pid: result.pid,
+					browserPath: result.browserPath,
+					extensionPath: result.extensionPath,
+					browserName: result.browserName,
+				}),
+			);
+		} else {
+			console.log(`Launched ${result.browserName} (PID ${result.pid})`);
+			console.log(`  Browser: ${result.browserPath}`);
+			console.log(`  Extension: ${result.extensionPath}`);
+		}
+
+		if (options.foreground) {
+			setupForegroundHandlers(result.pid);
+			// Keep alive until browser exits
+			const checkAlive = () => {
+				try {
+					process.kill(result.pid, 0);
+					setTimeout(checkAlive, 1000);
+				} catch {
+					process.exit(0);
+				}
+			};
+			setTimeout(checkAlive, 1000);
+		} else {
+			process.exit(0);
+		}
+	} catch (err) {
+		printError(err instanceof Error ? err.message : String(err), jsonMode);
+		process.exit(1);
+	}
+}
+
+async function cmdClose(flags: { json?: boolean }): Promise<void> {
+	const jsonMode = flags.json || false;
+	try {
+		const result = await closeBrowser();
+		if (jsonMode) {
+			console.log(JSON.stringify(result));
+		} else {
+			console.log(`Browser (PID ${result.pid}) closed via ${result.signal}`);
+		}
+		process.exit(0);
+	} catch (err) {
+		printError(err instanceof Error ? err.message : String(err), jsonMode);
+		process.exit(1);
+	}
+}
+
 function printUsage(): void {
 	console.log(`shuvgeist ${VERSION} — CLI bridge for the Shuvgeist browser extension
 
 Usage:
   shuvgeist serve [--host HOST] [--port PORT] [--token TOKEN]
+  shuvgeist launch [--browser path] [--extension-path path] [--url url] [--headless] [--foreground] [--profile name]
+  shuvgeist close
   shuvgeist status [--json] [--timeout 10s]
   shuvgeist navigate <url> [--new-tab] [--json] [--timeout 60s]
   shuvgeist tabs [--json] [--timeout 60s]
@@ -726,6 +872,11 @@ async function main(): Promise<void> {
 		else if (arg === "--dpr" && i + 1 < rest.length) globalFlags.dpr = rest[++i];
 		else if (arg === "--user-agent" && i + 1 < rest.length) globalFlags.userAgent = rest[++i];
 		else if (arg === "--auto-stop" && i + 1 < rest.length) globalFlags.autoStop = rest[++i];
+		else if (arg === "--browser" && i + 1 < rest.length) globalFlags.browser = rest[++i];
+		else if (arg === "--extension-path" && i + 1 < rest.length) globalFlags.extensionPath = rest[++i];
+		else if (arg === "--profile" && i + 1 < rest.length) globalFlags.profile = rest[++i];
+		else if (arg === "--headless") globalFlags.headless = true;
+		else if (arg === "--foreground") globalFlags.foreground = true;
 		else if (arg === "-f" && i + 1 < rest.length) globalFlags.file = rest[++i];
 		else positionals.push(arg);
 		i++;
@@ -734,9 +885,20 @@ async function main(): Promise<void> {
 	const flags = globalFlags;
 	const plan = createCommandPlan(command, positionals, flags, (path) => readFileSync(path, "utf-8"));
 
+	// Auto-start bridge for commands that need it
+	if (plan.kind !== "serve" && plan.kind !== "usage-error") {
+		await ensureBridgeServer(flags);
+	}
+
 	switch (plan.kind) {
 		case "serve":
 			await cmdServe(rest);
+			break;
+		case "launch":
+			await cmdLaunch(plan.options, flags);
+			break;
+		case "close":
+			await cmdClose(flags);
 			break;
 		case "status":
 			await fetchBridgeStatus(flags);

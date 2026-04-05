@@ -15,5 +15,13 @@
 		"isolatedModules": true,
 		"noEmit": true
 	},
-	"include": ["src/bridge/protocol.ts", "src/bridge/logging.ts", "src/bridge/server.ts", "src/bridge/cli.ts"]
+	"include": [
+		"src/bridge/protocol.ts",
+		"src/bridge/logging.ts",
+		"src/bridge/server.ts",
+		"src/bridge/cli.ts",
+		"src/bridge/cli-core.ts",
+		"src/bridge/discovery.ts",
+		"src/bridge/launcher.ts"
+	]
 }
