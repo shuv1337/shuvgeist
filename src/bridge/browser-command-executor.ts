@@ -82,12 +82,23 @@ export interface ReplRouter {
 	execute(params: ReplParams, signal?: AbortSignal): Promise<BridgeReplResult>;
 }
 
+/**
+ * Router interface for screenshot capture.
+ * When provided, the executor delegates screenshot calls through this router
+ * instead of using ExtractImageTool directly (needed when running in service
+ * worker context where canvas/image APIs may hang).
+ */
+export interface ScreenshotRouter {
+	capture(params: ScreenshotParams, signal?: AbortSignal): Promise<BridgeScreenshotResult>;
+}
+
 export interface BrowserCommandExecutorOptions {
 	windowId: number;
 	sessionId?: string;
 	sensitiveAccessEnabled: boolean;
 	sessionBridge?: SessionBridgeAdapter;
 	replRouter?: ReplRouter;
+	screenshotRouter?: ScreenshotRouter;
 }
 
 export class BrowserCommandExecutor {
@@ -105,6 +116,7 @@ export class BrowserCommandExecutor {
 	private readonly sensitiveAccessEnabled: boolean;
 	private readonly sessionBridge?: SessionBridgeAdapter;
 	private readonly replRouter?: ReplRouter;
+	private readonly screenshotRouter?: ScreenshotRouter;
 	private readonly debuggerManager = getSharedDebuggerManager();
 	private readonly refMap = new RefMap();
 
@@ -114,6 +126,7 @@ export class BrowserCommandExecutor {
 		this.sensitiveAccessEnabled = options.sensitiveAccessEnabled;
 		this.sessionBridge = options.sessionBridge;
 		this.replRouter = options.replRouter;
+		this.screenshotRouter = options.screenshotRouter;
 	}
 
 	/** Dispatch a bridge command by method name. */
@@ -241,6 +254,12 @@ export class BrowserCommandExecutor {
 	}
 
 	async screenshot(params: ScreenshotParams, signal?: AbortSignal): Promise<BridgeScreenshotResult> {
+		// If a screenshot router is configured (running in service worker), delegate to it
+		if (this.screenshotRouter) {
+			return this.screenshotRouter.capture(params, signal);
+		}
+
+		// Direct execution (running in sidepanel or extension page with DOM access)
 		const result = await this.getExtractImageTool().execute(
 			"bridge",
 			{ mode: "screenshot", maxWidth: params.maxWidth ?? 1024 },

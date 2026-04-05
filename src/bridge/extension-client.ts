@@ -6,7 +6,7 @@
  * them to the BrowserCommandExecutor.
  */
 
-import { BrowserCommandExecutor } from "./browser-command-executor.js";
+import { BrowserCommandExecutor, type ReplRouter, type ScreenshotRouter } from "./browser-command-executor.js";
 import { bridgeLog, type LogFields } from "./logging.js";
 import type { AbortMessage, BridgeCapability, BridgeRequest, BridgeResponse, RegisterResult } from "./protocol.js";
 import { ErrorCodes, getBridgeCapabilities } from "./protocol.js";
@@ -24,6 +24,10 @@ export interface BridgeClientOptions {
 	onStateChange?: (state: BridgeConnectionState, detail?: string) => void;
 	/** Optional callback to compute capabilities dynamically (e.g. based on sidepanel state). */
 	capabilitiesProvider?: () => BridgeCapability[];
+	/** Router for REPL execution when running in service worker context. */
+	replRouter?: ReplRouter;
+	/** Router for screenshot capture when running in service worker context. */
+	screenshotRouter?: ScreenshotRouter;
 }
 
 export class BridgeClient {
@@ -68,6 +72,8 @@ export class BridgeClient {
 			sessionId: options.sessionId,
 			sensitiveAccessEnabled: options.sensitiveAccessEnabled,
 			sessionBridge: options.sessionBridge,
+			replRouter: options.replRouter,
+			screenshotRouter: options.screenshotRouter,
 		});
 		this.reconnectAttempts = 0;
 		this.doConnect();

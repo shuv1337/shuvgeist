@@ -25,6 +25,7 @@ import {
 	BRIDGE_SETTINGS_KEY,
 	BRIDGE_STATE_KEY,
 	type BridgeReplMessageResponse,
+	type BridgeScreenshotMessageResponse,
 	type BridgeSessionCommandMessageResponse,
 	type BridgeSettings,
 	type BridgeStateData,
@@ -33,6 +34,7 @@ import {
 import { bridgeLog } from "./bridge/logging.js";
 import {
 	ErrorCodes,
+	type ScreenshotParams,
 	type SessionArtifactsResult,
 	type SessionInjectParams,
 	type SessionNewParams,
@@ -795,6 +797,18 @@ chrome.runtime.onMessage.addListener(
 			return true; // async response
 		}
 
+		if (message.type === "bridge-screenshot") {
+			const msg = message as { params: ScreenshotParams };
+			handleBridgeScreenshot(msg.params)
+				.then((result) => {
+					sendResponse({ ok: true, result } as BridgeScreenshotMessageResponse);
+				})
+				.catch((err: Error) => {
+					sendResponse({ ok: false, error: err.message } as BridgeScreenshotMessageResponse);
+				});
+			return true; // async response
+		}
+
 		return false;
 	},
 );
@@ -839,6 +853,28 @@ async function handleBridgeReplExecute(params: { title: string; code: string }):
 			size: typeof f.content === "string" ? f.content.length : (f.content?.byteLength ?? 0),
 			contentBase64: "",
 		})),
+	};
+}
+
+async function handleBridgeScreenshot(params: ScreenshotParams): Promise<{
+	mimeType: "image/webp" | "image/png";
+	dataUrl: string;
+}> {
+	const tool = new ExtractImageTool();
+	tool.windowId = currentWindowId;
+	const result = await tool.execute("bridge", {
+		mode: "screenshot",
+		maxWidth: params.maxWidth ?? 1024,
+	});
+	const image = result.content.find((item) => item.type === "image") as
+		| { type: "image"; data: string; mimeType: string }
+		| undefined;
+	if (!image?.data || !image.mimeType) {
+		throw new Error("Screenshot tool returned no image data");
+	}
+	return {
+		mimeType: image.mimeType as "image/webp" | "image/png",
+		dataUrl: `data:${image.mimeType};base64,${image.data}`,
 	};
 }
 

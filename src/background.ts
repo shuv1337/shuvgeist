@@ -18,20 +18,29 @@ import {
 	SIDEPANEL_OPEN_KEY,
 	shouldCloseSidepanel,
 } from "./background-state.js";
-import { BrowserCommandExecutor, type ReplRouter } from "./bridge/browser-command-executor.js";
+import type { ReplRouter, ScreenshotRouter } from "./bridge/browser-command-executor.js";
 import { BridgeClient } from "./bridge/extension-client.js";
 import {
 	BRIDGE_SETTINGS_KEY,
 	BRIDGE_STATE_KEY,
 	type BridgeReplMessageResponse,
+	type BridgeScreenshotMessageResponse,
 	type BridgeSessionCommandMessageResponse,
 	type BridgeSettings,
 	type BridgeStateData,
 	type BridgeToOffscreenMessage,
 	type BridgeToSidepanelMessage,
 } from "./bridge/internal-messages.js";
-import { type BridgeCapability, ErrorCodes, getBridgeCapabilities } from "./bridge/protocol.js";
+import {
+	type BridgeCapability,
+	type BridgeScreenshotResult,
+	ErrorCodes,
+	getBridgeCapabilities,
+	type ScreenshotParams,
+} from "./bridge/protocol.js";
 import type { SessionBridgeAdapter } from "./bridge/session-bridge.js";
+import { resolveTabTarget } from "./tools/helpers/browser-target.js";
+import { getSharedDebuggerManager } from "./tools/helpers/debugger-manager.js";
 import type { SidepanelToBackgroundMessage } from "./utils/port.js";
 
 // ============================================================================
@@ -133,6 +142,106 @@ const replRouter: ReplRouter = {
 		});
 	},
 };
+
+// ============================================================================
+// SCREENSHOT ROUTER (background -> sidepanel or CDP fallback)
+// ============================================================================
+
+const debuggerManager = getSharedDebuggerManager();
+
+const screenshotRouter: ScreenshotRouter = {
+	async capture(params, signal) {
+		if (signal?.aborted) {
+			throw Object.assign(new Error("Screenshot capture aborted"), { code: ErrorCodes.ABORTED });
+		}
+
+		// Strategy 1: Route to sidepanel if open (has full canvas/image APIs)
+		if (isSidepanelOpen()) {
+			try {
+				const response = await sendMessageSafe<BridgeScreenshotMessageResponse>({
+					type: "bridge-screenshot",
+					params,
+				} as BridgeToSidepanelMessage);
+				if (response?.ok) {
+					return response.result;
+				}
+				if (response && !response.ok) {
+					throw new Error(response.error);
+				}
+			} catch (err) {
+				console.warn("[Background] Screenshot routing to sidepanel failed, trying CDP:", err);
+			}
+		}
+
+		// Strategy 2: Use CDP Page.captureScreenshot (works from service worker)
+		return captureScreenshotViaCDP(params);
+	},
+};
+
+/**
+ * Capture a screenshot using Chrome DevTools Protocol.
+ * Works from the service worker context without canvas/image APIs.
+ */
+async function captureScreenshotViaCDP(params: ScreenshotParams): Promise<BridgeScreenshotResult> {
+	const windowId = await resolveWindowId();
+	const { tabId } = await resolveTabTarget({ windowId });
+	const owner = `screenshot:${tabId}:${Date.now()}`;
+	const maxWidth = params.maxWidth ?? 1024;
+
+	await debuggerManager.acquire(tabId, owner);
+	try {
+		await debuggerManager.ensureDomain(tabId, "Page");
+
+		// Get layout metrics to determine viewport dimensions
+		const metrics = await debuggerManager.sendCommand<{
+			cssVisualViewport: { clientWidth: number; clientHeight: number };
+		}>(tabId, "Page.getLayoutMetrics");
+
+		// Capture as PNG via CDP — optionally clip to maxWidth
+		const captureParams: Record<string, unknown> = {
+			format: "png",
+			captureBeyondViewport: false,
+		};
+
+		// If viewport is wider than maxWidth, set a device metrics override
+		// so CDP captures at the target width (avoids needing canvas resize)
+		const viewportWidth = metrics?.cssVisualViewport?.clientWidth ?? 0;
+		let didOverrideMetrics = false;
+		if (viewportWidth > maxWidth) {
+			const scale = maxWidth / viewportWidth;
+			await debuggerManager.sendCommand(tabId, "Emulation.setDeviceMetricsOverride", {
+				width: maxWidth,
+				height: Math.round((metrics.cssVisualViewport.clientHeight ?? 0) * scale),
+				deviceScaleFactor: 1,
+				mobile: false,
+			});
+			didOverrideMetrics = true;
+		}
+
+		try {
+			const result = await debuggerManager.sendCommand<{ data: string }>(
+				tabId,
+				"Page.captureScreenshot",
+				captureParams,
+			);
+
+			if (!result?.data) {
+				throw new Error("CDP Page.captureScreenshot returned no data");
+			}
+
+			return {
+				mimeType: "image/png",
+				dataUrl: `data:image/png;base64,${result.data}`,
+			};
+		} finally {
+			if (didOverrideMetrics) {
+				await debuggerManager.sendCommand(tabId, "Emulation.clearDeviceMetricsOverride").catch(() => {});
+			}
+		}
+	} finally {
+		await debuggerManager.release(tabId, owner);
+	}
+}
 
 // ============================================================================
 // SESSION BRIDGE ADAPTER (background -> sidepanel routing)
@@ -261,7 +370,6 @@ function getCurrentCapabilities(): BridgeCapability[] {
 // ============================================================================
 
 const bridgeClient = new BridgeClient();
-let commandExecutor: BrowserCommandExecutor | null = null;
 let currentSettings: BridgeSettings | null = null;
 let currentWindowId = 0;
 
@@ -296,18 +404,14 @@ async function ensureBridgeConnection(): Promise<void> {
 		bridgeClient.connectionState === "error";
 
 	if (needsReconnect) {
-		commandExecutor = new BrowserCommandExecutor({
-			windowId,
-			sensitiveAccessEnabled: settings.sensitiveAccessEnabled,
-			sessionBridge: backgroundSessionBridge,
-			replRouter,
-		});
-
 		bridgeClient.connect({
 			url: settings.url,
 			token: settings.token,
 			windowId,
 			sensitiveAccessEnabled: settings.sensitiveAccessEnabled,
+			sessionBridge: backgroundSessionBridge,
+			replRouter,
+			screenshotRouter,
 			capabilitiesProvider: getCurrentCapabilities,
 			onStateChange: (state, detail) => {
 				// Persist state for UI

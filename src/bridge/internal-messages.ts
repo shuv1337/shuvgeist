@@ -4,7 +4,7 @@
  */
 
 import type { BridgeConnectionState } from "./extension-client.js";
-import type { BridgeReplResult, ReplParams } from "./protocol.js";
+import type { BridgeReplResult, BridgeScreenshotResult, ReplParams, ScreenshotParams } from "./protocol.js";
 
 // ---------------------------------------------------------------------------
 // Storage keys
@@ -42,7 +42,8 @@ export interface BridgeStateData {
 
 export type BridgeToSidepanelMessage =
 	| { type: "bridge-session-command"; method: string; params: Record<string, unknown> }
-	| { type: "bridge-repl-execute"; params: ReplParams };
+	| { type: "bridge-repl-execute"; params: ReplParams }
+	| { type: "bridge-screenshot"; params: ScreenshotParams };
 
 export type SidepanelToBackgroundMessage =
 	| { type: "bridge-get-state" }
@@ -71,6 +72,18 @@ export interface BridgeReplErrorResponse {
 }
 
 export type BridgeReplMessageResponse = BridgeReplResponse | BridgeReplErrorResponse;
+
+export interface BridgeScreenshotResponse {
+	ok: true;
+	result: BridgeScreenshotResult;
+}
+
+export interface BridgeScreenshotErrorResponse {
+	ok: false;
+	error: string;
+}
+
+export type BridgeScreenshotMessageResponse = BridgeScreenshotResponse | BridgeScreenshotErrorResponse;
 
 export interface BridgeSessionCommandResponse {
 	ok: true;

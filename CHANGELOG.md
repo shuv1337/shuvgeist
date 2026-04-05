@@ -18,11 +18,17 @@
 - `--browser`, `--extension-path`, `--profile`, `--headless`, `--foreground` flags for launch command
 - PID tracking for launched browsers (~/.shuvgeist/launch.pid) and auto-started bridge (~/.shuvgeist/bridge.pid)
 
+### Fixed
+
+- Screenshot regression: `shuvgeist screenshot` timed out (120s) because ExtractImageTool hangs in service worker context. Screenshots now route to sidepanel when open, falling back to CDP Page.captureScreenshot when closed.
+- BridgeClient was creating its own BrowserCommandExecutor without replRouter or sessionBridge, causing REPL and session commands to fail from the background service worker. Now passes both through from connect options.
+- Removed orphaned commandExecutor variable in background.ts that was never used by the bridge client.
+
 ### Changed
 
 - Bridge status indicator in sidepanel now reads from chrome.storage.session instead of direct BridgeClient state
 - BridgeClient supports dynamic capabilities via `capabilitiesProvider` callback
-- BrowserCommandExecutor supports `ReplRouter` for delegated REPL execution
+- BrowserCommandExecutor supports `ReplRouter` for delegated REPL execution and `ScreenshotRouter` for delegated screenshot capture
 - BridgeTab settings dialog reads state from chrome.storage.session instead of module-level variables
 
 ## [1.1.0] - 2026-03-26
