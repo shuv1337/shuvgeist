@@ -21,6 +21,7 @@ import {
 } from "@mariozechner/pi-web-ui";
 import { html, render } from "lit";
 import { History, Plus, Settings } from "lucide";
+import { BrowserCommandExecutor } from "./bridge/browser-command-executor.js";
 import {
 	BRIDGE_SETTINGS_KEY,
 	BRIDGE_STATE_KEY,
@@ -32,6 +33,7 @@ import {
 	type BridgeToSidepanelMessage,
 } from "./bridge/internal-messages.js";
 import { bridgeLog } from "./bridge/logging.js";
+import type { BridgeMethod } from "./bridge/protocol.js";
 import {
 	ErrorCodes,
 	type ScreenshotParams,
@@ -73,21 +75,29 @@ import { createWelcomeMessage, registerWelcomeRenderer } from "./messages/Welcom
 import { isOAuthCredentials, resolveApiKey } from "./oauth/index.js";
 import { SYSTEM_PROMPT } from "./prompts/prompts.js";
 import { ShuvgeistAppStorage } from "./storage/app-storage.js";
+import { registerAskUserWhichElementRenderer } from "./tools/ask-user-which-element-renderer.js";
 import { DebuggerTool } from "./tools/debugger.js";
-import { ExtractImageTool, registerExtractImageRenderer } from "./tools/extract-image.js";
+import { ExtractImageTool } from "./tools/extract-image.js";
+import { registerExtractImageRenderer } from "./tools/extract-image-renderer.js";
 import { AskUserWhichElementTool, skillTool } from "./tools/index.js";
 import { NativeInputEventsRuntimeProvider } from "./tools/NativeInputEventsRuntimeProvider.js";
 import { isToolNavigating, NavigateTool } from "./tools/navigate.js";
 import { createReplTool, executeJavaScript } from "./tools/repl/repl.js";
+import { registerReplRenderer } from "./tools/repl/repl-renderer.js";
 import { BrowserJsRuntimeProvider, NavigateRuntimeProvider } from "./tools/repl/runtime-providers.js";
+import { registerSkillRenderer } from "./tools/skill-renderer.js";
 import * as port from "./utils/port.js";
+import { clearShownSkills } from "./utils/shown-skills.js";
 import "./utils/i18n-extension.js";
 import "./utils/live-reload.js";
 import { tutorials } from "./tutorials.js";
 
-// Register custom message renderers
+// Register custom tool renderers
 registerNavigationRenderer();
 registerExtractImageRenderer();
+registerAskUserWhichElementRenderer();
+registerSkillRenderer();
+registerReplRenderer();
 
 // Listen for abort messages from REPL overlay
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -144,10 +154,6 @@ const mirrorBridgeSettings = async () => {
 
 /** Cached bridge connection state read from chrome.storage.session. */
 let cachedBridgeState: BridgeStateData = { state: "disabled" };
-
-// Track which skills we've shown in full (skillName -> lastUpdated timestamp)
-// Reset when a new session/agent is created
-const shownSkills = new Map<string, string>();
 
 // Track which messages we've already recorded costs for (avoid duplicates)
 // Use Set with message object identity (not cleared on session switch - persists in memory)
@@ -370,11 +376,6 @@ async function updateAuthLabel() {
 
 	const customProvider = await getCustomProviderByName(provider);
 	authLabel = customProvider?.apiKey ? "api key" : customProvider ? "custom" : "";
-}
-
-// Export getter for message transformer
-export function getShownSkills(): Map<string, string> {
-	return shownSkills;
 }
 
 // ============================================================================
@@ -813,7 +814,50 @@ chrome.runtime.onMessage.addListener(
 	},
 );
 
+/** Lazily-created executor for handling bridge commands routed from background. */
+let bridgeExecutor: BrowserCommandExecutor | null = null;
+
+function getBridgeExecutor(): BrowserCommandExecutor {
+	if (!bridgeExecutor) {
+		bridgeExecutor = new BrowserCommandExecutor({
+			windowId: currentWindowId,
+			sensitiveAccessEnabled: true, // background already gates on capability
+			sessionBridge: sessionBridgeAdapter,
+			replRouter: {
+				execute: async (params, signal) => {
+					const navigateTool = new NavigateTool();
+					const pageProviders = [new NativeInputEventsRuntimeProvider({ windowId: currentWindowId })];
+					const runtimeProviders = [
+						...pageProviders,
+						new BrowserJsRuntimeProvider(pageProviders, currentWindowId),
+						new NavigateRuntimeProvider(navigateTool),
+					];
+					const result = await executeJavaScript(
+						params.code,
+						runtimeProviders,
+						signal,
+						() => chrome.runtime.getURL("sandbox.html"),
+						params.title,
+						currentWindowId,
+					);
+					return {
+						output: result.output,
+						files: (result.files || []).map((f) => ({
+							fileName: f.fileName || "file",
+							mimeType: f.mimeType || "application/octet-stream",
+							size: typeof f.content === "string" ? f.content.length : (f.content?.byteLength ?? 0),
+							contentBase64: "",
+						})),
+					};
+				},
+			},
+		});
+	}
+	return bridgeExecutor;
+}
+
 async function handleBridgeSessionCommand(method: string, params: Record<string, unknown>): Promise<unknown> {
+	// Session-specific methods handled directly via adapter
 	switch (method) {
 		case "session_history":
 			return sessionBridgeAdapter.getSnapshot();
@@ -829,7 +873,8 @@ async function handleBridgeSessionCommand(method: string, params: Record<string,
 			await sessionBridgeAdapter.waitForIdle();
 			return { ok: true };
 		default:
-			throw new Error(`Unknown session command: ${method}`);
+			// All other bridge methods: dispatch via BrowserCommandExecutor
+			return getBridgeExecutor().dispatch(method as BridgeMethod, params);
 	}
 }
 
@@ -908,7 +953,7 @@ const createAgent = async (initialState?: Partial<AgentState>, shouldSave = true
 	// When loading an old session, we intentionally don't reconstruct shownSkills
 	// This ensures that new navigations in the continued session show the LATEST
 	// version of skills, even if they were updated since the session was created
-	shownSkills.clear();
+	clearShownSkills();
 
 	// Load debugger mode setting
 	const stored = await chrome.storage.local.get("debuggerMode");

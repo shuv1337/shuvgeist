@@ -18,28 +18,20 @@ import {
 	SIDEPANEL_OPEN_KEY,
 	shouldCloseSidepanel,
 } from "./background-state.js";
-import type { ReplRouter, ScreenshotRouter } from "./bridge/browser-command-executor.js";
+import { BrowserCommandExecutor, type ReplRouter, type ScreenshotRouter } from "./bridge/browser-command-executor.js";
 import { BridgeClient } from "./bridge/extension-client.js";
 import {
 	BRIDGE_SETTINGS_KEY,
 	BRIDGE_STATE_KEY,
 	type BridgeReplMessageResponse,
-	type BridgeScreenshotMessageResponse,
 	type BridgeSessionCommandMessageResponse,
 	type BridgeSettings,
 	type BridgeStateData,
 	type BridgeToOffscreenMessage,
 	type BridgeToSidepanelMessage,
 } from "./bridge/internal-messages.js";
-import {
-	type BridgeCapability,
-	type BridgeScreenshotResult,
-	ErrorCodes,
-	getBridgeCapabilities,
-	type ScreenshotParams,
-} from "./bridge/protocol.js";
+import { type BridgeCapability, ErrorCodes, getBridgeCapabilities } from "./bridge/protocol.js";
 import type { SessionBridgeAdapter } from "./bridge/session-bridge.js";
-import { resolveTabTarget } from "./tools/helpers/browser-target.js";
 import { getSharedDebuggerManager } from "./tools/helpers/debugger-manager.js";
 import type { SidepanelToBackgroundMessage } from "./utils/port.js";
 
@@ -107,14 +99,9 @@ const replRouter: ReplRouter = {
 					type: "bridge-repl-execute",
 					params,
 				} as BridgeToSidepanelMessage);
-				if (response?.ok) {
-					return response.result;
-				}
-				if (response && !response.ok) {
-					throw new Error(response.error);
-				}
+				if (response?.ok) return response.result;
+				if (response && !response.ok) throw new Error(response.error);
 			} catch (err) {
-				// Sidepanel may have closed between check and message — fall through to offscreen
 				console.warn("[Background] REPL routing to sidepanel failed, trying offscreen:", err);
 			}
 		}
@@ -126,18 +113,13 @@ const replRouter: ReplRouter = {
 				type: "bridge-repl-execute",
 				params,
 			} as BridgeToOffscreenMessage);
-			if (response?.ok) {
-				return response.result;
-			}
-			if (response && !response.ok) {
-				throw new Error(response.error);
-			}
+			if (response?.ok) return response.result;
+			if (response && !response.ok) throw new Error(response.error);
 		} catch (err) {
 			console.warn("[Background] REPL routing to offscreen failed:", err);
 		}
 
-		// Strategy 3: Capability disabled
-		throw Object.assign(new Error("REPL requires sidepanel open or offscreen document support"), {
+		throw Object.assign(new Error("REPL requires sidepanel or offscreen document"), {
 			code: ErrorCodes.CAPABILITY_DISABLED,
 		});
 	},
@@ -147,113 +129,43 @@ const replRouter: ReplRouter = {
 // SCREENSHOT ROUTER (background -> sidepanel or CDP fallback)
 // ============================================================================
 
-const debuggerManager = getSharedDebuggerManager();
+const sharedDebuggerManager = getSharedDebuggerManager();
 
 const screenshotRouter: ScreenshotRouter = {
-	async capture(params, signal) {
+	async capture(_params, signal) {
 		if (signal?.aborted) {
 			throw Object.assign(new Error("Screenshot capture aborted"), { code: ErrorCodes.ABORTED });
 		}
 
-		// Strategy 1: Route to sidepanel if open (has full canvas/image APIs)
-		if (isSidepanelOpen()) {
-			try {
-				const response = await sendMessageSafe<BridgeScreenshotMessageResponse>({
-					type: "bridge-screenshot",
-					params,
-				} as BridgeToSidepanelMessage);
-				if (response?.ok) {
-					return response.result;
-				}
-				if (response && !response.ok) {
-					throw new Error(response.error);
-				}
-			} catch (err) {
-				console.warn("[Background] Screenshot routing to sidepanel failed, trying CDP:", err);
-			}
-		}
+		// Use CDP Page.captureScreenshot via DebuggerManager.
+		// captureVisibleTab + canvas image processing hangs in service worker context.
+		const windowId = await resolveWindowId();
+		const [tab] = await chrome.tabs.query({ active: true, windowId });
+		if (!tab?.id) throw new Error("No active tab for screenshot");
+		const tabId = tab.id;
+		const owner = `screenshot:${tabId}:${Date.now()}`;
 
-		// Strategy 2: Use CDP Page.captureScreenshot (works from service worker)
-		return captureScreenshotViaCDP(params);
+		await sharedDebuggerManager.acquire(tabId, owner);
+		try {
+			await sharedDebuggerManager.ensureDomain(tabId, "Page");
+			const result = await sharedDebuggerManager.sendCommand<{ data: string }>(tabId, "Page.captureScreenshot", {
+				format: "png",
+				captureBeyondViewport: false,
+			});
+			if (!result?.data) throw new Error("CDP Page.captureScreenshot returned no data");
+			return { mimeType: "image/png", dataUrl: `data:image/png;base64,${result.data}` };
+		} finally {
+			await sharedDebuggerManager.release(tabId, owner);
+		}
 	},
 };
-
-/**
- * Capture a screenshot using Chrome DevTools Protocol.
- * Works from the service worker context without canvas/image APIs.
- */
-async function captureScreenshotViaCDP(params: ScreenshotParams): Promise<BridgeScreenshotResult> {
-	const windowId = await resolveWindowId();
-	const { tabId } = await resolveTabTarget({ windowId });
-	const owner = `screenshot:${tabId}:${Date.now()}`;
-	const maxWidth = params.maxWidth ?? 1024;
-
-	await debuggerManager.acquire(tabId, owner);
-	try {
-		await debuggerManager.ensureDomain(tabId, "Page");
-
-		// Get layout metrics to determine viewport dimensions
-		const metrics = await debuggerManager.sendCommand<{
-			cssVisualViewport: { clientWidth: number; clientHeight: number };
-		}>(tabId, "Page.getLayoutMetrics");
-
-		// Capture as PNG via CDP — optionally clip to maxWidth
-		const captureParams: Record<string, unknown> = {
-			format: "png",
-			captureBeyondViewport: false,
-		};
-
-		// If viewport is wider than maxWidth, set a device metrics override
-		// so CDP captures at the target width (avoids needing canvas resize)
-		const viewportWidth = metrics?.cssVisualViewport?.clientWidth ?? 0;
-		let didOverrideMetrics = false;
-		if (viewportWidth > maxWidth) {
-			const scale = maxWidth / viewportWidth;
-			await debuggerManager.sendCommand(tabId, "Emulation.setDeviceMetricsOverride", {
-				width: maxWidth,
-				height: Math.round((metrics.cssVisualViewport.clientHeight ?? 0) * scale),
-				deviceScaleFactor: 1,
-				mobile: false,
-			});
-			didOverrideMetrics = true;
-		}
-
-		try {
-			const result = await debuggerManager.sendCommand<{ data: string }>(
-				tabId,
-				"Page.captureScreenshot",
-				captureParams,
-			);
-
-			if (!result?.data) {
-				throw new Error("CDP Page.captureScreenshot returned no data");
-			}
-
-			return {
-				mimeType: "image/png",
-				dataUrl: `data:image/png;base64,${result.data}`,
-			};
-		} finally {
-			if (didOverrideMetrics) {
-				await debuggerManager.sendCommand(tabId, "Emulation.clearDeviceMetricsOverride").catch(() => {});
-			}
-		}
-	} finally {
-		await debuggerManager.release(tabId, owner);
-	}
-}
 
 // ============================================================================
 // SESSION BRIDGE ADAPTER (background -> sidepanel routing)
 // ============================================================================
 
-/**
- * Background-side session bridge adapter that routes all session operations
- * to the sidepanel via chrome.runtime.sendMessage.
- */
 const backgroundSessionBridge: SessionBridgeAdapter = {
 	getSnapshot() {
-		// Synchronous — cannot route to sidepanel. Return empty state.
 		return {
 			sessionId: undefined,
 			persisted: false,
@@ -265,52 +177,37 @@ const backgroundSessionBridge: SessionBridgeAdapter = {
 			messages: [],
 		};
 	},
-	async waitForIdle(): Promise<void> {
-		if (!isSidepanelOpen()) {
-			throw Object.assign(new Error("Session operations require sidepanel to be open"), {
-				code: ErrorCodes.NO_ACTIVE_SESSION,
-			});
-		}
+	async waitForIdle() {
+		if (!isSidepanelOpen())
+			throw Object.assign(new Error("Session operations require sidepanel"), { code: ErrorCodes.NO_ACTIVE_SESSION });
 		const resp = await sendSessionCommand("waitForIdle", {});
 		if (!resp.ok) throw new Error(resp.error);
 	},
 	async appendInjectedMessage(params) {
-		if (!isSidepanelOpen()) {
-			throw Object.assign(new Error("Session inject requires sidepanel to be open"), {
-				code: ErrorCodes.NO_ACTIVE_SESSION,
-			});
-		}
+		if (!isSidepanelOpen())
+			throw Object.assign(new Error("Session inject requires sidepanel"), { code: ErrorCodes.NO_ACTIVE_SESSION });
 		const resp = await sendSessionCommand("session_inject", params as unknown as Record<string, unknown>);
 		if (!resp.ok) throw Object.assign(new Error(resp.error), { code: resp.code });
 		return resp.result as Awaited<ReturnType<SessionBridgeAdapter["appendInjectedMessage"]>>;
 	},
 	async newSession(params) {
-		if (!isSidepanelOpen()) {
-			throw Object.assign(new Error("Session creation requires sidepanel to be open"), {
-				code: ErrorCodes.NO_ACTIVE_SESSION,
-			});
-		}
+		if (!isSidepanelOpen())
+			throw Object.assign(new Error("Session creation requires sidepanel"), { code: ErrorCodes.NO_ACTIVE_SESSION });
 		const resp = await sendSessionCommand("session_new", params as unknown as Record<string, unknown>);
 		if (!resp.ok) throw Object.assign(new Error(resp.error), { code: resp.code });
 		return resp.result as Awaited<ReturnType<SessionBridgeAdapter["newSession"]>>;
 	},
 	async setModel(params) {
-		if (!isSidepanelOpen()) {
-			throw Object.assign(new Error("Model change requires sidepanel to be open"), {
-				code: ErrorCodes.NO_ACTIVE_SESSION,
-			});
-		}
+		if (!isSidepanelOpen())
+			throw Object.assign(new Error("Model change requires sidepanel"), { code: ErrorCodes.NO_ACTIVE_SESSION });
 		const resp = await sendSessionCommand("session_set_model", params as unknown as Record<string, unknown>);
 		if (!resp.ok) throw Object.assign(new Error(resp.error), { code: resp.code });
 		return resp.result as Awaited<ReturnType<SessionBridgeAdapter["setModel"]>>;
 	},
 	getArtifacts() {
-		// Synchronous — return empty result. Async route handled by executor dispatch override.
 		return { sessionId: undefined, artifacts: [] };
 	},
-	subscribe(_listener) {
-		// Event subscription not supported in background context.
-		// The bridge client gets events from the sidepanel via storage changes.
+	subscribe() {
 		return () => {};
 	},
 };
@@ -325,16 +222,10 @@ async function sendSessionCommand(
 			method,
 			params,
 		} as BridgeToSidepanelMessage);
-		if (!response) {
-			return { ok: false, error: "No response from sidepanel", code: ErrorCodes.NO_ACTIVE_SESSION };
-		}
+		if (!response) return { ok: false, error: "No response from sidepanel", code: ErrorCodes.NO_ACTIVE_SESSION };
 		return response;
 	} catch (err) {
-		return {
-			ok: false,
-			error: err instanceof Error ? err.message : String(err),
-			code: ErrorCodes.NO_ACTIVE_SESSION,
-		};
+		return { ok: false, error: err instanceof Error ? err.message : String(err), code: ErrorCodes.NO_ACTIVE_SESSION };
 	}
 }
 
@@ -366,7 +257,7 @@ function getCurrentCapabilities(): BridgeCapability[] {
 }
 
 // ============================================================================
-// BRIDGE CLIENT + COMMAND EXECUTOR
+// BRIDGE CLIENT
 // ============================================================================
 
 const bridgeClient = new BridgeClient();
@@ -404,17 +295,22 @@ async function ensureBridgeConnection(): Promise<void> {
 		bridgeClient.connectionState === "error";
 
 	if (needsReconnect) {
-		bridgeClient.connect({
-			url: settings.url,
-			token: settings.token,
+		const executor = new BrowserCommandExecutor({
 			windowId,
 			sensitiveAccessEnabled: settings.sensitiveAccessEnabled,
 			sessionBridge: backgroundSessionBridge,
 			replRouter,
 			screenshotRouter,
+		});
+
+		bridgeClient.connect({
+			url: settings.url,
+			token: settings.token,
+			windowId,
+			sensitiveAccessEnabled: settings.sensitiveAccessEnabled,
+			executor,
 			capabilitiesProvider: getCurrentCapabilities,
 			onStateChange: (state, detail) => {
-				// Persist state for UI
 				const stateData: BridgeStateData = { state, detail };
 				chrome.storage.session.set({ [BRIDGE_STATE_KEY]: stateData });
 			},

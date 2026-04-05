@@ -1,4 +1,4 @@
-import type { SandboxRuntimeProvider } from "@mariozechner/pi-web-ui";
+import type { SandboxRuntimeProvider } from "@mariozechner/pi-web-ui/sandbox/SandboxRuntimeProvider.js";
 import { NATIVE_INPUT_EVENTS_DESCRIPTION } from "../prompts/prompts.js";
 import { resolveTabTarget } from "./helpers/browser-target.js";
 import { type DebuggerManager, getSharedDebuggerManager } from "./helpers/debugger-manager.js";

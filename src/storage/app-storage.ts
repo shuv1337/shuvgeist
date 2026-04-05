@@ -1,11 +1,8 @@
-import {
-	AppStorage as BaseAppStorage,
-	getAppStorage,
-	IndexedDBStorageBackend,
-	ProviderKeysStore,
-	SessionsStore,
-	SettingsStore,
-} from "@mariozechner/pi-web-ui";
+import { AppStorage as BaseAppStorage, getAppStorage } from "@mariozechner/pi-web-ui/storage/app-storage.js";
+import { IndexedDBStorageBackend } from "@mariozechner/pi-web-ui/storage/backends/indexeddb-storage-backend.js";
+import { ProviderKeysStore } from "@mariozechner/pi-web-ui/storage/stores/provider-keys-store.js";
+import { SessionsStore } from "@mariozechner/pi-web-ui/storage/stores/sessions-store.js";
+import { SettingsStore } from "@mariozechner/pi-web-ui/storage/stores/settings-store.js";
 import { CostStore } from "./stores/cost-store.js";
 import { CustomProvidersStore } from "./stores/custom-providers-store.js";
 import { ShuvgeistSessionsStore } from "./stores/sessions-store.js";

@@ -2,8 +2,9 @@ import type { Skill } from "../../../src/storage/stores/skills-store.js";
 
 const shownSkills = new Map<string, string>();
 
-vi.mock("../../../src/sidepanel.js", () => ({
+vi.mock("../../../src/utils/shown-skills.js", () => ({
 	getShownSkills: () => shownSkills,
+	clearShownSkills: () => shownSkills.clear(),
 }));
 
 const { formatSkills } = await import("../../../src/utils/format-skills.js");

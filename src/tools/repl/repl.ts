@@ -1,24 +1,7 @@
-import { i18n } from "@mariozechner/mini-lit";
 import type { AgentTool } from "@mariozechner/pi-agent-core";
-import type { ToolResultMessage } from "@mariozechner/pi-ai";
-import {
-	type Attachment,
-	registerToolRenderer,
-	renderCollapsibleHeader,
-	renderHeader,
-	type SandboxFile,
-	SandboxIframe,
-	type SandboxResult,
-	type SandboxRuntimeProvider,
-	type ToolRenderer,
-	type ToolRenderResult,
-} from "@mariozechner/pi-web-ui";
+import type { SandboxFile, SandboxResult } from "@mariozechner/pi-web-ui/components/SandboxedIframe.js";
+import type { SandboxRuntimeProvider } from "@mariozechner/pi-web-ui/sandbox/SandboxRuntimeProvider.js";
 import { type Static, Type } from "@sinclair/typebox";
-import { html } from "lit";
-import { createRef, ref } from "lit/directives/ref.js";
-import { Code } from "lucide";
-import { REPL_TOOL_DESCRIPTION } from "../../prompts/prompts.js";
-import "../../utils/i18n-extension.js";
 import { injectOverlayForActiveTab, removeOverlayForActiveTab } from "./overlay-inject.js";
 
 // Execute JavaScript code with attachments using SandboxedIframe
@@ -70,6 +53,9 @@ export async function executeJavaScript(
 			// Continue execution even if overlay fails
 		}
 	}
+
+	// Dynamically import SandboxIframe to avoid DOM deps at module load time
+	const { SandboxIframe } = await import("@mariozechner/pi-web-ui/components/SandboxedIframe.js");
 
 	// Create a SandboxedIframe instance for execution
 	const sandbox = new SandboxIframe();
@@ -167,7 +153,7 @@ const replSchema = Type.Object({
 
 export type ReplParams = Static<typeof replSchema>;
 
-interface ReplResult {
+export interface ReplResult {
 	output?: string;
 	files?: Array<{
 		fileName: string;
@@ -198,8 +184,8 @@ export function createReplTool(): AgentTool<typeof replSchema, ReplToolResult> &
 					.runtimeProvidersFactory?.()
 					.map((d) => d.getDescription())
 					.filter((d) => d.trim().length > 0) || [];
-			// Inject into template
-			return REPL_TOOL_DESCRIPTION(runtimeProviderDescriptions);
+			// Inject into template - will be dynamically imported in the actual REPL tool description
+			return `JavaScript REPL with browser automation capabilities.\n\n${runtimeProviderDescriptions.join("\n\n")}`;
 		},
 		parameters: replSchema,
 		execute: async function (_toolCallId: string, args: Static<typeof replSchema>, signal?: AbortSignal) {
@@ -259,94 +245,3 @@ export function createReplTool(): AgentTool<typeof replSchema, ReplToolResult> &
 
 // Export a default instance for backward compatibility
 export const javascriptReplTool = createReplTool();
-
-export const javascriptReplRenderer: ToolRenderer<ReplParams, ReplResult> = {
-	render(
-		params: ReplParams | undefined,
-		result: ToolResultMessage<ReplResult> | undefined,
-		isStreaming?: boolean,
-	): ToolRenderResult {
-		// Determine status
-		const state = result ? (result.isError ? "error" : "complete") : isStreaming ? "inprogress" : "complete";
-
-		// Create refs for collapsible code section
-		const codeContentRef = createRef<HTMLDivElement>();
-		const codeChevronRef = createRef<HTMLSpanElement>();
-
-		// With result: show params + result
-		if (result && params) {
-			const output = result.content.find((c) => c.type === "text")?.text || "";
-			const files = result.details?.files || [];
-
-			const attachments: Attachment[] = files.map((f, i) => {
-				// Decode base64 content for text files to show in overlay
-				let extractedText: string | undefined;
-				const isTextBased =
-					f.mimeType?.startsWith("text/") ||
-					f.mimeType === "application/json" ||
-					f.mimeType === "application/javascript" ||
-					f.mimeType?.includes("xml");
-
-				if (isTextBased && f.contentBase64) {
-					try {
-						extractedText = atob(f.contentBase64);
-					} catch (e) {
-						console.warn("Failed to decode base64 content for", f.fileName);
-					}
-				}
-
-				return {
-					id: `repl-${Date.now()}-${i}`,
-					type: f.mimeType?.startsWith("image/") ? "image" : "document",
-					fileName: f.fileName || `file-${i}`,
-					mimeType: f.mimeType || "application/octet-stream",
-					size: f.size ?? 0,
-					content: f.contentBase64,
-					preview: f.mimeType?.startsWith("image/") ? f.contentBase64 : undefined,
-					extractedText,
-				};
-			});
-
-			return {
-				content: html`
-					<div>
-						${renderCollapsibleHeader(state, Code, params.title ? params.title : "Executing JavaScript", codeContentRef, codeChevronRef, false)}
-						<div ${ref(codeContentRef)} class="max-h-0 overflow-hidden transition-all duration-300 space-y-3">
-							<code-block .code=${params.code || ""} language="javascript"></code-block>
-							${output ? html`<console-block .content=${output} .variant=${result.isError ? "error" : "default"}></console-block>` : ""}
-						</div>
-						${
-							attachments.length
-								? html`<div class="flex flex-wrap gap-2 mt-3">
-									${attachments.map((att) => html`<attachment-tile .attachment=${att}></attachment-tile>`)}
-							  </div>`
-								: ""
-						}
-					</div>
-				`,
-				isCustom: false,
-			};
-		}
-
-		// Just params (streaming or waiting for result)
-		if (params) {
-			return {
-				content: html`
-					<div>
-						${renderCollapsibleHeader(state, Code, params.title ? params.title : "Executing JavaScript", codeContentRef, codeChevronRef, false)}
-						<div ${ref(codeContentRef)} class="max-h-0 overflow-hidden transition-all duration-300">
-							${params.code ? html`<code-block .code=${params.code} language="javascript"></code-block>` : ""}
-						</div>
-					</div>
-				`,
-				isCustom: false,
-			};
-		}
-
-		// No params or result yet
-		return { content: renderHeader(state, Code, i18n("Preparing JavaScript...")), isCustom: false };
-	},
-};
-
-// Auto-register the renderer (using "browser_repl" name)
-registerToolRenderer("repl", javascriptReplRenderer);

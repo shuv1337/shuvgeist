@@ -46,9 +46,9 @@ test.describe("bridge ui smoke", () => {
 		const { context, extensionId } = await launchExtensionContext();
 		const page = await openExtensionPage(context, extensionId, "sidepanel.html?new=true");
 		await openBridgeSettings(page);
-		await expect(page.getByText("CLI Bridge")).toBeVisible();
-		await expect(page.getByText("Enable bridge")).toBeVisible();
-		await expect(page.getByText("Start the bridge server with:")).toBeVisible();
+		await expect(page.getByRole("heading", { name: "CLI Bridge" })).toBeVisible();
+		await expect(page.getByRole("checkbox", { name: "Enable bridge" })).toBeVisible();
+		await expect(page.locator("bridge-tab").getByText("shuvgeist serve")).toBeVisible();
 
 		await context.close();
 		await bridge.stop();

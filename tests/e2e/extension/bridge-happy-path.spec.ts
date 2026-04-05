@@ -47,7 +47,7 @@ test("bridge happy path responds to CLI status", async () => {
 	const page = await openExtensionPage(context, extensionId, "sidepanel.html?new=true");
 	await openBridgeSettings(page);
 
-	await page.locator('input[type="checkbox"]').check();
+	await page.getByRole("checkbox", { name: "Enable bridge" }).check();
 	const urlInput = page.locator('input[type="text"]').last();
 	await urlInput.fill(`ws://127.0.0.1:${port}/ws`);
 	await urlInput.blur();

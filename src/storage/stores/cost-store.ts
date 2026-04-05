@@ -1,4 +1,4 @@
-import type { StorageBackend, StoreConfig } from "@mariozechner/pi-web-ui";
+import type { StorageBackend, StoreConfig } from "@mariozechner/pi-web-ui/storage/types.js";
 
 export type DailyCostAggregate = {
 	date: string; // "2025-10-24" (YYYY-MM-DD)

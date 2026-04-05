@@ -6,6 +6,7 @@
  * the bridge and agent tooling backed by the same underlying code.
  */
 
+import { AskUserWhichElementTool } from "../tools/ask-user-which-element.js";
 import { DebuggerTool } from "../tools/debugger.js";
 import { normalizeDeviceEmulationRequest } from "../tools/device-presets.js";
 import { ExtractImageTool } from "../tools/extract-image.js";
@@ -13,8 +14,6 @@ import { resolveTabTarget } from "../tools/helpers/browser-target.js";
 import { getSharedDebuggerManager } from "../tools/helpers/debugger-manager.js";
 import { buildFrameTree, listFrames } from "../tools/helpers/frame-resolver.js";
 import { RefMap, type RefResolutionCandidate } from "../tools/helpers/ref-map.js";
-import { AskUserWhichElementTool } from "../tools/index.js";
-import { NativeInputEventsRuntimeProvider } from "../tools/NativeInputEventsRuntimeProvider.js";
 import { NavigateTool } from "../tools/navigate.js";
 import { NetworkCaptureEngine } from "../tools/network-capture.js";
 import {
@@ -27,8 +26,6 @@ import {
 	PageSnapshotTool,
 } from "../tools/page-snapshot.js";
 import { PerformanceTools } from "../tools/performance-tools.js";
-import { createReplTool } from "../tools/repl/repl.js";
-import { BrowserJsRuntimeProvider, NavigateRuntimeProvider } from "../tools/repl/runtime-providers.js";
 import { WorkflowEngine } from "../tools/workflow-engine.js";
 import type {
 	BridgeMethod,
@@ -104,7 +101,6 @@ export interface BrowserCommandExecutorOptions {
 export class BrowserCommandExecutor {
 	private navigateTool?: NavigateTool;
 	private selectElementTool?: AskUserWhichElementTool;
-	private replTool?: ReturnType<typeof createReplTool>;
 	private extractImageTool?: ExtractImageTool;
 	private debuggerTool?: DebuggerTool;
 	private pageSnapshotTool?: PageSnapshotTool;
@@ -238,19 +234,12 @@ export class BrowserCommandExecutor {
 	}
 
 	async repl(params: ReplParams, signal?: AbortSignal): Promise<BridgeReplResult> {
-		// If a REPL router is configured (running in service worker), delegate to it
-		if (this.replRouter) {
-			return this.replRouter.execute(params, signal);
+		if (!this.replRouter) {
+			const error = new Error("REPL router is not available");
+			(error as Error & { code?: number }).code = ErrorCodes.CAPABILITY_DISABLED;
+			throw error;
 		}
-
-		// Direct execution (running in sidepanel or extension page with DOM access)
-		const result = await this.getReplTool().execute("bridge", { title: params.title, code: params.code }, signal);
-		const textItem = result.content.find((item) => item.type === "text");
-		const output = (textItem && "text" in textItem ? textItem.text : "") || "";
-		return {
-			output,
-			files: result.details?.files || [],
-		};
+		return this.replRouter.execute(params, signal);
 	}
 
 	async screenshot(params: ScreenshotParams, signal?: AbortSignal): Promise<BridgeScreenshotResult> {
@@ -578,28 +567,6 @@ export class BrowserCommandExecutor {
 			this.selectElementTool = new AskUserWhichElementTool({ windowId: this.windowId });
 		}
 		return this.selectElementTool;
-	}
-
-	private getReplTool(): ReturnType<typeof createReplTool> {
-		if (!this.replTool) {
-			this.replTool = createReplTool();
-			this.replTool.overlayWindowId = this.windowId;
-			this.replTool.sandboxUrlProvider = () => chrome.runtime.getURL("sandbox.html");
-			this.replTool.runtimeProvidersFactory = () => {
-				const pageProviders = [
-					new NativeInputEventsRuntimeProvider({
-						windowId: this.windowId,
-						debuggerManager: this.debuggerManager,
-					}),
-				];
-				return [
-					...pageProviders,
-					new BrowserJsRuntimeProvider(pageProviders, this.windowId),
-					new NavigateRuntimeProvider(this.getNavigateTool()),
-				];
-			};
-		}
-		return this.replTool;
 	}
 
 	private getExtractImageTool(): ExtractImageTool {

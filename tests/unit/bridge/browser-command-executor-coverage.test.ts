@@ -1,6 +1,5 @@
 const navigateExecute = vi.fn();
 const selectExecute = vi.fn();
-const replExecute = vi.fn();
 const extractExecute = vi.fn();
 const debuggerExecute = vi.fn();
 
@@ -10,18 +9,10 @@ vi.mock("../../../src/tools/navigate.js", () => ({
 	},
 }));
 
-vi.mock("../../../src/tools/index.js", () => ({
+vi.mock("../../../src/tools/ask-user-which-element.js", () => ({
 	AskUserWhichElementTool: class {
 		execute = selectExecute;
 	},
-}));
-
-vi.mock("../../../src/tools/repl/repl.js", () => ({
-	createReplTool: () => ({
-		execute: replExecute,
-		sandboxUrlProvider: undefined,
-		runtimeProvidersFactory: undefined,
-	}),
 }));
 
 vi.mock("../../../src/tools/extract-image.js", () => ({
@@ -72,19 +63,22 @@ describe("BrowserCommandExecutor branch coverage", () => {
 	beforeEach(() => {
 		navigateExecute.mockReset();
 		selectExecute.mockReset();
-		replExecute.mockReset();
 		extractExecute.mockReset();
 		debuggerExecute.mockReset();
 		chrome.tabs.query.mockReset();
 	});
 
-	it("handles missing tab data, missing screenshot payloads, and unknown methods", async () => {
+	it("handles missing tab data, missing screenshot payloads, repl without router, and unknown methods", async () => {
 		chrome.tabs.query.mockResolvedValue([{}]);
 		const executor = new BrowserCommandExecutor({ windowId: 7, sensitiveAccessEnabled: false });
 		await expect(executor.status()).resolves.toMatchObject({ activeTab: { url: undefined, title: undefined, tabId: undefined } });
 
 		extractExecute.mockResolvedValue({ content: [], details: {} });
 		await expect(executor.screenshot({})).rejects.toThrow("Screenshot tool returned no image data");
+		await expect(executor.repl({ title: "No router", code: "1" })).rejects.toMatchObject({
+			code: -32008,
+			message: "REPL router is not available",
+		});
 		await expect(executor.dispatch("unknown_method" as never, {})).rejects.toThrow("Unknown method: unknown_method");
 	});
 });

@@ -1,5 +1,5 @@
-import { getShownSkills } from "../sidepanel.js";
 import type { Skill } from "../storage/stores/skills-store.js";
+import { getShownSkills } from "./shown-skills.js";
 
 export interface FormattedSkills {
 	newOrUpdated: Skill[];

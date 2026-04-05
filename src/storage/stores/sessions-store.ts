@@ -1,5 +1,6 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { type SessionData, SessionsStore } from "@mariozechner/pi-web-ui";
+import { SessionsStore } from "@mariozechner/pi-web-ui/storage/stores/sessions-store.js";
+import type { SessionData } from "@mariozechner/pi-web-ui/storage/types.js";
 
 /**
  * Extended SessionsStore that migrates old tool result messages from output to content format.

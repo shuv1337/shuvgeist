@@ -1,6 +1,5 @@
 const navigateExecute = vi.fn();
 const selectExecute = vi.fn();
-const replExecute = vi.fn();
 const extractExecute = vi.fn();
 const debuggerExecute = vi.fn();
 
@@ -10,18 +9,10 @@ vi.mock("../../../src/tools/navigate.js", () => ({
 	},
 }));
 
-vi.mock("../../../src/tools/index.js", () => ({
+vi.mock("../../../src/tools/ask-user-which-element.js", () => ({
 	AskUserWhichElementTool: class {
 		execute = selectExecute;
 	},
-}));
-
-vi.mock("../../../src/tools/repl/repl.js", () => ({
-	createReplTool: () => ({
-		execute: replExecute,
-		sandboxUrlProvider: undefined,
-		runtimeProvidersFactory: undefined,
-	}),
 }));
 
 vi.mock("../../../src/tools/extract-image.js", () => ({
@@ -72,7 +63,6 @@ describe("BrowserCommandExecutor", () => {
 	beforeEach(() => {
 		navigateExecute.mockReset();
 		selectExecute.mockReset();
-		replExecute.mockReset();
 		extractExecute.mockReset();
 		debuggerExecute.mockReset();
 		chrome.tabs.query.mockReset();
@@ -103,17 +93,23 @@ describe("BrowserCommandExecutor", () => {
 
 	it("dispatches navigate, repl, screenshot and select requests", async () => {
 		navigateExecute.mockResolvedValue({ details: { finalUrl: "https://example.com" } });
-		replExecute.mockResolvedValue({
-			content: [{ type: "text", text: "done" }],
-			details: { files: [{ fileName: "out.txt", mimeType: "text/plain", size: 3, contentBase64: "YWJj" }] },
-		});
 		extractExecute.mockResolvedValue({
 			content: [{ type: "image", data: "YWJj", mimeType: "image/webp" }],
 			details: {},
 		});
 		selectExecute.mockResolvedValue({ details: { selector: "#login" } });
+		const replRouter = {
+			execute: vi.fn().mockResolvedValue({
+				output: "done",
+				files: [{ fileName: "out.txt", mimeType: "text/plain", size: 3, contentBase64: "YWJj" }],
+			}),
+		};
 
-		const executor = new BrowserCommandExecutor({ windowId: 7, sensitiveAccessEnabled: true });
+		const executor = new BrowserCommandExecutor({
+			windowId: 7,
+			sensitiveAccessEnabled: true,
+			replRouter,
+		});
 		await expect(executor.dispatch("navigate", { url: "https://example.com" })).resolves.toEqual({
 			finalUrl: "https://example.com",
 		});
@@ -123,6 +119,7 @@ describe("BrowserCommandExecutor", () => {
 			output: "done",
 			files: [{ fileName: "out.txt", mimeType: "text/plain", size: 3, contentBase64: "YWJj" }],
 		});
+		expect(replRouter.execute).toHaveBeenCalledWith({ title: "CLI", code: "return 1" }, undefined);
 
 		await expect(executor.dispatch("screenshot", { maxWidth: 500 })).resolves.toEqual({
 			mimeType: "image/webp",
