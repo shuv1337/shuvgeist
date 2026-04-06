@@ -7,6 +7,17 @@ export interface BrowserTargetResolverOptions extends BrowserTarget {
 	windowId?: number;
 }
 
+/**
+ * Single source of truth for window-id validity in bridge/browser target
+ * resolution. A window id is only usable when it is a positive integer.
+ *
+ * Rejects: `undefined`, `0`, negative ids, `chrome.windows.WINDOW_ID_NONE`,
+ * and any non-integer/non-finite value.
+ */
+export function isUsableWindowId(windowId: number | undefined): windowId is number {
+	return typeof windowId === "number" && Number.isInteger(windowId) && windowId > 0;
+}
+
 export interface ResolvedTabTarget {
 	tabId: number;
 	tab: chrome.tabs.Tab;
@@ -48,7 +59,7 @@ export async function resolveTabTarget(options: BrowserTargetResolverOptions = {
 		};
 	}
 
-	const queryOptions = options.windowId
+	const queryOptions: chrome.tabs.QueryInfo = isUsableWindowId(options.windowId)
 		? { active: true, windowId: options.windowId }
 		: { active: true, currentWindow: true };
 	const [tab] = await chrome.tabs.query(queryOptions);

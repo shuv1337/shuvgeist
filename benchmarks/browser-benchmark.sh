@@ -111,6 +111,51 @@ status_has_sidepanel_only_caps() {
   shuvgeist status 2>/dev/null | grep -Eq 'session_history|session_inject|session_new|session_set_model|session_artifacts'
 }
 
+# Strict preflight: parses `shuvgeist status --json` and rejects runs where the
+# extension is not connected, has no usable window id, or reports a
+# `windowId <= 0`. Echoes one of:
+#   ok                       - extension connected with usable window id
+#   not-installed            - shuvgeist CLI is not on PATH
+#   status-failed:<details>  - status command failed or returned bad JSON
+#   not-connected            - status reports extension is not connected
+#   no-window-id             - extension is connected but no positive window id
+# Returns 0 only when status is `ok`.
+shuvgeist_preflight_status() {
+  if ! command -v shuvgeist >/dev/null 2>&1; then
+    echo "not-installed"
+    return 1
+  fi
+  local raw
+  if ! raw=$(shuvgeist status --json 2>/dev/null); then
+    echo "status-failed:command-error"
+    return 1
+  fi
+  local parsed
+  if ! parsed=$(SG_STATUS_JSON="$raw" python3 - <<'PY' 2>/dev/null
+import json, os, sys
+try:
+    data = json.loads(os.environ.get("SG_STATUS_JSON", ""))
+except Exception:
+    print("status-failed:invalid-json")
+    sys.exit(1)
+ext = data.get("extension") or {}
+if not ext.get("connected"):
+    print("not-connected")
+    sys.exit(1)
+wid = ext.get("windowId")
+if not isinstance(wid, int) or wid <= 0:
+    print("no-window-id")
+    sys.exit(1)
+print("ok")
+PY
+  ); then
+    echo "$parsed"
+    return 1
+  fi
+  echo "$parsed"
+  [[ "$parsed" == "ok" ]]
+}
+
 validate_sg_closed_sidepanel() {
   local status_text
   status_text=$(shuvgeist status 2>/dev/null || true)
@@ -149,12 +194,13 @@ echo ""
 SG_OK=0; AB_OK=0; DB_OK=0
 
 echo -ne "  Checking shuvgeist ...     "
-if shuvgeist status 2>&1 | grep -q "Extension connected: yes"; then
+SG_PREFLIGHT=$(shuvgeist_preflight_status 2>/dev/null || true)
+if [[ "$SG_PREFLIGHT" == "ok" ]]; then
   SG_VER=$(shuvgeist --version 2>/dev/null || echo '?')
   echo -e "${GREEN}OK${NC} (v${SG_VER})"
   SG_OK=1
 else
-  echo -e "${RED}NOT CONNECTED${NC}"
+  echo -e "${RED}INVALID TARGET${NC} ${DIM}(${SG_PREFLIGHT:-unknown})${NC}"
 fi
 
 echo -ne "  Checking agent-browser ... "
@@ -235,14 +281,19 @@ sg_cmd() {
   case "$1" in
     navigate)         echo 'shuvgeist navigate "'"$TEST_URL"'"' ;;
     navigate_complex) echo 'shuvgeist navigate "'"$COMPLEX_URL"'"' ;;
-    screenshot)       echo 'shuvgeist screenshot --out "'"$RESULTS_DIR"'/sg_shot.webp"' ;;
-    snapshot)         echo 'shuvgeist snapshot --json' ;;
+    # Validate artifact: screenshot file must exist and be non-empty.
+    screenshot)       echo 'shuvgeist screenshot --out "'"$RESULTS_DIR"'/sg_shot.webp" && [[ -s "'"$RESULTS_DIR"'/sg_shot.webp" ]]' ;;
+    # Validate artifact: snapshot must be parseable JSON.
+    snapshot)         echo 'shuvgeist snapshot --json | python3 -c "import json,sys; json.load(sys.stdin)"' ;;
     eval_simple)      echo 'shuvgeist eval "document.title"' ;;
     eval_extract)     echo "shuvgeist eval 'JSON.stringify(Array.from(document.querySelectorAll(\"a\")).map(a=>a.href))'" ;;
     tabs_list)        echo 'shuvgeist tabs --json' ;;
     form_fill)        echo "shuvgeist navigate '$FORM_URL' && shuvgeist eval '(() => { document.querySelector(\"#name\").value = \"Ada\"; document.querySelector(\"#email\").value = \"ada@example.com\"; document.querySelector(\"#city\").value = \"London\"; return [document.querySelector(\"#name\").value, document.querySelector(\"#email\").value, document.querySelector(\"#city\").value].join(\"|\"); })()'" ;;
     repeated_extract) echo "shuvgeist navigate '$COMPLEX_URL' && shuvgeist eval 'document.querySelectorAll(\"a\")[0]?.textContent' && shuvgeist eval 'document.querySelectorAll(\"a\")[1]?.textContent' && shuvgeist eval 'document.querySelectorAll(\"a\")[2]?.textContent' && shuvgeist eval 'document.querySelectorAll(\"a\")[3]?.textContent' && shuvgeist eval 'document.querySelectorAll(\"a\")[4]?.textContent'" ;;
     batch_extract)    echo "shuvgeist navigate '$COMPLEX_URL' && shuvgeist eval 'JSON.stringify(Array.from(document.querySelectorAll(\"a\")).slice(0, 5).map((a) => a.textContent))'" ;;
+    # error_path is *expected* to fail (the missing selector throws). Keep its
+    # command unchanged so the benchmark still measures the failure path; the
+    # strict-mode runner ignores `error_path` for fail-closed accounting.
     error_path)       echo "shuvgeist eval '(() => document.querySelector(\"$MISSING_SELECTOR\").value)()'" ;;
   esac
 }
@@ -283,8 +334,12 @@ db_cmd() {
 # Run benchmark sets
 ########################################################################
 
+# Tracks fail-closed benchmark validity for shuvgeist. Set to 0 the first time
+# a benchmark-critical command fails (i.e. anything other than `error_path`).
+SG_BENCHMARK_VALID=1
+
 run_tool() {
-  local short="$1" name="$2" ok="$3" factory="$4"
+  local short="$1" name="$2" ok="$3" factory="$4" strict="${5:-0}"
   [[ "$ok" -eq 0 ]] && return
 
   echo -e "  ${BOLD}${name}${NC}"
@@ -293,10 +348,23 @@ run_tool() {
     printf "    %-30s " "${LABELS[$test]}"
     local cmd
     cmd=$($factory "$test")
+    local iter_failed=0
     for ((i = 1; i <= total; i++)); do
-      time_cmd "${short}:${test}" "$cmd"
+      if [[ "$strict" -eq 1 && "$test" != "error_path" ]]; then
+        if ! time_cmd_success_required "${short}:${test}" "$cmd"; then
+          iter_failed=1
+          SG_BENCHMARK_VALID=0
+          break
+        fi
+      else
+        time_cmd "${short}:${test}" "$cmd"
+      fi
     done
-    print_stat_line "$(calc_stats "$RESULTS_DIR/${short}:${test}.raw")"
+    if [[ "$iter_failed" -eq 1 ]]; then
+      echo -e "${RED}FAILED${NC} ${DIM}(strict mode aborted on first failure)${NC}"
+    else
+      print_stat_line "$(calc_stats "$RESULTS_DIR/${short}:${test}.raw")"
+    fi
   done
   echo ""
 }
@@ -307,9 +375,12 @@ run_tool() {
 
 echo -e "${BOLD}Running warm-path benchmarks ...${NC}"
 echo ""
-run_tool "sg" "shuvgeist" "$SG_OK" "sg_cmd"
-run_tool "ab" "agent-browser" "$AB_OK" "ab_cmd"
-run_tool "db" "dev-browser" "$DB_OK" "db_cmd"
+# shuvgeist runs in strict mode: any benchmark-critical failure aborts that
+# test and marks the whole shuvgeist run invalid so we never silently turn a
+# regression into an apparent speedup.
+run_tool "sg" "shuvgeist" "$SG_OK" "sg_cmd" 1
+run_tool "ab" "agent-browser" "$AB_OK" "ab_cmd" 0
+run_tool "db" "dev-browser" "$DB_OK" "db_cmd" 0
 
 ########################################################################
 # Sidepanel-closed validation (shuvgeist)
@@ -479,5 +550,12 @@ json_file="$RESULTS_DIR/benchmark.json"
 echo -e "  Raw data: ${CYAN}${json_file}${NC}"
 echo -e "  Status check: ${CYAN}$(validate_sg_closed_sidepanel 2>/dev/null || echo unavailable)${NC}"
 echo ""
+
+if [[ $SG_OK -eq 1 && $SG_BENCHMARK_VALID -eq 0 ]]; then
+  echo -e "${RED}${BOLD}Benchmark INVALID${NC} ${DIM}(shuvgeist had a benchmark-critical failure; results must not be compared)${NC}"
+  echo ""
+  exit 2
+fi
+
 echo -e "${BOLD}Benchmark complete.${NC}"
 echo ""

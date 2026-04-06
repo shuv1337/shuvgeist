@@ -1,5 +1,6 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import { type Static, Type } from "@sinclair/typebox";
+import { isUsableWindowId } from "./helpers/browser-target.js";
 import type { RefLocatorBundle, SemanticLocatorCandidate } from "./helpers/ref-map.js";
 import { rankLocatorCandidates } from "./helpers/ref-map.js";
 
@@ -425,7 +426,9 @@ function buildSnapshotScript(config: { frameId: number; maxEntries: number; incl
 
 async function resolveSnapshotTabId(tabId: number | undefined, windowId: number | undefined): Promise<number> {
 	if (typeof tabId === "number") return tabId;
-	const query = typeof windowId === "number" ? { active: true, windowId } : { active: true, currentWindow: true };
+	const query: chrome.tabs.QueryInfo = isUsableWindowId(windowId)
+		? { active: true, windowId }
+		: { active: true, currentWindow: true };
 	const [activeTab] = await chrome.tabs.query(query);
 	if (!activeTab?.id) throw new Error("No active tab found for page snapshot");
 	return activeTab.id;

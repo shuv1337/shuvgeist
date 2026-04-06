@@ -25,6 +25,7 @@
 - BridgeClient was creating its own BrowserCommandExecutor without replRouter or sessionBridge, causing REPL and session commands to fail from the background service worker. Now passes both through from connect options.
 - Removed orphaned commandExecutor variable in background.ts that was never used by the bridge client.
 - `shuvgeist navigate` and tab switch commands no longer fail in background bridge mode when AppStorage is unavailable; skills lookup now degrades safely instead of returning exit code 1 after a successful navigation.
+- Bridge target resolution: the background service worker no longer registers with the bridge using `windowId=0`, which previously caused screenshot/snapshot to fail fast while other commands silently fell back to current-window semantics. A shared `isUsableWindowId()` helper is now the single source of truth for window-id validity, the executor is rebuilt on focus changes, and bridge connection is deferred until a usable window id is observed (fixes #1).
 
 ### Changed
 
@@ -33,6 +34,8 @@
 - BrowserCommandExecutor supports `ReplRouter` for delegated REPL execution and `ScreenshotRouter` for delegated screenshot capture
 - BridgeTab settings dialog reads state from chrome.storage.session instead of module-level variables
 - Tool renderers are split into dedicated files, reducing runtime coupling in core tool modules
+- `shuvgeist status` no longer presents `Window ID: 0` as a healthy connected target; non-positive ids are now displayed as `unavailable` (defense-in-depth on top of background-side gating)
+- Browser benchmark harness now preflights the extension via `shuvgeist status --json` and runs all shuvgeist warm-path tests in strict mode (`time_cmd_success_required`), aborts on the first benchmark-critical failure, validates screenshot/snapshot artifacts, and exits non-zero when the run is invalid
 
 ## [1.1.0] - 2026-03-26
 

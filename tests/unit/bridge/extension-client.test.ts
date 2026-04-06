@@ -207,6 +207,98 @@ describe("BridgeClient", () => {
 		expect(onStateChange).toHaveBeenCalledWith("disabled", undefined);
 	});
 
+	it("falls back to currentWindow query when registered windowId is 0", async () => {
+		chrome.tabs.query.mockResolvedValue([{ id: 21, url: "https://fallback.test", title: "Fallback" }]);
+		const client = new BridgeClient();
+		client.connect({
+			url: "ws://127.0.0.1:19285/ws",
+			token: "secret",
+			windowId: 0,
+			sensitiveAccessEnabled: false,
+			executor: mockExecutor,
+		});
+		const socket = FakeWebSocket.instances.at(-1)!;
+		socket.emitOpen();
+		socket.emitMessage({ type: "register_result", ok: true });
+		await Promise.resolve();
+		await Promise.resolve();
+
+		// Must NOT have queried with `windowId: 0` directly. Must use the
+		// `currentWindow: true` fallback so the snapshot still produces a tab.
+		expect(chrome.tabs.query).toHaveBeenCalledWith({ active: true, currentWindow: true });
+		expect(chrome.tabs.query).not.toHaveBeenCalledWith(expect.objectContaining({ windowId: 0 }));
+
+		const lastSent = JSON.parse(socket.sent.at(-1)!);
+		expect(lastSent).toEqual({
+			type: "event",
+			event: "active_tab_changed",
+			data: {
+				url: "https://fallback.test",
+				title: "Fallback",
+				tabId: 21,
+			},
+		});
+	});
+
+	it("reconnects when windowId transitions from unusable (0) to a valid id", async () => {
+		chrome.tabs.query.mockResolvedValue([{ id: 30, url: "https://x.test", title: "X" }]);
+		const client = new BridgeClient();
+		client.connect({
+			url: "ws://127.0.0.1:19285/ws",
+			token: "secret",
+			windowId: 0,
+			sensitiveAccessEnabled: false,
+			executor: mockExecutor,
+		});
+		const initialCount = FakeWebSocket.instances.length;
+		const initialSocket = FakeWebSocket.instances.at(-1)!;
+		initialSocket.emitOpen();
+		initialSocket.emitMessage({ type: "register_result", ok: true });
+
+		// Reconnect with a usable window id. areOptionsEquivalent must report
+		// non-equivalent so a new socket is created instead of being skipped.
+		client.connect({
+			url: "ws://127.0.0.1:19285/ws",
+			token: "secret",
+			windowId: 5,
+			sensitiveAccessEnabled: false,
+			executor: mockExecutor,
+		});
+		expect(FakeWebSocket.instances.length).toBeGreaterThan(initialCount);
+		const newSocket = FakeWebSocket.instances.at(-1)!;
+		expect(newSocket).not.toBe(initialSocket);
+		newSocket.emitOpen();
+		expect(JSON.parse(newSocket.sent[0])).toMatchObject({
+			type: "register",
+			windowId: 5,
+		});
+	});
+
+	it("reuses existing socket when both connect calls share the same usable windowId", async () => {
+		chrome.tabs.query.mockResolvedValue([{ id: 40, url: "https://y.test", title: "Y" }]);
+		const client = new BridgeClient();
+		client.connect({
+			url: "ws://127.0.0.1:19285/ws",
+			token: "secret",
+			windowId: 9,
+			sensitiveAccessEnabled: false,
+			executor: mockExecutor,
+		});
+		const socket = FakeWebSocket.instances.at(-1)!;
+		socket.emitOpen();
+		socket.emitMessage({ type: "register_result", ok: true });
+		const countBefore = FakeWebSocket.instances.length;
+
+		client.connect({
+			url: "ws://127.0.0.1:19285/ws",
+			token: "secret",
+			windowId: 9,
+			sensitiveAccessEnabled: false,
+			executor: mockExecutor,
+		});
+		expect(FakeWebSocket.instances.length).toBe(countBefore);
+	});
+
 	it("sends manual events only when connected", () => {
 		const client = new BridgeClient();
 		client.connect({

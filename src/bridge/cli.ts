@@ -214,7 +214,16 @@ async function fetchBridgeStatus(flags: { url?: string; host?: string; port?: st
 			console.log(`Bridge: ${statusUrl}`);
 			console.log(`Extension connected: ${status.extension.connected ? "yes" : "no"}`);
 			if (status.extension.connected) {
-				console.log(`Window ID: ${status.extension.windowId ?? "unknown"}`);
+				// Defensive: never present `0` (or any non-positive id) as a healthy
+				// target. The background service worker now gates registration on a
+				// usable window id, but if anything ever leaks through we want the
+				// status output to call it out instead of pretending it is normal.
+				const rawWindowId = status.extension.windowId;
+				const windowIdDisplay =
+					typeof rawWindowId === "number" && Number.isInteger(rawWindowId) && rawWindowId > 0
+						? String(rawWindowId)
+						: "unavailable";
+				console.log(`Window ID: ${windowIdDisplay}`);
 				console.log(`Session ID: ${status.extension.sessionId ?? "unknown"}`);
 				console.log(`Capabilities: ${(status.extension.capabilities || []).join(", ") || "none"}`);
 				console.log(`Extension address: ${status.extension.remoteAddress ?? "unknown"}`);

@@ -186,4 +186,55 @@ describe("PageSnapshotTool", () => {
 		});
 		expect(chrome.tabs.query).toHaveBeenCalledWith({ active: true, windowId: 7 });
 	});
+
+	it("falls back to currentWindow when windowId is 0 (unset target)", async () => {
+		chrome.tabs.query.mockResolvedValue([{ id: 91 }]);
+		chrome.userScripts.execute.mockResolvedValue([
+			{
+				result: {
+					success: true,
+					result: {
+						url: "https://example.com",
+						title: "Example",
+						generatedAt: 10,
+						totalCandidates: 0,
+						truncated: false,
+						entries: [],
+					},
+				},
+			},
+		]);
+
+		const tool = new PageSnapshotTool();
+		tool.windowId = 0;
+		await expect(tool.execute("tool-call", {}, undefined)).resolves.toMatchObject({
+			details: { tabId: 91, frameId: 0 },
+		});
+		expect(chrome.tabs.query).toHaveBeenCalledWith({ active: true, currentWindow: true });
+	});
+
+	it("falls back to currentWindow when windowId is undefined", async () => {
+		chrome.tabs.query.mockResolvedValue([{ id: 92 }]);
+		chrome.userScripts.execute.mockResolvedValue([
+			{
+				result: {
+					success: true,
+					result: {
+						url: "https://example.com",
+						title: "Example",
+						generatedAt: 10,
+						totalCandidates: 0,
+						truncated: false,
+						entries: [],
+					},
+				},
+			},
+		]);
+
+		const tool = new PageSnapshotTool();
+		await expect(tool.execute("tool-call", {}, undefined)).resolves.toMatchObject({
+			details: { tabId: 92, frameId: 0 },
+		});
+		expect(chrome.tabs.query).toHaveBeenCalledWith({ active: true, currentWindow: true });
+	});
 });

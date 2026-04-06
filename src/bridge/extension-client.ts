@@ -7,6 +7,7 @@
  * lightweight implementation without importing DOM-dependent tool code.
  */
 
+import { isUsableWindowId } from "../tools/helpers/browser-target.js";
 import type { CommandDispatcher } from "./command-dispatcher.js";
 import { bridgeLog, type LogFields } from "./logging.js";
 import type { AbortMessage, BridgeCapability, BridgeRequest, BridgeResponse, RegisterResult } from "./protocol.js";
@@ -320,6 +321,12 @@ export class BridgeClient {
 	}
 
 	private areOptionsEquivalent(a: BridgeClientOptions, b: BridgeClientOptions): boolean {
+		// Treat any window id transition where one side is unusable (undefined / 0 /
+		// negative) and the other is usable as non-equivalent so reconnection is
+		// triggered when a real window finally becomes available.
+		const aUsable = isUsableWindowId(a.windowId);
+		const bUsable = isUsableWindowId(b.windowId);
+		if (aUsable !== bUsable) return false;
 		return (
 			a.url === b.url &&
 			a.token === b.token &&
@@ -331,7 +338,11 @@ export class BridgeClient {
 
 	private async emitCurrentTabSnapshot(): Promise<void> {
 		if (!this.options) return;
-		const [tab] = await chrome.tabs.query({ active: true, windowId: this.options.windowId });
+		const windowId = this.options.windowId;
+		const query: chrome.tabs.QueryInfo = isUsableWindowId(windowId)
+			? { active: true, windowId }
+			: { active: true, currentWindow: true };
+		const [tab] = await chrome.tabs.query(query);
 		if (!tab?.id) return;
 		this.sendEvent("active_tab_changed", {
 			url: tab.url || "",

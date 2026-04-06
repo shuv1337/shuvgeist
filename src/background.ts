@@ -32,6 +32,7 @@ import {
 } from "./bridge/internal-messages.js";
 import { type BridgeCapability, ErrorCodes, getBridgeCapabilities } from "./bridge/protocol.js";
 import type { SessionBridgeAdapter } from "./bridge/session-bridge.js";
+import { isUsableWindowId, resolveTabTarget } from "./tools/helpers/browser-target.js";
 import { getSharedDebuggerManager } from "./tools/helpers/debugger-manager.js";
 import type { SidepanelToBackgroundMessage } from "./utils/port.js";
 
@@ -139,10 +140,17 @@ const screenshotRouter: ScreenshotRouter = {
 
 		// Use CDP Page.captureScreenshot via DebuggerManager.
 		// captureVisibleTab + canvas image processing hangs in service worker context.
+		// Resolve the active tab through the shared helper so screenshot follows the
+		// same window-id semantics as every other bridge command (no inline
+		// `windowId=0` query that can fall through to "no tab").
 		const windowId = await resolveWindowId();
-		const [tab] = await chrome.tabs.query({ active: true, windowId });
-		if (!tab?.id) throw new Error("No active tab for screenshot");
-		const tabId = tab.id;
+		let tabId: number;
+		try {
+			const resolved = await resolveTabTarget({ windowId });
+			tabId = resolved.tabId;
+		} catch {
+			throw new Error("No active tab for screenshot");
+		}
 		const owner = `screenshot:${tabId}:${Date.now()}`;
 
 		await sharedDebuggerManager.acquire(tabId, owner);
@@ -262,12 +270,22 @@ function getCurrentCapabilities(): BridgeCapability[] {
 
 const bridgeClient = new BridgeClient();
 let currentSettings: BridgeSettings | null = null;
-let currentWindowId = 0;
+/**
+ * Last cached usable window id (positive integer). `undefined` means we have
+ * never observed a usable focused window. Treated as "no target" everywhere.
+ */
+let currentWindowId: number | undefined;
+/**
+ * Window id the active BrowserCommandExecutor was constructed with. Used to
+ * detect when focus has moved to a different window so we can rebuild the
+ * executor (its `windowId` is `readonly` so updating in place is impossible).
+ */
+let lastConnectedWindowId: number | undefined;
 
-async function resolveWindowId(): Promise<number> {
+async function resolveWindowId(): Promise<number | undefined> {
 	try {
 		const win = await chrome.windows.getLastFocused({ windowTypes: ["normal"] });
-		if (win?.id) {
+		if (isUsableWindowId(win?.id)) {
 			currentWindowId = win.id;
 		}
 	} catch {
@@ -283,16 +301,28 @@ async function ensureBridgeConnection(): Promise<void> {
 	if (!settings?.enabled || !settings.url || !settings.token) {
 		bridgeClient.disconnect();
 		currentSettings = null;
+		lastConnectedWindowId = undefined;
 		return;
 	}
 
 	currentSettings = settings;
 
 	const windowId = await resolveWindowId();
-	const needsReconnect =
+
+	// Never register the bridge with an invalid target. Defer connection until a
+	// usable focused window becomes available (chrome.windows.onFocusChanged or
+	// the next keepalive alarm will retry).
+	if (!isUsableWindowId(windowId)) {
+		console.log("[Background] Deferring bridge connection until a usable window id is available");
+		return;
+	}
+
+	const stateRequiresReconnect =
 		bridgeClient.connectionState === "disabled" ||
 		bridgeClient.connectionState === "disconnected" ||
 		bridgeClient.connectionState === "error";
+	const windowIdChanged = lastConnectedWindowId !== windowId;
+	const needsReconnect = stateRequiresReconnect || windowIdChanged;
 
 	if (needsReconnect) {
 		const executor = new BrowserCommandExecutor({
@@ -315,6 +345,7 @@ async function ensureBridgeConnection(): Promise<void> {
 				chrome.storage.session.set({ [BRIDGE_STATE_KEY]: stateData });
 			},
 		});
+		lastConnectedWindowId = windowId;
 	}
 }
 
@@ -387,9 +418,19 @@ chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
 });
 
 chrome.windows.onFocusChanged.addListener(async (windowId) => {
-	if (windowId === chrome.windows.WINDOW_ID_NONE) return;
-	if (bridgeClient.connectionState !== "connected") return;
+	if (!isUsableWindowId(windowId)) return;
 	currentWindowId = windowId;
+
+	// If the bridge has not yet connected (deferred at startup because no
+	// usable window was available) OR the executor was built around a different
+	// window id, rebuild via ensureBridgeConnection() so the new window becomes
+	// the live target. BrowserCommandExecutor.windowId is readonly, so an
+	// in-place update is not possible.
+	if (lastConnectedWindowId !== windowId) {
+		await ensureBridgeConnection();
+	}
+
+	if (bridgeClient.connectionState !== "connected") return;
 	try {
 		const [tab] = await chrome.tabs.query({ active: true, windowId });
 		if (tab?.id) {
