@@ -1,13 +1,6 @@
 const executorDispatch = vi.fn();
-const executorStatus = vi.fn();
 
-vi.mock("../../../src/bridge/browser-command-executor.js", () => ({
-	BrowserCommandExecutor: class {
-		constructor(_options: unknown) {}
-		dispatch = executorDispatch;
-		status = executorStatus;
-	},
-}));
+const mockExecutor = { dispatch: executorDispatch };
 
 const bridgeLog = vi.fn();
 vi.mock("../../../src/bridge/logging.js", () => ({
@@ -71,7 +64,6 @@ describe("BridgeClient", () => {
 	beforeEach(() => {
 		FakeWebSocket.instances = [];
 		executorDispatch.mockReset();
-		executorStatus.mockReset();
 		bridgeLog.mockReset();
 		chrome.tabs.query.mockReset();
 		vi.useRealTimers();
@@ -87,6 +79,7 @@ describe("BridgeClient", () => {
 			windowId: 4,
 			sessionId: "session-4",
 			sensitiveAccessEnabled: false,
+			executor: mockExecutor,
 			onStateChange,
 		});
 
@@ -125,6 +118,7 @@ describe("BridgeClient", () => {
 			token: "secret",
 			windowId: 1,
 			sensitiveAccessEnabled: true,
+			executor: mockExecutor,
 		});
 		const socket = FakeWebSocket.instances.at(-1)!;
 		socket.emitOpen();
@@ -146,6 +140,7 @@ describe("BridgeClient", () => {
 			token: "secret",
 			windowId: 1,
 			sensitiveAccessEnabled: true,
+			executor: mockExecutor,
 		});
 		const socket = FakeWebSocket.instances.at(-1)!;
 		socket.emitOpen();
@@ -184,6 +179,7 @@ describe("BridgeClient", () => {
 			token: "secret",
 			windowId: 2,
 			sensitiveAccessEnabled: false,
+			executor: mockExecutor,
 			onStateChange,
 		});
 		const socket = FakeWebSocket.instances.at(-1)!;
@@ -197,6 +193,7 @@ describe("BridgeClient", () => {
 			token: "secret",
 			windowId: 2,
 			sensitiveAccessEnabled: false,
+			executor: mockExecutor,
 			onStateChange,
 		});
 		const retrySocket = FakeWebSocket.instances.at(-1)!;
@@ -217,6 +214,7 @@ describe("BridgeClient", () => {
 			token: "secret",
 			windowId: 5,
 			sensitiveAccessEnabled: false,
+			executor: mockExecutor,
 		});
 		const socket = FakeWebSocket.instances.at(-1)!;
 		client.sendEvent("active_tab_changed", { tabId: 1 });

@@ -1,16 +1,16 @@
 /**
  * Extension-side bridge client.
  *
- * Runs in the sidepanel and connects to the bridge server over WebSocket.
- * Receives commands from CLI clients (relayed by the server) and dispatches
- * them to the BrowserCommandExecutor.
+ * Connects to the bridge server over WebSocket and dispatches incoming
+ * commands to a caller-provided CommandDispatcher. The dispatcher is
+ * injected via options so the background service worker can provide a
+ * lightweight implementation without importing DOM-dependent tool code.
  */
 
-import { BrowserCommandExecutor, type ReplRouter, type ScreenshotRouter } from "./browser-command-executor.js";
+import type { CommandDispatcher } from "./command-dispatcher.js";
 import { bridgeLog, type LogFields } from "./logging.js";
 import type { AbortMessage, BridgeCapability, BridgeRequest, BridgeResponse, RegisterResult } from "./protocol.js";
 import { ErrorCodes, getBridgeCapabilities } from "./protocol.js";
-import type { SessionBridgeAdapter } from "./session-bridge.js";
 
 export type BridgeConnectionState = "disabled" | "disconnected" | "connecting" | "connected" | "error";
 
@@ -20,14 +20,11 @@ export interface BridgeClientOptions {
 	windowId: number;
 	sessionId?: string;
 	sensitiveAccessEnabled: boolean;
-	sessionBridge?: SessionBridgeAdapter;
+	/** Command dispatcher for handling bridge requests. */
+	executor: CommandDispatcher;
 	onStateChange?: (state: BridgeConnectionState, detail?: string) => void;
 	/** Optional callback to compute capabilities dynamically (e.g. based on sidepanel state). */
 	capabilitiesProvider?: () => BridgeCapability[];
-	/** Router for REPL execution when running in service worker context. */
-	replRouter?: ReplRouter;
-	/** Router for screenshot capture when running in service worker context. */
-	screenshotRouter?: ScreenshotRouter;
 }
 
 export class BridgeClient {
@@ -35,7 +32,7 @@ export class BridgeClient {
 	private state: BridgeConnectionState = "disabled";
 	private stateDetail: string | undefined;
 	private options: BridgeClientOptions | null = null;
-	private executor: BrowserCommandExecutor | null = null;
+	private executor: CommandDispatcher | null = null;
 	private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 	private reconnectAttempts = 0;
 	private readonly maxReconnectDelay = 30_000;
@@ -67,14 +64,7 @@ export class BridgeClient {
 		this.disconnect();
 		this.enabled = true;
 		this.options = options;
-		this.executor = new BrowserCommandExecutor({
-			windowId: options.windowId,
-			sessionId: options.sessionId,
-			sensitiveAccessEnabled: options.sensitiveAccessEnabled,
-			sessionBridge: options.sessionBridge,
-			replRouter: options.replRouter,
-			screenshotRouter: options.screenshotRouter,
-		});
+		this.executor = options.executor;
 		this.reconnectAttempts = 0;
 		this.doConnect();
 	}

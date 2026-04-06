@@ -43,7 +43,7 @@ const buildOptions = {
 		"process.env.TARGET_BROWSER": JSON.stringify(targetBrowser),
 		global: "globalThis",
 	},
-	inject: [join(packageRoot, "scripts/process-shim.js")],
+	inject: [join(packageRoot, "scripts/process-shim.js"), join(packageRoot, "scripts/dom-shim.js")],
 	// Force all mini-lit and lit imports to resolve to shuvgeist's node_modules
 	alias: {
 		process: join(packageRoot, "scripts/process-shim.js"),

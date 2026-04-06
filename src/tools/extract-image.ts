@@ -1,9 +1,6 @@
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
-import type { ImageContent, TextContent, ToolResultMessage } from "@mariozechner/pi-ai";
-import { registerToolRenderer, renderHeader, type ToolRenderer, type ToolRenderResult } from "@mariozechner/pi-web-ui";
+import type { ImageContent, TextContent } from "@mariozechner/pi-ai";
 import { type Static, Type } from "@sinclair/typebox";
-import { html } from "lit";
-import { Image as ImageIcon } from "lucide";
 import { resolveTabTarget } from "./helpers/browser-target.js";
 
 const EXTRACT_IMAGE_DESCRIPTION = `Extract images from the current page. Returns image data that you can see and analyze.
@@ -24,9 +21,9 @@ const extractImageSchema = Type.Object({
 	),
 });
 
-type ExtractImageParams = Static<typeof extractImageSchema>;
+export type ExtractImageParams = Static<typeof extractImageSchema>;
 
-interface ExtractImageDetails {
+export interface ExtractImageDetails {
 	mode: string;
 	selector?: string;
 }
@@ -200,45 +197,4 @@ export class ExtractImageTool implements AgentTool<typeof extractImageSchema, Ex
 
 		return { content, details };
 	}
-}
-
-// Renderer
-const extractImageRenderer: ToolRenderer<ExtractImageParams, ExtractImageDetails> = {
-	render(
-		params: ExtractImageParams | undefined,
-		result: ToolResultMessage<ExtractImageDetails> | undefined,
-	): ToolRenderResult {
-		const mode = params?.mode || "unknown";
-		const selector = params?.selector || "";
-		const label = mode === "screenshot" ? "Screenshot" : `Image: ${selector}`;
-		const state = result ? (result.isError ? "error" : "complete") : "inprogress";
-
-		const hasImage = result?.content?.some((c) => c.type === "image");
-
-		return {
-			content: html`
-				${renderHeader(state, ImageIcon, label)}
-				${
-					hasImage
-						? html`<div class="p-2">
-							${result?.content
-								?.filter((c) => c.type === "image")
-								.map(
-									(c) =>
-										html`<img
-											src="data:${(c as ImageContent).mimeType};base64,${(c as ImageContent).data}"
-											class="max-w-full rounded"
-										/>`,
-								)}
-						</div>`
-						: ""
-				}
-			`,
-			isCustom: false,
-		};
-	},
-};
-
-export function registerExtractImageRenderer() {
-	registerToolRenderer("extract_image", extractImageRenderer);
 }

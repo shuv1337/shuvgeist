@@ -1,14 +1,10 @@
-import { BashRenderer, CalculateRenderer, GetCurrentTimeRenderer, registerToolRenderer } from "@mariozechner/pi-web-ui";
-import "./skill.js";
-import "./ask-user-which-element.js"; // Import for side effects (registers renderer)
-
-// Register all built-in tool renderers
-registerToolRenderer("calculate", new CalculateRenderer());
-registerToolRenderer("get_current_time", new GetCurrentTimeRenderer());
-registerToolRenderer("bash", new BashRenderer());
-
+// Export tool classes and functions (no renderers - those are in separate files)
 export { AskUserWhichElementTool, askUserWhichElementTool } from "./ask-user-which-element.js";
-// Export shuvgeist-specific REPL tool instead of web-ui default
-export { createReplTool, javascriptReplTool } from "./repl/repl.js";
+export { DebuggerTool } from "./debugger.js";
+export { ExtractImageTool } from "./extract-image.js";
+export { NativeInputEventsRuntimeProvider } from "./NativeInputEventsRuntimeProvider.js";
+export { isToolNavigating, NavigateTool } from "./navigate.js";
+export { createReplTool, executeJavaScript, javascriptReplTool } from "./repl/repl.js";
+export { BrowserJsRuntimeProvider, NavigateRuntimeProvider } from "./repl/runtime-providers.js";
 export { requestUserScriptsPermission } from "./repl/userscripts-helpers.js";
-export { skillTool } from "./skill.js";
+export { initializeDefaultSkills, setSkillToolWindowId, skillTool } from "./skill.js";

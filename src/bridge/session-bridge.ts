@@ -1,5 +1,12 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { type Attachment, isUserMessageWithAttachments } from "@mariozechner/pi-web-ui";
+
+/** Check if a message is a user message with attachments (role-based type guard). */
+function isUserMessageWithAttachments(
+	msg: AgentMessage,
+): msg is AgentMessage & { role: "user-with-attachments"; attachments: Array<{ fileName: string; mimeType: string }> } {
+	return "role" in msg && msg.role === "user-with-attachments";
+}
+
 import type {
 	SessionArtifactsResult,
 	SessionChangedEventData,
@@ -142,7 +149,9 @@ function summarizeToolCalls(content: unknown): SessionWireMessage["toolCalls"] {
 	return toolCalls.length > 0 ? toolCalls : undefined;
 }
 
-function summarizeAttachments(attachments: Attachment[] | undefined): SessionWireMessage["attachments"] {
+function summarizeAttachments(
+	attachments: Array<{ type?: string; mimeType: string; fileName: string }> | undefined,
+): SessionWireMessage["attachments"] {
 	if (!attachments?.length) return undefined;
 	return attachments.map((attachment) => ({
 		kind: attachment.type === "image" ? "image" : "file",
