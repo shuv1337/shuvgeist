@@ -143,6 +143,50 @@ const sessionBridgeListeners = new Set<(event: SessionBridgeEventEnvelope) => vo
 // Cached auth type label for the current provider
 let authLabel = "";
 
+// Fireworks is an OpenAI-completions-compatible provider. pi-ai has no built-in
+// KnownProvider for Fireworks, so we register models at runtime. This mirrors
+// MINIMAX_EXTENSION_MODELS below.
+//
+// Fireworks recommends an `x-session-affinity` header so a single
+// conversation sticks to the same backend replica (keeps prefix caches warm).
+// In pi-cli this is generated per request via `!uuidgen`, but shuvgeist's
+// model registry only supports static headers. Generating one UUID per
+// browser session is a good middle ground: the whole chat stays on one
+// replica without leaking UUIDs across sessions.
+const FIREWORKS_SESSION_AFFINITY =
+	typeof crypto !== "undefined" && "randomUUID" in crypto
+		? crypto.randomUUID()
+		: Math.random().toString(36).slice(2) + Date.now().toString(36);
+
+const FIREWORKS_EXTENSION_MODELS: Model<"openai-completions">[] = [
+	{
+		id: "accounts/fireworks/routers/kimi-k2p5-turbo",
+		name: "Kimi K2.5 Turbo (Fireworks)",
+		api: "openai-completions",
+		provider: "fireworks",
+		baseUrl: "https://api.fireworks.ai/inference/v1",
+		reasoning: true,
+		input: ["text", "image"],
+		cost: {
+			input: 0.6,
+			output: 3,
+			cacheRead: 0.1,
+			cacheWrite: 0,
+		},
+		contextWindow: 262144,
+		maxTokens: 32768,
+		headers: {
+			"x-session-affinity": FIREWORKS_SESSION_AFFINITY,
+		},
+		compat: {
+			maxTokensField: "max_tokens",
+			supportsDeveloperRole: false,
+			supportsStore: false,
+			supportsReasoningEffort: true,
+		},
+	},
+];
+
 const MINIMAX_EXTENSION_MODELS: Model<"anthropic-messages">[] = [
 	{
 		id: "MiniMax-M2.7",
@@ -180,6 +224,7 @@ const MINIMAX_EXTENSION_MODELS: Model<"anthropic-messages">[] = [
 	},
 ];
 
+registerModels(FIREWORKS_EXTENSION_MODELS);
 registerModels(MINIMAX_EXTENSION_MODELS);
 
 function isProxxProviderName(providerName: string): boolean {
@@ -206,6 +251,7 @@ const DEFAULT_MODELS: Record<string, string> = {
 	anthropic: "claude-sonnet-4-6",
 	"azure-openai-responses": "gpt-5.2",
 	cerebras: "zai-glm-4.6",
+	fireworks: "accounts/fireworks/routers/kimi-k2p5-turbo",
 	"github-copilot": "gpt-4o",
 	google: "gemini-2.5-flash",
 	"google-antigravity": "gemini-3.1-pro-high",

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Fireworks as a first-class provider with Kimi K2.5 Turbo (`accounts/fireworks/routers/kimi-k2p5-turbo`, 262k context, 32k output, reasoning + text/image input). Registered at runtime via `registerModels`, mirroring the existing MiniMax pattern, so it shows up in Settings → Providers & Models → Cloud Providers once an API key is saved. Includes an `x-session-affinity` header generated once per browser session to keep a conversation pinned to one Fireworks replica for prefix-cache warmth, and sets `fireworks` as an entry in `DEFAULT_MODELS` so Kimi K2.5 Turbo is auto-selected when Fireworks is the only configured provider.
+
 ## [1.1.5] - 2026-04-17
 
 ### Fixed
