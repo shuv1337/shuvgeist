@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.1.4] - 2026-04-17
+
 ### Added
 
 - Loopback-only bridge `/bootstrap` endpoint with Host/origin/header hardening so the extension background worker can auto-discover the local bridge token without manual copy/paste.
