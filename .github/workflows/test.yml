@@ -59,7 +59,9 @@ jobs:
         run: cd ../mini-lit && npm install --ignore-scripts
 
       - name: Clone pi-mono
-        run: git clone --depth 1 https://github.com/shuv1337/pi-mono.git ../pi-mono
+        run: |
+          git config --local --unset-all http.https://github.com/.extraheader || true
+          git clone --depth 1 https://github.com/shuv1337/pi-mono.git ../pi-mono
 
       - name: Install pi-mono
         run: cd ../pi-mono && npm install && npm run build
@@ -96,7 +98,9 @@ jobs:
         run: cd ../mini-lit && npm install --ignore-scripts
 
       - name: Clone pi-mono
-        run: git clone --depth 1 https://github.com/shuv1337/pi-mono.git ../pi-mono
+        run: |
+          git config --local --unset-all http.https://github.com/.extraheader || true
+          git clone --depth 1 https://github.com/shuv1337/pi-mono.git ../pi-mono
 
       - name: Install pi-mono
         run: cd ../pi-mono && npm install && npm run build
@@ -170,7 +174,9 @@ jobs:
         run: cd ../mini-lit && npm install --ignore-scripts
 
       - name: Clone pi-mono
-        run: git clone --depth 1 https://github.com/shuv1337/pi-mono.git ../pi-mono
+        run: |
+          git config --local --unset-all http.https://github.com/.extraheader || true
+          git clone --depth 1 https://github.com/shuv1337/pi-mono.git ../pi-mono
 
       - name: Install pi-mono
         run: cd ../pi-mono && npm install && npm run build
