@@ -15,3 +15,4 @@ version.json
 .pi/suggester/
 PLAN-*.md
 .gitnexus
+.agents/

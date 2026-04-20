@@ -2,159 +2,231 @@
   <img src="media/hero.png" alt="Shuvgeist" width="400">
 </p>
 
-Shuvgeist is a browser automation extension with CLI bridge automation, WebP screenshot optimization, and additional model support.
+# Shuvgeist
 
-Shuvgeist is an AI assistant that lives in your browser sidebar. Built for collaboration, not autonomy theater. You guide, it executes. It can automate repetitive web tasks, extract data from any website, navigate across pages, fill out forms, compare products, compile research, and transform what it finds into documents, spreadsheets, or whatever you need.
+Shuvgeist is a Chrome/Edge sidepanel extension for browser-native AI assistance and browser automation. It gives an LLM a controlled toolset for navigating pages, running page-context JavaScript, extracting structured data, working with attachments and artifacts, and reusing domain-specific skills you teach it over time.
 
-Works on any website through a Chrome/Edge side panel, using the AI provider of your choice. Bring your own API key or log in with an existing subscription (Anthropic Claude, OpenAI/ChatGPT, GitHub Copilot, Google Gemini, MiniMax). Your data stays on your machine.
+This repo also ships:
 
-## Project Highlights
+- the `shuvgeist` CLI bridge for terminal-driven browser control
+- a self-hostable CORS proxy for browser-restricted provider flows
+- the static marketing/install site at `site/`
 
-See [CHANGELOG.md](CHANGELOG.md) for the full list. Key additions in this repo:
+Works on Chrome 141+ and equivalent Edge builds.
 
-- **CLI-to-extension bridge** — external CLI agents can control the browser via `shuvgeist` commands
-- **Cookie bridge access** — `shuvgeist cookies` can read current-site cookies, including HttpOnly, when debugger mode is enabled
-- **WebP screenshot pipeline** — 95% smaller images for token-efficient LLM workflows
-- **Bridge settings tab** — configure and monitor the bridge connection from the sidepanel
-- **Self-hosted CORS proxy** — Docker-ready proxy server in `proxy/`
-- **MiniMax M2.7 models** — additional provider support
-- **Local CORS via declarativeNetRequest** — merged upstream; no external proxy needed for OAuth
-- **Architecture docs** — [ARCHITECTURE.md](ARCHITECTURE.md) for codebase orientation
-
-## Download & Install
+## What ships today
 
 ### Extension
 
-1. Clone and build (see [Development](#development) below), or download a release
-2. Open `chrome://extensions/` or `edge://extensions/`
-3. Enable Developer mode
-4. Click Load unpacked → select `dist-chrome/`
-5. Click "Details" on the Shuvgeist extension and enable:
-   - **Allow user scripts**
-   - **Allow access to file URLs**
-6. Set site access to **On all sites**
+The extension lives in the browser sidepanel and persists its data locally in IndexedDB. Current user-facing capabilities include:
 
-Requires Chrome 141+ or Edge equivalent.
+- chat sessions with resumable history and renameable titles
+- file attachments and artifact generation
+- page navigation and tab management
+- REPL execution in an extension sandbox with page-context `browserjs()` access
+- domain skills that inject reusable site-specific helpers into page scripts
+- interactive element disambiguation when DOM targeting is unclear
+- image extraction and document extraction tools
+- optional debugger-backed tooling for stubborn sites that reject synthetic DOM events
+- daily cost tracking with provider/model breakdowns
+- settings tabs for subscriptions, providers/models, skills, bridge state, costs, and about/theme
 
-### CLI
+### Provider and model support
 
-The CLI is built alongside the extension and provides terminal access to browser automation.
+Shuvgeist supports two main auth/config paths:
+
+- Subscription login inside the extension:
+  - Anthropic (Claude Pro/Max)
+  - ChatGPT Plus/Pro via OpenAI Codex OAuth
+  - GitHub Copilot
+  - Google Gemini
+- API key and custom-provider setup through the Providers & Models UI
+
+The repo also includes:
+
+- built-in MiniMax extension model registrations
+- custom provider import/export
+- `provider-presets/proxx.json` for the local `proxx` gateway workflow
+
+### Skills
+
+Skills are stored locally and matched by domain glob. The extension ships with a default skill library and a full skill manager UI:
+
+- search/filter skills
+- edit descriptions, examples, and injected library code
+- import/export skill packs
+- auto-inject matching skill libraries into `browserjs()` execution
+
+An external coding-agent skill for driving the CLI bridge is included at `skills/shuvgeist/`.
+
+### CLI bridge
+
+The CLI bridge exposes the browser to terminal tools, scripts, and coding agents. The bridge server is a WebSocket relay between the CLI and the extension background worker.
+
+Current CLI surface:
+
+- browser lifecycle: `launch`, `close`, `status`
+- navigation: `navigate`, `tabs`, `switch`
+- page execution: `repl`, `eval`, `screenshot`, `cookies`, `select`
+- deterministic workflows: `workflow run`, `workflow validate`
+- semantic page inspection: `snapshot`, `locate`, `ref`, `frame`
+- debugger-backed diagnostics: `network`, `device`, `perf`
+- session control: `session`, `inject`, `new-session`, `set-model`, `artifacts`
+
+Run `shuvgeist --help` for the full command reference.
+
+### Supporting subprojects
+
+- `proxy/`: minimal self-hosted CORS proxy with host allowlisting and filtered headers
+- `site/`: static landing page and install guide
+- `systemd/shuvgeist-bridge.service`: user service for keeping the local bridge running
+
+## Architecture
+
+High-level flow:
+
+`Chrome/Edge sidepanel UI -> Agent/tool runtime -> Background service worker -> Active tab(s)`
+
+CLI flow:
+
+`shuvgeist CLI -> Bridge server -> Extension background worker -> tab/session tools`
+
+Important entry points:
+
+- `src/sidepanel.ts`: main UI, agent wiring, tool registration, session handling
+- `src/background.ts`: bridge ownership, offscreen execution fallback, session routing
+- `src/bridge/`: CLI, protocol, server, session bridge, workflow support
+- `src/tools/`: navigation, REPL, skills, snapshots, network capture, perf tools, debugger helpers
+- `src/dialogs/`: settings tabs and first-run dialogs
+- `src/storage/`: IndexedDB-backed sessions, skills, providers, and cost tracking
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for a deeper code-oriented walkthrough.
+
+## Install
+
+### Install from a release
+
+1. Download the latest release from [GitHub Releases](https://github.com/shuv1337/shuvgeist/releases/latest).
+2. Unzip it somewhere stable.
+3. Open `chrome://extensions/` or `edge://extensions/`.
+4. Enable Developer mode.
+5. Click `Load unpacked` and select the extension directory.
+6. In the extension details, enable:
+   - `Allow user scripts`
+   - `Allow access to file URLs`
+7. Set site access to `On all sites`.
+
+Open the sidepanel with:
+
+- macOS: `Command+Shift+S`
+- Windows/Linux: `Ctrl+Shift+S`
+
+On first launch, connect at least one provider.
+
+### Build from source
+
+This repo expects sibling checkouts for linked packages:
+
+```text
+parent/
+  mini-lit/
+  pi-mono/
+  shuvgeist/
+```
+
+Install and build dependencies first:
 
 ```bash
-# Build the CLI
-npm run build:cli
+cd ../mini-lit && npm install && npm run build
+cd ../pi-mono && npm install && npm run build
+cd /path/to/shuvgeist && npm install
+```
 
-# Link it globally (optional, for using `shuvgeist` anywhere)
+Build outputs:
+
+```bash
+npm run build       # extension -> dist-chrome/
+npm run build:cli   # CLI -> dist-cli/shuvgeist.mjs
+```
+
+Load `dist-chrome/` as an unpacked extension.
+
+## Quick start
+
+### Sidepanel
+
+1. Open the sidepanel.
+2. Connect a subscription or add an API key/custom provider.
+3. Pick a model.
+4. Start with a task that needs a real browser, for example:
+   - "Open the current site and summarize this page."
+   - "Extract the visible products into a CSV artifact."
+   - "Teach yourself this site and save it as a skill."
+
+### CLI bridge
+
+Build and optionally link the CLI:
+
+```bash
+npm run build:cli
 npm link
 ```
 
-After linking, the `shuvgeist` command is available system-wide. Without linking, run it directly:
+Basic examples:
 
 ```bash
-node dist-cli/shuvgeist.mjs --help
-```
-
-## CLI Bridge
-
-The bridge lets external tools (Pi, Claude Code, coding agents, scripts) control your browser through the always-on extension runtime. Architecture: `CLI → Bridge Server (WebSocket relay) → Extension Background Worker`.
-
-When sensitive browser data access is enabled in the Bridge settings, the bridge also exposes debugger-backed commands like `shuvgeist eval` and `shuvgeist cookies`.
-
-### Quick start
-
-**1. Start the bridge server:**
-
-```bash
-shuvgeist serve
-```
-
-On first run it generates a token and saves it to `~/.shuvgeist/bridge.json`. The server listens on `0.0.0.0:19285` by default.
-
-You usually do not need to run `serve` manually: any `shuvgeist` CLI command auto-starts the local bridge when needed.
-
-**2. Let the extension auto-connect:**
-
-For the normal same-host setup, no token paste is required. The background worker uses the default local URL `ws://127.0.0.1:19285/ws`, bootstraps the token from the local bridge, and connects even if you have not opened the sidepanel first.
-
-The Bridge tab is now for:
-- monitoring connection status
-- blocking bridge connections entirely
-- enabling sensitive browser data access
-- advanced remote/LAN URL + token overrides
-
-**3. Run commands:**
-
-```bash
-# Check connection
 shuvgeist status
-
-# Navigate
 shuvgeist navigate "https://example.com"
-shuvgeist navigate "https://github.com" --new-tab
-
-# List and switch tabs
-shuvgeist tabs
-shuvgeist switch <tabId>
-
-# Take a screenshot (WebP, ~60KB)
-shuvgeist screenshot --out page.webp
-
-# Run JavaScript in the page
-shuvgeist repl 'return await browserjs(() => document.title)'
-
-# Run JS from a file
-shuvgeist repl -f scrape.js --write-files ./output
-
-# DevTools Protocol eval (requires sensitive browser data access in Bridge settings)
-shuvgeist eval "document.title"
-
-# Read cookies for the current site, including HttpOnly (requires sensitive browser data access in Bridge settings)
-shuvgeist cookies
-
-# Interactive element picker
-shuvgeist select "Click the login button"
-```
-
-### Configuration
-
-For the default local setup, the extension uses `chrome.storage.local` bridge settings with auto-connect defaults and loopback token bootstrap. Existing legacy bridge settings are migrated once by the background worker on upgrade.
-
-The CLI reads config from (in priority order):
-
-1. Command-line flags (`--token`, `--url`, `--host`, `--port`)
-2. Environment variables (`SHUVGEIST_BRIDGE_TOKEN`, `SHUVGEIST_BRIDGE_URL`, etc.)
-3. Config file at `~/.shuvgeist/bridge.json`
-
-### JSON output
-
-All commands support `--json` for machine-readable output, useful for scripting and agent integration:
-
-```bash
 shuvgeist tabs --json
-shuvgeist screenshot --json  # returns base64 dataUrl
-shuvgeist cookies --json
+shuvgeist screenshot --out page.png
+shuvgeist repl 'return await browserjs(() => document.title)'
+shuvgeist snapshot --json
+shuvgeist locate text "Sign in" --json
 ```
 
-### Exit codes
+The CLI auto-starts the local bridge when needed. Bridge config is resolved from:
 
-| Code | Meaning |
-|------|---------|
-| 0 | Success |
-| 1 | Command/runtime error |
-| 2 | No extension target connected |
-| 3 | Auth/configuration/network error |
+1. command-line flags
+2. environment variables
+3. `~/.shuvgeist/bridge.json`
 
-### systemd service
+Supported env vars:
 
-To keep the bridge running persistently on this machine, install the provided user unit.
+- `SHUVGEIST_BRIDGE_URL`
+- `SHUVGEIST_BRIDGE_HOST`
+- `SHUVGEIST_BRIDGE_PORT`
+- `SHUVGEIST_BRIDGE_TOKEN`
 
-The unit intentionally points at the development source tree via `tsx`:
-- entrypoint: `src/bridge/cli.ts`
-- runtime: `node_modules/.bin/tsx`
+Exit codes:
 
-That means bridge code changes are picked up after a simple service restart; you do not need to rebuild `dist-cli` just to update the local bridge service.
+- `0`: success
+- `1`: command/runtime error
+- `2`: no extension target connected
+- `3`: auth/configuration/network error
 
-To install the provided user unit:
+## Bridge details
+
+The extension stores bridge settings in browser storage and exposes them in `Settings -> Bridge`.
+
+Current bridge behavior:
+
+- same-host loopback is the default
+- the background worker owns the bridge connection
+- the Bridge tab can block bridge access entirely
+- sensitive browser data access is separately gated
+- remote/LAN bridge URL and token overrides are supported
+
+Sensitive bridge access enables commands such as:
+
+- `shuvgeist eval`
+- `shuvgeist cookies`
+- `shuvgeist network get`
+- `shuvgeist network body`
+- `shuvgeist network curl`
+
+### systemd user service
+
+For a persistent local bridge on Linux, install the provided user unit:
 
 ```bash
 install -Dm644 systemd/shuvgeist-bridge.service ~/.config/systemd/user/shuvgeist-bridge.service
@@ -162,124 +234,156 @@ systemctl --user daemon-reload
 systemctl --user enable --now shuvgeist-bridge.service
 ```
 
-Check status with:
+The unit intentionally runs the development source entrypoint through `tsx`, not the built CLI artifact, so bridge code changes are picked up after a restart.
+
+After changing the bridge implementation or CLI entrypoint:
 
 ```bash
-systemctl --user status shuvgeist-bridge.service
-```
-
-Restart after bridge/CLI changes with:
-
-```bash
+install -Dm644 systemd/shuvgeist-bridge.service ~/.config/systemd/user/shuvgeist-bridge.service
+systemctl --user daemon-reload
 systemctl --user restart shuvgeist-bridge.service
 ```
 
-### LAN operation
+## Proxy
 
-The bridge supports multi-host setups on a trusted local network:
+Shuvgeist includes a self-hostable proxy in `proxy/` for provider flows that still need CORS help from a browser context.
+
+Why it exists:
+
+- some provider auth/token flows cannot be called directly from the extension
+- some API integrations are intentionally proxied
+- document extraction can also use the proxy
+
+Run it locally:
 
 ```bash
-# Bridge server on host A
-shuvgeist serve --host 0.0.0.0
-
-# CLI on host B
-shuvgeist status --host 192.168.1.100 --token <token>
+cd proxy
+npm install
+npm run dev
 ```
 
-Set the extension's Bridge tab advanced URL to `ws://<bridge-host-ip>:19285/ws` and enter the remote bridge token manually.
-
-> **V1 bridge traffic is unencrypted. Use only on a trusted local network.**
+See [proxy/README.md](proxy/README.md) for deployment, allowlist, and security details.
 
 ## Development
 
-Clone this repo plus its sibling dependencies into the same parent directory:
+### Watch mode
 
-```
-parent/
-  mini-lit/          # https://github.com/shuv1337/mini-lit
-  pi-mono/           # https://github.com/shuv1337/pi-mono
-  shuvgeist/         # this repo
-```
-
-Install dependencies in each repo:
-
-```bash
-(cd ../mini-lit && npm install)
-(cd ../pi-mono && npm install)
-npm install
-```
-
-`npm install` sets up the Husky pre-commit hook automatically.
-
-Start all dev watchers (mini-lit, pi-mono, extension, marketing site):
+Start the extension, linked-package watchers, and site dev server:
 
 ```bash
 ./dev.sh
 ```
 
-To run only the extension watcher:
+Extension-only watcher:
 
 ```bash
 npm run dev
 ```
 
-### Building
+### Checks and tests
 
-```bash
-npm run build          # Extension → dist-chrome/
-npm run build:cli      # CLI → dist-cli/shuvgeist.mjs
-```
-
-### Loading the extension
-
-1. Open `chrome://extensions/` or `edge://extensions/`
-2. Enable Developer mode
-3. Click Load unpacked → select `dist-chrome/`
-4. Enable **Allow user scripts** and **Allow access to file URLs** in extension details
-
-The extension hot-reloads when the dev watcher rebuilds.
-
-### First run
-
-On first launch, Shuvgeist prompts you to connect at least one AI provider. You can log in with a subscription or enter an API key. CORS for OAuth is handled locally via declarativeNetRequest rules — no proxy needed.
-
-## Checks
+Primary repo check:
 
 ```bash
 ./check.sh
 ```
 
-Runs formatting, linting, and type checking for the extension and the `site/` subproject. The Husky pre-commit hook runs the same checks before each commit.
+That runs formatting, typechecking, unit tests, integration tests, and the site checks.
 
-## Agent Skill
-
-A [Pi coding agent](https://github.com/shuv1337/pi-mono) skill for Shuvgeist is included in `skills/shuvgeist/`. To activate it, symlink or copy it to your skills directory:
+Additional test entry points:
 
 ```bash
-ln -s $(pwd)/skills/shuvgeist ~/.pi/agent/skills/shuvgeist
-# or for OpenClaw/Shuvbot:
-ln -s $(pwd)/skills/shuvgeist ~/skills/shuvgeist
+npm run test
+npm run test:unit
+npm run test:integration
+npm run test:component
+npm run test:e2e
+npm run test:e2e:extension
+npm run test:e2e:site
+npm run test:coverage
 ```
 
-The skill teaches coding agents how to use the `shuvgeist` CLI for browser automation.
+### Development rules that matter in practice
 
-## Releasing
+- after extension UI/runtime changes, rebuild with `npm run build` so `dist-chrome/` is current
+- after CLI bridge changes, rebuild with `npm run build:cli`
+- linked `../mini-lit` or `../pi-mono` changes must be rebuilt in those repos before rebuilding Shuvgeist
+- the bridge should run via the user systemd unit, not an ad-hoc shell process
+
+## Project layout
+
+```text
+src/
+  background.ts              extension background worker
+  sidepanel.ts               main extension UI and agent wiring
+  bridge/                    CLI, protocol, server, workflows, session bridge
+  dialogs/                   settings tabs and setup dialogs
+  oauth/                     subscription login flows
+  storage/                   IndexedDB-backed stores
+  tools/                     browser automation and diagnostics tools
+  messages/                  custom agent message types/renderers
+  prompts/                   system prompt and token helpers
+  components/                UI components
+static/
+  manifest.chrome.json       extension manifest and version source
+site/
+  src/frontend/              marketing site and install page
+proxy/
+  src/                       self-hosted CORS proxy
+provider-presets/
+  proxx.json                 importable custom provider preset
+skills/
+  shuvgeist/                 coding-agent skill for the CLI bridge
+systemd/
+  shuvgeist-bridge.service   persistent user service for the bridge
+tests/
+  unit/ integration/ component/ e2e/
+```
+
+## Website
+
+The static site lives in `site/`.
+
+Local dev:
 
 ```bash
-./release.sh patch   # 1.0.0 -> 1.0.1
-./release.sh minor   # 1.0.0 -> 1.1.0
-./release.sh major   # 1.0.0 -> 2.0.0
+cd site
+./run.sh dev
 ```
 
-Bumps the version in `static/manifest.chrome.json`, commits, tags, and pushes. GitHub Actions builds the extension and creates a release.
-
-## Updating the website
+Build:
 
 ```bash
-cd site && ./run.sh deploy
+cd site
+./run.sh build
 ```
 
-Requires SSH access to `slayer.marioslab.io`.
+Deploy:
+
+```bash
+cd site
+SERVER_DIR=/path/on/server ./run.sh deploy
+```
+
+The deploy script uses SSH/rsync to `slayer.marioslab.io` by default.
+
+## Release process
+
+Versioning is driven by `static/manifest.chrome.json`, `package.json`, `site/package.json`, and `proxy/package.json`.
+
+To cut a release:
+
+1. Add notes under `## [Unreleased]` in [CHANGELOG.md](CHANGELOG.md).
+2. Make sure the worktree is clean.
+3. Run one of:
+
+```bash
+./release.sh patch
+./release.sh minor
+./release.sh major
+```
+
+The script bumps versions, updates the changelog, runs checks, commits, tags, and pushes. GitHub Actions then builds the extension zip and publishes the GitHub release.
 
 ## License
 
