@@ -10,7 +10,6 @@ permissions:
 
 env:
   MINI_LIT_VERSION: 0.2.1
-  PI_MONO_VERSION: 0.67.68
 
 jobs:
   build:
@@ -22,13 +21,22 @@ jobs:
         with:
           node-version: 22
 
-      - name: Use published sibling packages
+      - name: Restore mini-lit from npm
         run: |
-          npm pkg set \
-            "dependencies.@mariozechner/mini-lit=${MINI_LIT_VERSION}" \
-            "dependencies.@mariozechner/pi-ai=${PI_MONO_VERSION}" \
-            "dependencies.@mariozechner/pi-agent-core=${PI_MONO_VERSION}" \
-            "dependencies.@mariozechner/pi-web-ui=${PI_MONO_VERSION}"
+          tmp_dir="$(mktemp -d)"
+          cd "$tmp_dir"
+          npm pack "@mariozechner/mini-lit@${MINI_LIT_VERSION}"
+          mkdir -p ../mini-lit
+          tar -xzf "mariozechner-mini-lit-${MINI_LIT_VERSION}.tgz" -C ../mini-lit --strip-components=1
+
+      - name: Install mini-lit deps
+        run: cd ../mini-lit && npm install --ignore-scripts
+
+      - name: Clone pi-mono
+        run: git clone --depth 1 https://github.com/shuv1337/pi-mono.git ../pi-mono
+
+      - name: Install pi-mono
+        run: cd ../pi-mono && npm install && npm run build
 
       - name: Install shuvgeist
         run: npm install
