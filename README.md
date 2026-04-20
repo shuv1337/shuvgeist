@@ -10,6 +10,16 @@ This repo also ships:
 
 Works on Chrome 141+ and equivalent Edge builds.
 
+## Screenshots
+
+### Extension sidebar
+
+![Shuvgeist extension sidebar](site/src/frontend/img/preview-sidebar.png)
+
+### CLI bridge
+
+![Shuvgeist CLI bridge help](site/src/frontend/img/preview-cli.png)
+
 ## What ships today
 
 ### Extension
