@@ -49,10 +49,11 @@ jobs:
       - name: Restore mini-lit from npm
         run: |
           tmp_dir="$(mktemp -d)"
+          target_dir="$GITHUB_WORKSPACE/../mini-lit"
           cd "$tmp_dir"
           npm pack "@mariozechner/mini-lit@${MINI_LIT_VERSION}"
-          mkdir -p ../mini-lit
-          tar -xzf "mariozechner-mini-lit-${MINI_LIT_VERSION}.tgz" -C ../mini-lit --strip-components=1
+          mkdir -p "$target_dir"
+          tar -xzf "mariozechner-mini-lit-${MINI_LIT_VERSION}.tgz" -C "$target_dir" --strip-components=1
 
       - name: Install mini-lit deps
         run: cd ../mini-lit && npm install --ignore-scripts
@@ -85,10 +86,11 @@ jobs:
       - name: Restore mini-lit from npm
         run: |
           tmp_dir="$(mktemp -d)"
+          target_dir="$GITHUB_WORKSPACE/../mini-lit"
           cd "$tmp_dir"
           npm pack "@mariozechner/mini-lit@${MINI_LIT_VERSION}"
-          mkdir -p ../mini-lit
-          tar -xzf "mariozechner-mini-lit-${MINI_LIT_VERSION}.tgz" -C ../mini-lit --strip-components=1
+          mkdir -p "$target_dir"
+          tar -xzf "mariozechner-mini-lit-${MINI_LIT_VERSION}.tgz" -C "$target_dir" --strip-components=1
 
       - name: Install mini-lit deps
         run: cd ../mini-lit && npm install --ignore-scripts
@@ -158,10 +160,11 @@ jobs:
       - name: Restore mini-lit from npm
         run: |
           tmp_dir="$(mktemp -d)"
+          target_dir="$GITHUB_WORKSPACE/../mini-lit"
           cd "$tmp_dir"
           npm pack "@mariozechner/mini-lit@${MINI_LIT_VERSION}"
-          mkdir -p ../mini-lit
-          tar -xzf "mariozechner-mini-lit-${MINI_LIT_VERSION}.tgz" -C ../mini-lit --strip-components=1
+          mkdir -p "$target_dir"
+          tar -xzf "mariozechner-mini-lit-${MINI_LIT_VERSION}.tgz" -C "$target_dir" --strip-components=1
 
       - name: Install mini-lit deps
         run: cd ../mini-lit && npm install --ignore-scripts
