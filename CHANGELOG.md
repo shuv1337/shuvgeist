@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.1.8] - 2026-04-21
+
 ### Added
 
 - Sidepanel header now has an "Inspect element" (crosshair) button next to Settings. Clicking it injects the existing element-picker overlay into the active tab; the selected element is staged as a document attachment in the composer (selector, xpath, tagName, text, boundingBox, attributes, pruned computed styles, parent chain, outerHTML, page url/title) and sent along with the next user message. Escape or the in-page Cancel button dismisses silently. Protected URLs (`chrome://`, `chrome-extension://`, `moz-extension://`, `about:`) and the existing `maxFiles` limit are respected.
