@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.1.9] - 2026-04-21
+
 ### Changed
 
 - CLI now waits for the Shuvgeist browser extension to register before running any command (including `shuvgeist status`), so a cold-start invocation reports the live extension state instead of racing the extension's reconnect window. The wait is bounded at 30 seconds, prints a single "Waiting for Shuvgeist extension to connect..." hint to stderr after 1.5 seconds, stays silent in `--json` mode, and applies to every command except `serve`, `launch` (which has its own handshake), `close`, and usage errors.
