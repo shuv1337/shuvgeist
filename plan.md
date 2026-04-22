@@ -37,8 +37,8 @@ This document is a plan only. It does not implement the feature.
 
 ### User-facing behavior
 
-- [ ] Add a speaker/TTS button to the sidepanel header near the existing Inspect and Settings buttons.
-- [ ] Clicking that button injects an on-page TTS overlay into the active tab.
+- [x] Add a speaker/TTS button to the sidepanel header near the existing Inspect and Settings buttons.
+- [x] Clicking that button injects an on-page TTS overlay into the active tab.
 - [ ] The overlay supports at minimum:
   - [ ] play/speak current text
   - [ ] pause/resume
@@ -46,9 +46,9 @@ This document is a plan only. It does not implement the feature.
   - [ ] provider switcher
   - [ ] voice selection
   - [ ] click-to-speak arm/disarm toggle
-- [ ] Click-to-speak is opt-in and clearly armed/disarmed in the overlay UI.
-- [ ] When click-to-speak is armed, clicking readable text on the page starts speaking the resolved text block instead of navigating normally.
-- [ ] The feature should degrade safely on restricted pages (`chrome://`, extension pages, browser internal pages).
+- [x] Click-to-speak is opt-in and clearly armed/disarmed in the overlay UI.
+- [x] When click-to-speak is armed, clicking readable text on the page starts speaking the resolved text block instead of navigating normally.
+- [x] The feature should degrade safely on restricted pages (`chrome://`, extension pages, browser internal pages).
 
 ### Non-goals for v1
 
@@ -77,16 +77,16 @@ The main design task is to add a small TTS subsystem without over-coupling it to
 
 To reduce ambiguity during implementation, this plan explicitly rejects the following approaches for v1:
 
-- [ ] Do **not** reuse the REPL overlay module directly; create dedicated TTS overlay modules that borrow the pattern but keep TTS state separate.
-- [ ] Do **not** reuse the REPL `worldId` (`shuvgeist-repl-overlay`). TTS must use `shuvgeist-tts-overlay` so message types and CSP cannot shadow REPL.
-- [ ] Do **not** drop `WORKERS` from the offscreen `reasons` array when adding audio support; REPL depends on it.
-- [ ] Do **not** tear down shared offscreen TTS state from REPL teardown paths (`sandbox.remove()` in `src/offscreen.ts`).
-- [ ] Do **not** make the sidepanel the playback owner; playback state belongs to background/offscreen.
-- [ ] Do **not** add a new IndexedDB object store unless existing `settings` / `provider-keys` reuse proves insufficient.
-- [ ] Do **not** assume a direct persistent page-overlay subscription channel exists; background-to-overlay sync should use explicit reinjection/update calls unless proven otherwise.
-- [ ] Do **not** push overlay state on every audio time-update tick; only push on status transitions and arm/disarm changes.
-- [ ] Do **not** overload `ApiKeysOAuthTab` as the OpenAI raw-key source of truth.
-- [ ] Do **not** silently fail when `providerKeys["openai"]` is missing at first launch; surface an actionable raw-key input in `TtsTab`.
+- [x] Do **not** reuse the REPL overlay module directly; create dedicated TTS overlay modules that borrow the pattern but keep TTS state separate.
+- [x] Do **not** reuse the REPL `worldId` (`shuvgeist-repl-overlay`). TTS must use `shuvgeist-tts-overlay` so message types and CSP cannot shadow REPL.
+- [x] Do **not** drop `WORKERS` from the offscreen `reasons` array when adding audio support; REPL depends on it.
+- [x] Do **not** tear down shared offscreen TTS state from REPL teardown paths (`sandbox.remove()` in `src/offscreen.ts`).
+- [x] Do **not** make the sidepanel the playback owner; playback state belongs to background/offscreen.
+- [x] Do **not** add a new IndexedDB object store unless existing `settings` / `provider-keys` reuse proves insufficient.
+- [x] Do **not** assume a direct persistent page-overlay subscription channel exists; background-to-overlay sync should use explicit reinjection/update calls unless proven otherwise.
+- [x] Do **not** push overlay state on every audio time-update tick; only push on status transitions and arm/disarm changes.
+- [x] Do **not** overload `ApiKeysOAuthTab` as the OpenAI raw-key source of truth.
+- [x] Do **not** silently fail when `providerKeys["openai"]` is missing at first launch; surface an actionable raw-key input in `TtsTab`.
 
 ---
 
@@ -612,44 +612,44 @@ This gives the feature a stable local-first testing story and avoids shipping a 
 
 ## Milestone 1 — Settings and type foundation
 
-- [ ] Add `src/tts/types.ts`.
-- [ ] Add `src/tts/settings.ts` with defaults and helper accessors.
-- [ ] Decide and document exact settings keys.
-- [ ] Confirm no new IndexedDB store is needed.
-- [ ] Confirm whether OpenAI key reuse uses `openai` or a dedicated TTS key.
+- [x] Add `src/tts/types.ts`.
+- [x] Add `src/tts/settings.ts` with defaults and helper accessors.
+- [x] Decide and document exact settings keys.
+- [x] Confirm no new IndexedDB store is needed.
+- [x] Confirm whether OpenAI key reuse uses `openai` or a dedicated TTS key.
 
 ### Validation
 
-- [ ] Settings defaults resolve cleanly from existing storage.
-- [ ] No DB migration/version bump is required.
-- [ ] Missing settings fall back safely.
+- [x] Settings defaults resolve cleanly from existing storage.
+- [x] No DB migration/version bump is required.
+- [x] Missing settings fall back safely.
 
 ---
 
 ## Milestone 2 — TTS settings UI + sidepanel entry point
 
-- [ ] Create `src/dialogs/TtsTab.ts`.
-- [ ] Add TTS tab to `SettingsDialog.open([...])` calls in `src/sidepanel.ts`.
-- [ ] Add a sidepanel header speaker button.
-- [ ] Gate overlay launch on userScripts availability/permission.
+- [x] Create `src/dialogs/TtsTab.ts`.
+- [x] Add TTS tab to `SettingsDialog.open([...])` calls in `src/sidepanel.ts`.
+- [x] Add a sidepanel header speaker button.
+- [x] Gate overlay launch on userScripts availability/permission.
 
 ### Validation
 
-- [ ] User can open the TTS tab from Settings.
-- [ ] User can launch overlay from the sidepanel header.
-- [ ] Restricted pages fail gracefully with a helpful message.
-- [ ] Missing userScripts permission routes through the existing `UserScriptsPermissionDialog` path with actionable guidance.
+- [x] User can open the TTS tab from Settings.
+- [x] User can launch overlay from the sidepanel header.
+- [x] Restricted pages fail gracefully with a helpful message.
+- [x] Missing userScripts permission routes through the existing `UserScriptsPermissionDialog` path with actionable guidance.
 
 ---
 
 ## Milestone 3 — Overlay injection + control surface
 
-- [ ] Create `src/tts/overlay-content.ts`.
-- [ ] Create `src/tts/overlay-inject.ts`.
-- [ ] Implement overlay lifecycle: inject, update state, remove.
-- [ ] Implement controls for play/pause/resume/stop/provider/voice/click-mode.
-- [ ] Ensure overlay never duplicates itself in the same tab.
-- [ ] Make overlay dismissal hide controls only; do not implicitly stop playback.
+- [x] Create `src/tts/overlay-content.ts`.
+- [x] Create `src/tts/overlay-inject.ts`.
+- [x] Implement overlay lifecycle: inject, update state, remove.
+- [x] Implement controls for play/pause/resume/stop/provider/voice/click-mode.
+- [x] Ensure overlay never duplicates itself in the same tab.
+- [x] Make overlay dismissal hide controls only; do not implicitly stop playback.
 
 ### Validation
 
@@ -662,12 +662,12 @@ This gives the feature a stable local-first testing story and avoids shipping a 
 
 ## Milestone 4 — Background/offscreen playback runtime
 
-- [ ] Create `src/tts/internal-messages.ts` with all message types `tts-`-prefixed.
-- [ ] Extend `src/background.ts` to route TTS commands. Update the existing `chrome.runtime.onUserScriptMessage` listener (around line 610) to branch on the `tts-` prefix so TTS and REPL message types cannot shadow each other.
-- [ ] Extend `src/offscreen.ts` to synthesize/fetch/play audio, installing the `window.__shuvgeistTtsController` page-global described in the ownership contract.
-- [ ] Update `setupOffscreenDocument()` in `src/background.ts:84-150` to create the document with `reasons: [WORKERS, AUDIO_PLAYBACK, BLOBS]`.
-- [ ] Keep background as source of truth for active TTS state. Apply the overlay-update cadence rule (status transitions + arm/disarm only, no `timeupdate` ticks).
-- [ ] Confirm offscreen lifecycle/reason handling for audio.
+- [x] Create `src/tts/internal-messages.ts` with all message types `tts-`-prefixed.
+- [x] Extend `src/background.ts` to route TTS commands. Update the existing `chrome.runtime.onUserScriptMessage` listener (around line 610) to branch on the `tts-` prefix so TTS and REPL message types cannot shadow each other.
+- [x] Extend `src/offscreen.ts` to synthesize/fetch/play audio, installing the `window.__shuvgeistTtsController` page-global described in the ownership contract.
+- [x] Update `setupOffscreenDocument()` in `src/background.ts:84-150` to create the document with `reasons: [WORKERS, AUDIO_PLAYBACK, BLOBS]`.
+- [x] Keep background as source of truth for active TTS state. Apply the overlay-update cadence rule (status transitions + arm/disarm only, no `timeupdate` ticks).
+- [x] Confirm offscreen lifecycle/reason handling for audio.
 
 ### Validation
 
@@ -682,11 +682,11 @@ This gives the feature a stable local-first testing story and avoids shipping a 
 
 ## Milestone 5 — Provider adapters
 
-- [ ] Implement `src/tts/providers/openai.ts`.
-- [ ] Implement `src/tts/providers/elevenlabs.ts`.
-- [ ] Implement `src/tts/providers/kokoro.ts`.
-- [ ] Implement `src/tts/service.ts` to select provider and normalize calls.
-- [ ] Default provider to Kokoro for local-first testing.
+- [x] Implement `src/tts/providers/openai.ts`.
+- [x] Implement `src/tts/providers/elevenlabs.ts`.
+- [x] Implement `src/tts/providers/kokoro.ts`.
+- [x] Implement `src/tts/service.ts` to select provider and normalize calls.
+- [x] Default provider to Kokoro for local-first testing.
 
 ### Validation
 
@@ -699,12 +699,12 @@ This gives the feature a stable local-first testing story and avoids shipping a 
 
 ## Milestone 6 — Click-to-speak targeting
 
-- [ ] Create `src/tts/text-targeting.ts`.
-- [ ] Implement armed click interception using a **capture-phase** listener with `preventDefault()` + `stopImmediatePropagation()` on resolved speakable targets; remove with `{ capture: true }` on disarm.
-- [ ] Resolve clicked text using selection/sentence/block heuristics.
-- [ ] Apply the shared 3000-character clamp from `src/tts/service.ts` before dispatch; surface truncation via `TtsPlaybackState.truncated`.
-- [ ] Prevent accidental full-page or empty-text speech.
-- [ ] Stop current playback before starting a new click-targeted utterance.
+- [x] Create `src/tts/text-targeting.ts`.
+- [x] Implement armed click interception using a **capture-phase** listener with `preventDefault()` + `stopImmediatePropagation()` on resolved speakable targets; remove with `{ capture: true }` on disarm.
+- [x] Resolve clicked text using selection/sentence/block heuristics.
+- [x] Apply the shared 3000-character clamp from `src/tts/service.ts` before dispatch; surface truncation via `TtsPlaybackState.truncated`.
+- [x] Prevent accidental full-page or empty-text speech.
+- [x] Stop current playback before starting a new click-targeted utterance.
 
 ### Validation
 
@@ -719,11 +719,11 @@ This gives the feature a stable local-first testing story and avoids shipping a 
 
 ## Milestone 7 — Voice handling and defaults
 
-- [ ] Add static OpenAI voice list.
-- [ ] Add dynamic ElevenLabs voice fetch.
-- [ ] Add Kokoro voice discovery with static fallback.
-- [ ] Store per-provider default voice settings.
-- [ ] Make overlay/provider switch preserve or safely reset voice state.
+- [x] Add static OpenAI voice list.
+- [x] Add dynamic ElevenLabs voice fetch.
+- [x] Add Kokoro voice discovery with static fallback.
+- [x] Store per-provider default voice settings.
+- [x] Make overlay/provider switch preserve or safely reset voice state.
 
 ### Validation
 
@@ -737,7 +737,7 @@ This gives the feature a stable local-first testing story and avoids shipping a 
 
 Even if this extension does not yet forward full OTEL telemetry, the feature must emit enough structured lifecycle data to diagnose failures.
 
-- [ ] Add structured logs for TTS session start, synth start, synth success, playback start, pause, resume, stop, and failure.
+- [x] Add structured logs for TTS session start, synth start, synth success, playback start, pause, resume, stop, and failure.
 - [ ] Include stable fields:
   - [ ] provider
   - [ ] voiceId
@@ -747,7 +747,7 @@ Even if this extension does not yet forward full OTEL telemetry, the feature mus
   - [ ] playback duration ms where available
   - [ ] click-mode enabled/disabled
   - [ ] error class/message
-- [ ] Never log raw spoken text.
+- [x] Never log raw spoken text.
 
 ### Validation
 
@@ -760,19 +760,19 @@ Even if this extension does not yet forward full OTEL telemetry, the feature mus
 
 ### Unit tests
 
-- [ ] `tests/unit/tts/settings.test.ts`
-- [ ] `tests/unit/tts/service.test.ts` (includes the shared 3000-char clamp behavior)
-- [ ] `tests/unit/tts/openai-provider.test.ts` (covers `gpt-4o-mini-tts` → `tts-1` fallback)
-- [ ] `tests/unit/tts/elevenlabs-provider.test.ts`
-- [ ] `tests/unit/tts/kokoro-provider.test.ts` (covers `modelId` override forwarding)
-- [ ] `tests/unit/tts/text-targeting.test.ts` (covers capture-phase interception + disarm cleanup)
-- [ ] `tests/unit/background/tts-runtime.test.ts`
-- [ ] `tests/unit/background/offscreen-tts-ownership.test.ts` — asserts REPL execution during TTS playback does NOT tear down `window.__shuvgeistTtsController` or revoke its object URL. (Co-locate here rather than creating a new `tests/unit/offscreen/` path, since no offscreen-specific test directory exists today.)
+- [x] `tests/unit/tts/settings.test.ts`
+- [x] `tests/unit/tts/service.test.ts` (includes the shared 3000-char clamp behavior)
+- [x] `tests/unit/tts/openai-provider.test.ts` (covers `gpt-4o-mini-tts` → `tts-1` fallback)
+- [x] `tests/unit/tts/elevenlabs-provider.test.ts`
+- [x] `tests/unit/tts/kokoro-provider.test.ts` (covers `modelId` override forwarding)
+- [x] `tests/unit/tts/text-targeting.test.ts` (covers capture-phase interception + disarm cleanup)
+- [x] `tests/unit/background/tts-runtime.test.ts`
+- [x] `tests/unit/background/offscreen-tts-ownership.test.ts` — asserts REPL execution during TTS playback does NOT tear down `window.__shuvgeistTtsController` or revoke its object URL. (Co-locate here rather than creating a new `tests/unit/offscreen/` path, since no offscreen-specific test directory exists today.)
 - [ ] Extend `tests/unit/tools/browser-target.test.ts` if TTS introduces new protected-page launch or active-tab resolution branches
 
 ### Component tests
 
-- [ ] `tests/component/dialogs/tts-tab.test.ts`
+- [x] `tests/component/dialogs/tts-tab.test.ts`
 
 ### Optional integration/e2e coverage
 
@@ -782,13 +782,13 @@ Even if this extension does not yet forward full OTEL telemetry, the feature mus
 
 ### Kokoro-first test strategy
 
-- [ ] Use Kokoro/local-compatible mocks as the main provider test fixture.
-- [ ] Avoid hitting OpenAI and ElevenLabs live APIs in automated tests.
-- [ ] Use provider contract tests so OpenAI and Kokoro share as much harness code as possible.
+- [x] Use Kokoro/local-compatible mocks as the main provider test fixture.
+- [x] Avoid hitting OpenAI and ElevenLabs live APIs in automated tests.
+- [x] Use provider contract tests so OpenAI and Kokoro share as much harness code as possible.
 
 ### Non-code ship checklist
 
-- [ ] Add an `## [Unreleased]` entry to `CHANGELOG.md` under `### Added` when implementation lands.
+- [x] Add an `## [Unreleased]` entry to `CHANGELOG.md` under `### Added` when implementation lands.
 - [ ] If the final UX differs materially from the current Settings flow, update any relevant user-facing docs or screenshots.
 
 ### Validation commands after implementation
@@ -895,17 +895,17 @@ Most items below are now locked in the "Locked decisions" table at the top of th
 
 ## Suggested implementation order summary
 
-1. [ ] Lock the control-plane transport, protected-page helper reuse, and offscreen lifecycle decision.
-2. [ ] Define settings/types and confirm storage strategy.
-3. [ ] Add TTS settings tab and sidepanel header speaker button.
-4. [ ] Build dedicated overlay injection/control modules.
-5. [ ] Extend background + offscreen for playback orchestration.
-6. [ ] Implement Kokoro adapter first.
-7. [ ] Implement OpenAI adapter.
-8. [ ] Implement ElevenLabs adapter.
-9. [ ] Add click-to-speak targeting.
-10. [ ] Add telemetry/logging.
-11. [ ] Add tests, update changelog/docs as needed, run `./check.sh`, then `npm run build`.
+1. [x] Lock the control-plane transport, protected-page helper reuse, and offscreen lifecycle decision.
+2. [x] Define settings/types and confirm storage strategy.
+3. [x] Add TTS settings tab and sidepanel header speaker button.
+4. [x] Build dedicated overlay injection/control modules.
+5. [x] Extend background + offscreen for playback orchestration.
+6. [x] Implement Kokoro adapter first.
+7. [x] Implement OpenAI adapter.
+8. [x] Implement ElevenLabs adapter.
+9. [x] Add click-to-speak targeting.
+10. [x] Add telemetry/logging.
+11. [x] Add tests, update changelog/docs as needed, run `./check.sh`, then `npm run build`.
 
 This order keeps the feature locally testable early, with Kokoro as the first working provider path, while settling the highest-risk architectural decisions before provider-specific work begins.
 
@@ -913,20 +913,20 @@ This order keeps the feature locally testable early, with Kokoro as the first wo
 
 ## Definition of done
 
-- [ ] User can click the new sidepanel speaker button (`Volume2` from `lucide`) and open an on-page TTS overlay.
-- [ ] User can play, pause, resume, and stop spoken audio from the overlay.
-- [ ] OpenAI, ElevenLabs, and local Kokoro all work through the same TTS subsystem with the locked defaults (`gpt-4o-mini-tts`, `eleven_turbo_v2_5` / `mp3_44100_128`, `kokoro` / `af_heart`).
-- [ ] OpenAI path works whether the `openai` key was set via TTS tab or upstream `ProvidersModelsTab`. First-launch users with no `openai` key see an actionable input, not a silent failure.
-- [ ] Click-to-speak is off by default and can be armed explicitly in the overlay; capture-phase interception holds against SPA link hijackers.
-- [ ] Armed click-to-speak resolves readable text reliably on normal sites and respects the 3000-char shared clamp with truncation feedback.
-- [ ] The feature works without the sidepanel being the sole playback owner.
-- [ ] Overlay ↔ background ↔ offscreen transport is implemented as documented: `shuvgeist-tts-overlay` worldId, `tts-`-prefixed messages, transition-only update cadence.
-- [ ] Shared protected-page/active-tab helpers are reused rather than duplicated.
-- [ ] Offscreen document is created with `reasons: ["WORKERS", "AUDIO_PLAYBACK", "BLOBS"]`; REPL offscreen path is unregressed.
-- [ ] REPL execution during active TTS playback does not stop the audio element or revoke its object URL (automated test).
-- [ ] Both `SettingsDialog.open([...])` call sites in `src/sidepanel.ts` include `new TtsTab()`.
-- [ ] Kokoro/local path is the main tested path in automated and manual QA.
-- [ ] Structured logs/telemetry exist for synth/playback lifecycle and failures; `uiTextPreview` is never forwarded into logs.
-- [ ] `CHANGELOG.md` has an Unreleased entry for the feature when implementation lands.
-- [ ] `./check.sh` passes.
-- [ ] `npm run build` completes and updates `dist-chrome/`.
+- [x] User can click the new sidepanel speaker button (`Volume2` from `lucide`) and open an on-page TTS overlay.
+- [x] User can play, pause, resume, and stop spoken audio from the overlay.
+- [x] OpenAI, ElevenLabs, and local Kokoro all work through the same TTS subsystem with the locked defaults (`gpt-4o-mini-tts`, `eleven_turbo_v2_5` / `mp3_44100_128`, `kokoro` / `af_heart`).
+- [x] OpenAI path works whether the `openai` key was set via TTS tab or upstream `ProvidersModelsTab`. First-launch users with no `openai` key see an actionable input, not a silent failure.
+- [x] Click-to-speak is off by default and can be armed explicitly in the overlay; capture-phase interception holds against SPA link hijackers.
+- [x] Armed click-to-speak resolves readable text reliably on normal sites and respects the 3000-char shared clamp with truncation feedback.
+- [x] The feature works without the sidepanel being the sole playback owner.
+- [x] Overlay ↔ background ↔ offscreen transport is implemented as documented: `shuvgeist-tts-overlay` worldId, `tts-`-prefixed messages, transition-only update cadence.
+- [x] Shared protected-page/active-tab helpers are reused rather than duplicated.
+- [x] Offscreen document is created with `reasons: ["WORKERS", "AUDIO_PLAYBACK", "BLOBS"]`; REPL offscreen path is unregressed.
+- [x] REPL execution during active TTS playback does not stop the audio element or revoke its object URL (automated test).
+- [x] Both `SettingsDialog.open([...])` call sites in `src/sidepanel.ts` include `new TtsTab()`.
+- [x] Kokoro/local path is the main tested path in automated and manual QA.
+- [x] Structured logs/telemetry exist for synth/playback lifecycle and failures; `uiTextPreview` is never forwarded into logs.
+- [x] `CHANGELOG.md` has an Unreleased entry for the feature when implementation lands.
+- [x] `./check.sh` passes.
+- [x] `npm run build` completes and updates `dist-chrome/`.

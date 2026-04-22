@@ -16,6 +16,9 @@ export const BRIDGE_SETTINGS_KEY = "bridge_settings";
 /** chrome.storage.session key for bridge connection state (shared with UI). */
 export const BRIDGE_STATE_KEY = "bridge_state";
 
+/** chrome.storage.session key for bridge OTEL export state (shared with UI). */
+export const BRIDGE_OTEL_STATE_KEY = "bridge_otel_state";
+
 // ---------------------------------------------------------------------------
 // Bridge settings (canonical chrome.storage.local shape)
 // ---------------------------------------------------------------------------
@@ -25,6 +28,13 @@ export interface BridgeSettings {
 	url: string;
 	token: string;
 	sensitiveAccessEnabled: boolean;
+	observability: BridgeObservabilitySettings;
+}
+
+export interface BridgeObservabilitySettings {
+	enabled: boolean;
+	ingestUrl: string;
+	publicIngestKey: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -36,13 +46,20 @@ export interface BridgeStateData {
 	detail?: string;
 }
 
+export interface BridgeOtelStateData {
+	state: "disabled" | "idle" | "ok" | "error";
+	lastExportedAt?: string;
+	lastErrorAt?: string;
+	lastError?: string;
+}
+
 // ---------------------------------------------------------------------------
 // Background <-> Sidepanel messages
 // ---------------------------------------------------------------------------
 
 export type BridgeToSidepanelMessage =
 	| { type: "bridge-session-command"; method: string; params: Record<string, unknown> }
-	| { type: "bridge-repl-execute"; params: ReplParams }
+	| { type: "bridge-repl-execute"; params: ReplParams; traceparent?: string; tracestate?: string }
 	| { type: "bridge-screenshot"; params: ScreenshotParams };
 
 export type SidepanelToBackgroundMessage = { type: "bridge-get-state" };
@@ -52,7 +69,7 @@ export type SidepanelToBackgroundMessage = { type: "bridge-get-state" };
 // ---------------------------------------------------------------------------
 
 export type BridgeToOffscreenMessage =
-	| { type: "bridge-repl-execute"; params: ReplParams; windowId?: number }
+	| { type: "bridge-repl-execute"; params: ReplParams; windowId?: number; traceparent?: string; tracestate?: string }
 	| { type: "bridge-keepalive-ping" };
 
 // ---------------------------------------------------------------------------
@@ -72,6 +89,8 @@ export interface BgRuntimeExecMessage {
 	runtimeType: BgRuntimeType;
 	payload: Record<string, unknown>;
 	windowId?: number;
+	traceparent?: string;
+	tracestate?: string;
 	/** Sandbox id from the offscreen REPL; used to route user-script messages
 	 *  (e.g. nested nativeClick calls from skill code) back through the same
 	 *  execution context while background.userScripts.execute() is pending. */

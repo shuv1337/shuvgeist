@@ -1,4 +1,5 @@
 import { bridgeLog } from "../../bridge/logging.js";
+import type { BridgeTelemetry, TelemetryAttributes, TraceContext } from "../../bridge/telemetry.js";
 
 export type DebuggerDomain = "Runtime" | "Network" | "Page" | "Performance" | "Tracing";
 
@@ -16,8 +17,15 @@ interface TabDebuggerState {
 	serial: Promise<void>;
 }
 
+interface DebuggerTraceOptions {
+	parent?: TraceContext;
+	operationName?: string;
+	attributes?: TelemetryAttributes;
+}
+
 export class DebuggerManager {
 	private readonly tabStates = new Map<number, TabDebuggerState>();
+	private telemetry?: BridgeTelemetry;
 
 	constructor() {
 		if (typeof chrome === "undefined" || !chrome.debugger?.onEvent || !chrome.debugger?.onDetach) {
@@ -49,29 +57,60 @@ export class DebuggerManager {
 	}
 
 	async acquire(tabId: number, owner: string): Promise<void> {
-		await this.runSerialized(tabId, async (state) => {
-			if (state.refCount === 0) {
-				await chrome.debugger.attach({ tabId }, "1.3");
-				bridgeLog("info", "debugger attached", {
-					role: "extension",
-					tabId,
-					outcome: "success",
-				});
-			}
-
-			state.refCount += 1;
-			state.owners.add(owner);
-			bridgeLog("debug", "debugger acquired", {
-				role: "extension",
-				tabId,
-				outcome: "success",
-				refCount: state.refCount,
-				owner,
-			});
-		});
+		await this.acquireWithTrace(tabId, owner);
 	}
 
 	async release(tabId: number, owner: string): Promise<void> {
+		await this.releaseWithTrace(tabId, owner);
+	}
+
+	async acquireWithTrace(tabId: number, owner: string, trace?: DebuggerTraceOptions): Promise<void> {
+		const span = this.telemetry?.startSpan(trace?.operationName ?? "debugger.acquire", {
+			parent: trace?.parent,
+			attributes: {
+				"debugger.owner": owner,
+				"debugger.tab_id": tabId,
+				...trace?.attributes,
+			},
+		});
+		try {
+			await this.runSerialized(tabId, async (state) => {
+				if (state.refCount === 0) {
+					await chrome.debugger.attach({ tabId }, "1.3");
+					bridgeLog("info", "debugger attached", {
+						role: "extension",
+						tabId,
+						outcome: "success",
+					});
+				}
+
+				state.refCount += 1;
+				state.owners.add(owner);
+				bridgeLog("debug", "debugger acquired", {
+					role: "extension",
+					tabId,
+					outcome: "success",
+					refCount: state.refCount,
+					owner,
+				});
+			});
+			span?.end("ok");
+		} catch (error) {
+			span?.recordError(error);
+			span?.end("error");
+			throw error;
+		}
+	}
+
+	async releaseWithTrace(tabId: number, owner: string, trace?: DebuggerTraceOptions): Promise<void> {
+		const span = this.telemetry?.startSpan(trace?.operationName ?? "debugger.release", {
+			parent: trace?.parent,
+			attributes: {
+				"debugger.owner": owner,
+				"debugger.tab_id": tabId,
+				...trace?.attributes,
+			},
+		});
 		await this.runSerialized(tabId, async (state) => {
 			if (!state.owners.has(owner) && state.refCount === 0) {
 				return;
@@ -99,20 +138,72 @@ export class DebuggerManager {
 					this.tabStates.delete(tabId);
 				}
 			}
-		});
+		})
+			.then(() => span?.end("ok"))
+			.catch((error) => {
+				span?.recordError(error);
+				span?.end("error");
+				throw error;
+			});
 	}
 
 	async ensureDomain(tabId: number, domain: DebuggerDomain): Promise<void> {
+		await this.ensureDomainWithTrace(tabId, domain);
+	}
+
+	async ensureDomainWithTrace(tabId: number, domain: DebuggerDomain, trace?: DebuggerTraceOptions): Promise<void> {
+		const span = this.telemetry?.startSpan(trace?.operationName ?? "debugger.ensure_domain", {
+			parent: trace?.parent,
+			attributes: {
+				"debugger.domain": domain,
+				"debugger.tab_id": tabId,
+				...trace?.attributes,
+			},
+		});
 		const state = this.getOrCreateState(tabId);
 		if (state.enabledDomains.has(domain)) {
+			span?.setAttribute("debugger.domain_cached", true);
+			span?.end("ok");
 			return;
 		}
-		await chrome.debugger.sendCommand({ tabId }, `${domain}.enable`);
-		state.enabledDomains.add(domain);
+		try {
+			await chrome.debugger.sendCommand({ tabId }, `${domain}.enable`);
+			state.enabledDomains.add(domain);
+			span?.end("ok");
+		} catch (error) {
+			span?.recordError(error);
+			span?.end("error");
+			throw error;
+		}
 	}
 
 	async sendCommand<T = unknown>(tabId: number, method: string, params?: Record<string, unknown>): Promise<T> {
-		return chrome.debugger.sendCommand({ tabId }, method, params) as Promise<T>;
+		return this.sendCommandWithTrace(tabId, method, params);
+	}
+
+	async sendCommandWithTrace<T = unknown>(
+		tabId: number,
+		method: string,
+		params?: Record<string, unknown>,
+		trace?: DebuggerTraceOptions,
+	): Promise<T> {
+		const span = this.telemetry?.startSpan(trace?.operationName ?? "debugger.send_command", {
+			parent: trace?.parent,
+			attributes: {
+				"debugger.method": method,
+				"debugger.tab_id": tabId,
+				...trace?.attributes,
+			},
+		});
+		try {
+			const result = (await chrome.debugger.sendCommand({ tabId }, method, params)) as T;
+			span?.end("ok");
+			return result;
+		} catch (error) {
+			span?.recordError(error);
+			span?.end("error");
+			throw error;
+		}
 	}
 
 	addEventListener(tabId: number, listener: DebuggerEventListener): () => void {
@@ -122,6 +213,10 @@ export class DebuggerManager {
 			const existing = this.tabStates.get(tabId);
 			existing?.listeners.delete(listener);
 		};
+	}
+
+	setTelemetry(telemetry?: BridgeTelemetry): void {
+		this.telemetry = telemetry;
 	}
 
 	private async runSerialized(tabId: number, action: (state: TabDebuggerState) => Promise<void>): Promise<void> {
@@ -163,4 +258,10 @@ export function getSharedDebuggerManager(): DebuggerManager {
 		sharedDebuggerManager = new DebuggerManager();
 	}
 	return sharedDebuggerManager;
+}
+
+export function configureSharedDebuggerManagerTelemetry(telemetry?: BridgeTelemetry): DebuggerManager {
+	const manager = getSharedDebuggerManager();
+	manager.setTelemetry(telemetry);
+	return manager;
 }

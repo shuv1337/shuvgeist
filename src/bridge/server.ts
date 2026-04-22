@@ -28,6 +28,7 @@ import {
 	isWriteMethod,
 	type RegistrationMessage,
 } from "./protocol.js";
+import { BridgeTelemetry, type BridgeTelemetrySpan, parseTraceparent } from "./telemetry.js";
 
 // ---------------------------------------------------------------------------
 // Client tracking
@@ -58,6 +59,7 @@ interface PendingRequest {
 	cliWs: WebSocket;
 	method: string;
 	startedAt: number;
+	span?: BridgeTelemetrySpan;
 }
 
 // ---------------------------------------------------------------------------
@@ -67,6 +69,7 @@ interface PendingRequest {
 export class BridgeServer {
 	private readonly config: BridgeServerConfig;
 	private readonly clients = new Map<WebSocket, ClientInfo>();
+	private readonly telemetry?: BridgeTelemetry;
 	private activeExtension: ClientInfo | null = null;
 	private readonly pendingRequests = new Map<number, PendingRequest>();
 	private readonly rejectedBootstrapCounts = new Map<string, number>();
@@ -78,6 +81,14 @@ export class BridgeServer {
 
 	constructor(config: BridgeServerConfig) {
 		this.config = config;
+		if (config.otel) {
+			this.telemetry = new BridgeTelemetry({
+				serviceName: "shuvgeist-bridge-server",
+				enabled: config.otel.enabled ?? false,
+				ingestUrl: config.otel.ingestUrl,
+				ingestKey: config.otel.ingestKey,
+			});
+		}
 	}
 
 	async start(): Promise<void> {
@@ -375,10 +386,23 @@ export class BridgeServer {
 			requestId: req.id,
 			method: req.method,
 		};
+		const span = this.telemetry?.startSpan(`bridge.server.request.${req.method}`, {
+			parent: parseTraceparent(req.traceparent, req.tracestate),
+			kind: "server",
+			attributes: {
+				"bridge.method": req.method,
+				"bridge.request_id": req.id,
+				"bridge.cli_connection_id": client.connectionId,
+			},
+		});
 
 		// Validate method
 		if (!BridgeMethods.includes(req.method as BridgeMethod)) {
 			bridgeLog("warn", "invalid method", { ...fields, outcome: "rejected" });
+			span?.recordError(new Error("Unknown method: " + req.method));
+			span?.setAttribute("bridge.outcome", "rejected");
+			span?.end("error");
+			void this.telemetry?.flush();
 			this.sendJson(client.ws, {
 				id: req.id,
 				error: { code: ErrorCodes.INVALID_METHOD, message: "Unknown method: " + req.method },
@@ -389,6 +413,10 @@ export class BridgeServer {
 		// Check extension target
 		if (!this.activeExtension || this.activeExtension.ws.readyState !== WebSocket.OPEN) {
 			bridgeLog("warn", "no extension target", { ...fields, outcome: "error" });
+			span?.recordError(new Error("No active extension target connected"));
+			span?.setAttribute("bridge.outcome", "error");
+			span?.end("error");
+			void this.telemetry?.flush();
 			this.sendJson(client.ws, {
 				id: req.id,
 				error: { code: ErrorCodes.NO_EXTENSION_TARGET, message: "No active extension target connected" },
@@ -402,6 +430,10 @@ export class BridgeServer {
 				outcome: "rejected",
 				capabilities: this.activeExtension.capabilities,
 			});
+			span?.recordError(new Error(`Method '${req.method}' is disabled on the active extension target`));
+			span?.setAttribute("bridge.outcome", "rejected");
+			span?.end("error");
+			void this.telemetry?.flush();
 			this.sendJson(client.ws, {
 				id: req.id,
 				error: {
@@ -420,6 +452,10 @@ export class BridgeServer {
 					writerCliConnectionId: this.writerCliConnectionId,
 					writerSessionId: this.writerSessionId,
 				});
+				span?.recordError(new Error("Another CLI currently holds the session write lock"));
+				span?.setAttribute("bridge.outcome", "rejected");
+				span?.end("error");
+				void this.telemetry?.flush();
 				this.sendJson(client.ws, {
 					id: req.id,
 					error: {
@@ -448,6 +484,7 @@ export class BridgeServer {
 			cliWs: client.ws,
 			method: req.method,
 			startedAt: Date.now(),
+			span,
 		});
 
 		bridgeLog("debug", "forwarding request to extension", {
@@ -458,6 +495,7 @@ export class BridgeServer {
 		this.sendJson(this.activeExtension.ws, {
 			...req,
 			id: relayRequestId,
+			...(span ? span.toTraceHeaders() : {}),
 		});
 	}
 
@@ -489,6 +527,14 @@ export class BridgeServer {
 			durationMs,
 			outcome,
 		});
+		pending.span?.setAttribute("bridge.outcome", outcome);
+		if (res.error) {
+			pending.span?.recordError(new Error(res.error.message));
+			pending.span?.end("error");
+		} else {
+			pending.span?.end("ok");
+		}
+		void this.telemetry?.flush();
 
 		if (pending.cliWs.readyState === WebSocket.OPEN) {
 			this.sendJson(pending.cliWs, {
@@ -544,6 +590,9 @@ export class BridgeServer {
 			bridgeLog("info", "extension disconnected", { ...fields, windowId: client.windowId });
 
 			for (const pending of this.pendingRequests.values()) {
+				pending.span?.recordError(new Error("Extension disconnected while request was pending"));
+				pending.span?.setAttribute("bridge.outcome", "error");
+				pending.span?.end("error");
 				if (pending.cliWs.readyState === WebSocket.OPEN) {
 					this.sendJson(pending.cliWs, {
 						id: pending.clientRequestId,
@@ -555,6 +604,7 @@ export class BridgeServer {
 				}
 			}
 			this.pendingRequests.clear();
+			void this.telemetry?.flush();
 
 			// Broadcast to all CLIs
 			this.broadcastToRole("cli", {
@@ -575,6 +625,9 @@ export class BridgeServer {
 			for (const [relayRequestId, pending] of this.pendingRequests) {
 				if (pending.cliConnectionId === client.connectionId) {
 					this.pendingRequests.delete(relayRequestId);
+					pending.span?.recordError(new Error("CLI disconnected while request was pending"));
+					pending.span?.setAttribute("bridge.outcome", "aborted");
+					pending.span?.end("error");
 
 					if (this.activeExtension && this.activeExtension.ws.readyState === WebSocket.OPEN) {
 						const abort: AbortMessage = { type: "abort", id: relayRequestId };
@@ -590,6 +643,7 @@ export class BridgeServer {
 					});
 				}
 			}
+			void this.telemetry?.flush();
 		} else {
 			bridgeLog("info", "unregistered client disconnected", fields);
 		}

@@ -3,8 +3,11 @@ import { html, type TemplateResult } from "lit";
 import { customElement, state } from "lit/decorators.js";
 import type { BridgeConnectionState } from "../bridge/extension-client.js";
 import {
+	BRIDGE_OTEL_STATE_KEY,
 	BRIDGE_SETTINGS_KEY,
 	BRIDGE_STATE_KEY,
+	type BridgeObservabilitySettings,
+	type BridgeOtelStateData,
 	type BridgeSettings,
 	type BridgeStateData,
 } from "../bridge/internal-messages.js";
@@ -16,8 +19,10 @@ export class BridgeTab extends SettingsTab {
 	@state() private url = getDefaultBridgeSettings().url;
 	@state() private token = "";
 	@state() private sensitiveAccessEnabled = false;
+	@state() private observability: BridgeObservabilitySettings = getDefaultBridgeSettings().observability;
 	@state() private bridgeState: BridgeConnectionState = "disconnected";
 	@state() private bridgeDetail: string | undefined;
+	@state() private otelState: BridgeOtelStateData = { state: "disabled" };
 
 	private readonly storageChangeListener = (
 		changes: Record<string, chrome.storage.StorageChange>,
@@ -32,6 +37,10 @@ export class BridgeTab extends SettingsTab {
 		if (areaName === "session" && changes[BRIDGE_STATE_KEY]) {
 			this.applyBridgeState(changes[BRIDGE_STATE_KEY].newValue as BridgeStateData | undefined);
 		}
+
+		if (areaName === "session" && changes[BRIDGE_OTEL_STATE_KEY]) {
+			this.applyOtelState(changes[BRIDGE_OTEL_STATE_KEY].newValue as BridgeOtelStateData | undefined);
+		}
 	};
 
 	getTabName(): string {
@@ -42,6 +51,7 @@ export class BridgeTab extends SettingsTab {
 		super.connectedCallback();
 		await this.loadSettings();
 		await this.loadBridgeState();
+		await this.loadOtelState();
 		chrome.storage.onChanged.addListener(this.storageChangeListener);
 	}
 
@@ -55,6 +65,7 @@ export class BridgeTab extends SettingsTab {
 		this.url = settings.url;
 		this.token = settings.token;
 		this.sensitiveAccessEnabled = settings.sensitiveAccessEnabled;
+		this.observability = settings.observability;
 		if (!this.enabled && this.bridgeState !== "disabled") {
 			this.bridgeState = "disabled";
 			this.bridgeDetail = undefined;
@@ -71,6 +82,10 @@ export class BridgeTab extends SettingsTab {
 		this.bridgeDetail = stateData.detail;
 	}
 
+	private applyOtelState(stateData?: BridgeOtelStateData) {
+		this.otelState = stateData ?? { state: this.observability.enabled ? "idle" : "disabled" };
+	}
+
 	private async loadSettings() {
 		const result = await chrome.storage.local.get(BRIDGE_SETTINGS_KEY);
 		this.applySettings(normalizeBridgeSettings(result[BRIDGE_SETTINGS_KEY] as BridgeSettings | undefined));
@@ -81,6 +96,11 @@ export class BridgeTab extends SettingsTab {
 		this.applyBridgeState(result[BRIDGE_STATE_KEY] as BridgeStateData | undefined);
 	}
 
+	private async loadOtelState() {
+		const result = await chrome.storage.session.get(BRIDGE_OTEL_STATE_KEY);
+		this.applyOtelState(result[BRIDGE_OTEL_STATE_KEY] as BridgeOtelStateData | undefined);
+	}
+
 	private async persistSettings() {
 		await chrome.storage.local.set({
 			[BRIDGE_SETTINGS_KEY]: {
@@ -88,6 +108,7 @@ export class BridgeTab extends SettingsTab {
 				url: this.url,
 				token: this.token,
 				sensitiveAccessEnabled: this.sensitiveAccessEnabled,
+				observability: this.observability,
 			},
 		});
 	}
@@ -103,6 +124,18 @@ export class BridgeTab extends SettingsTab {
 
 	private async setSensitiveAccessEnabled(enabled: boolean) {
 		this.sensitiveAccessEnabled = enabled;
+		await this.persistSettings();
+	}
+
+	private async setObservabilityEnabled(enabled: boolean) {
+		this.observability = {
+			...this.observability,
+			enabled,
+		};
+		await this.persistSettings();
+	}
+
+	private async commitObservabilitySettings() {
 		await this.persistSettings();
 	}
 
@@ -147,6 +180,32 @@ export class BridgeTab extends SettingsTab {
 			return "Enter the remote bridge token to connect to a LAN or remote bridge.";
 		}
 		return "Check the remote bridge URL and token if the bridge stays disconnected.";
+	}
+
+	private observabilityStateLabel(): string {
+		switch (this.otelState.state) {
+			case "disabled":
+				return "Disabled";
+			case "idle":
+				return "Idle";
+			case "ok":
+				return this.otelState.lastExportedAt ? `Exported ${this.otelState.lastExportedAt}` : "Healthy";
+			case "error":
+				return this.otelState.lastError ? `Error: ${this.otelState.lastError}` : "Export error";
+		}
+	}
+
+	private observabilityStateColor(): string {
+		switch (this.otelState.state) {
+			case "ok":
+				return "text-green-400";
+			case "error":
+				return "text-red-400";
+			case "idle":
+				return "text-yellow-400";
+			default:
+				return "text-muted-foreground";
+		}
 	}
 
 	render(): TemplateResult {
@@ -199,6 +258,68 @@ export class BridgeTab extends SettingsTab {
 					</label>
 					<p class="text-xs text-red-200">
 						Only enable this when you trust the CLI client and bridge server on this machine or network.
+					</p>
+				</div>
+
+				<div class="p-3 rounded-lg border border-border bg-muted/30 space-y-3">
+					<div class="flex items-center justify-between gap-3">
+						<div class="space-y-1">
+							<div class="text-sm font-medium text-foreground">Maple OTEL tracing</div>
+							<p class="text-xs text-muted-foreground">
+								Exports bridge and debugger spans from the extension runtime to the local Maple ingest endpoint.
+							</p>
+						</div>
+						<span class="text-xs font-medium ${this.observabilityStateColor()}">${this.observabilityStateLabel()}</span>
+					</div>
+					<label class="flex items-center gap-3 cursor-pointer">
+						<input
+							type="checkbox"
+							class="w-4 h-4 rounded border-border accent-primary"
+							.checked=${this.observability.enabled}
+							@change=${(e: Event) => this.setObservabilityEnabled((e.target as HTMLInputElement).checked)}
+						/>
+						<span class="text-sm font-medium text-foreground">Enable Maple OTEL trace export</span>
+					</label>
+					<div class="space-y-1">
+						<label class="text-xs font-medium text-muted-foreground">Maple ingest URL</label>
+						<input
+							type="text"
+							class="w-full px-3 py-2 text-sm rounded-md border border-border bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+							placeholder="http://localhost:3474"
+							.value=${this.observability.ingestUrl}
+							@input=${(e: Event) => {
+								this.observability = {
+									...this.observability,
+									ingestUrl: (e.target as HTMLInputElement).value,
+								};
+							}}
+							@blur=${() => this.commitObservabilitySettings()}
+							@keydown=${(e: KeyboardEvent) => {
+								if (e.key === "Enter") this.commitObservabilitySettings();
+							}}
+						/>
+					</div>
+					<div class="space-y-1">
+						<label class="text-xs font-medium text-muted-foreground">Maple public ingest key</label>
+						<input
+							type="password"
+							class="w-full px-3 py-2 text-sm rounded-md border border-border bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+							placeholder="maple_pk_..."
+							.value=${this.observability.publicIngestKey}
+							@input=${(e: Event) => {
+								this.observability = {
+									...this.observability,
+									publicIngestKey: (e.target as HTMLInputElement).value,
+								};
+							}}
+							@blur=${() => this.commitObservabilitySettings()}
+							@keydown=${(e: KeyboardEvent) => {
+								if (e.key === "Enter") this.commitObservabilitySettings();
+							}}
+						/>
+					</div>
+					<p class="text-xs text-muted-foreground">
+						Use a Maple public key here. CLI and bridge server tracing use a private key via env or config.
 					</p>
 				</div>
 

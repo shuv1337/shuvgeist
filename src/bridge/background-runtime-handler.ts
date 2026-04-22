@@ -22,6 +22,7 @@ import { NativeInputEventsRuntimeProvider } from "../tools/NativeInputEventsRunt
 import { type NavigateParams, NavigateTool } from "../tools/navigate.js";
 import { checkUserScriptsAvailability } from "../tools/repl/userscripts-helpers.js";
 import type { BgRuntimeExecResponse, BgRuntimeType } from "./internal-messages.js";
+import type { BridgeTelemetry, TraceContext } from "./telemetry.js";
 
 // ---------------------------------------------------------------------------
 // Active execution registry
@@ -175,6 +176,8 @@ const FIXED_WORLD_ID = "shuvgeist-browser-script";
 export async function handleBgBrowserJs(
 	payload: Record<string, unknown>,
 	windowId: number | undefined,
+	telemetry?: BridgeTelemetry,
+	traceContext?: TraceContext,
 ): Promise<BgRuntimeExecResponse> {
 	const apiCheck = await checkUserScriptsAvailability();
 	if (!apiCheck.available) {
@@ -237,6 +240,8 @@ export async function handleBgBrowserJs(
 		nativeInput: new NativeInputEventsRuntimeProvider({
 			windowId,
 			debuggerManager: getSharedDebuggerManager(),
+			telemetry,
+			traceContext,
 		}),
 	});
 
@@ -313,6 +318,8 @@ export async function handleBgBrowserJs(
 export async function handleBgNavigate(
 	payload: Record<string, unknown>,
 	windowId: number | undefined,
+	_telemetry?: BridgeTelemetry,
+	_traceContext?: TraceContext,
 ): Promise<BgRuntimeExecResponse> {
 	try {
 		const navigateTool = new NavigateTool({ windowId });
@@ -341,10 +348,14 @@ export async function handleBgNavigate(
 export async function handleBgNativeInput(
 	payload: Record<string, unknown>,
 	windowId: number | undefined,
+	telemetry?: BridgeTelemetry,
+	traceContext?: TraceContext,
 ): Promise<BgRuntimeExecResponse> {
 	const provider = new NativeInputEventsRuntimeProvider({
 		windowId,
 		debuggerManager: getSharedDebuggerManager(),
+		telemetry,
+		traceContext,
 	});
 
 	return new Promise((resolve) => {
@@ -379,15 +390,45 @@ export async function handleBgRuntimeExec(
 	runtimeType: BgRuntimeType,
 	payload: Record<string, unknown>,
 	windowId: number | undefined,
+	telemetry?: BridgeTelemetry,
+	traceContext?: TraceContext,
 ): Promise<BgRuntimeExecResponse> {
-	switch (runtimeType) {
-		case "browser-js":
-			return handleBgBrowserJs(payload, windowId);
-		case "navigate":
-			return handleBgNavigate(payload, windowId);
-		case "native-input":
-			return handleBgNativeInput(payload, windowId);
-		default:
-			return { success: false, error: `Unknown runtime type: ${runtimeType as string}` };
+	const span = telemetry?.startSpan(`background.runtime.${runtimeType}`, {
+		parent: traceContext,
+		attributes: {
+			"runtime.type": runtimeType,
+			"runtime.window_id": windowId,
+		},
+	});
+	try {
+		let response: BgRuntimeExecResponse;
+		switch (runtimeType) {
+			case "browser-js":
+				response = await handleBgBrowserJs(payload, windowId, telemetry, span?.context);
+				break;
+			case "navigate":
+				response = await handleBgNavigate(payload, windowId, telemetry, span?.context);
+				break;
+			case "native-input":
+				response = await handleBgNativeInput(payload, windowId, telemetry, span?.context);
+				break;
+			default:
+				response = { success: false, error: `Unknown runtime type: ${runtimeType as string}` };
+				break;
+		}
+		span?.setAttribute("runtime.success", response.success);
+		if (response.error) {
+			span?.recordError(new Error(response.error));
+			span?.end("error");
+		} else {
+			span?.end("ok");
+		}
+		return response;
+	} catch (error) {
+		span?.recordError(error);
+		span?.end("error");
+		throw error;
+	} finally {
+		await telemetry?.flush();
 	}
 }

@@ -1,5 +1,6 @@
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { AgentTool, AgentToolUpdateCallback } from "@mariozechner/pi-agent-core";
 import { type Static, StringEnum, Type } from "@mariozechner/pi-ai";
+import type { TraceContext } from "../bridge/telemetry.js";
 import { resolveBrowserTarget } from "./helpers/browser-target.js";
 import { type DebuggerManager, getSharedDebuggerManager } from "./helpers/debugger-manager.js";
 
@@ -73,6 +74,25 @@ CRITICAL: Use browserjs() and repl tool for DOM manipulation. Use this ONLY for 
 		toolCallId: string,
 		args: DebuggerParams,
 		signal?: AbortSignal,
+		_onUpdate?: AgentToolUpdateCallback<DebuggerResult>,
+	): Promise<{ content: Array<{ type: "text"; text: string }>; details: DebuggerResult }> {
+		return this.executeInternal(toolCallId, args, signal);
+	}
+
+	async executeBridge(
+		toolCallId: string,
+		args: DebuggerParams,
+		signal?: AbortSignal,
+		traceContext?: TraceContext,
+	): Promise<{ content: Array<{ type: "text"; text: string }>; details: DebuggerResult }> {
+		return this.executeInternal(toolCallId, args, signal, traceContext);
+	}
+
+	private async executeInternal(
+		toolCallId: string,
+		args: DebuggerParams,
+		signal?: AbortSignal,
+		traceContext?: TraceContext,
 	): Promise<{ content: Array<{ type: "text"; text: string }>; details: DebuggerResult }> {
 		if (signal?.aborted) {
 			throw new Error("Debugger command aborted");
@@ -133,13 +153,18 @@ CRITICAL: Use browserjs() and repl tool for DOM manipulation. Use this ONLY for 
 				}
 
 				const owner = `debugger:${toolCallId}:${tabId}`;
-				await this.debuggerManager.acquire(tabId, owner);
+				await this.debuggerManager.acquireWithTrace(tabId, owner, { parent: traceContext });
 				try {
-					await this.debuggerManager.ensureDomain(tabId, "Runtime");
-					const result = await this.debuggerManager.sendCommand<unknown>(tabId, "Runtime.evaluate", {
-						expression: args.code,
-						returnByValue: true,
-					});
+					await this.debuggerManager.ensureDomainWithTrace(tabId, "Runtime", { parent: traceContext });
+					const result = await this.debuggerManager.sendCommandWithTrace<unknown>(
+						tabId,
+						"Runtime.evaluate",
+						{
+							expression: args.code,
+							returnByValue: true,
+						},
+						{ parent: traceContext },
+					);
 					const details: DebuggerResult = { value: result };
 
 					let output = "";
@@ -153,7 +178,7 @@ CRITICAL: Use browserjs() and repl tool for DOM manipulation. Use this ONLY for 
 
 					return { content: [{ type: "text", text: output }], details };
 				} finally {
-					await this.debuggerManager.release(tabId, owner);
+					await this.debuggerManager.releaseWithTrace(tabId, owner, { parent: traceContext });
 				}
 			}
 

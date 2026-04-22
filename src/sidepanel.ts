@@ -20,7 +20,7 @@ import {
 	setShowJsonMode,
 } from "@mariozechner/pi-web-ui";
 import { html, render } from "lit";
-import { Crosshair, History, Plus, Settings } from "lucide";
+import { Crosshair, History, Plus, Settings, Volume2 } from "lucide";
 import { BrowserCommandExecutor } from "./bridge/browser-command-executor.js";
 import {
 	BRIDGE_STATE_KEY,
@@ -60,6 +60,7 @@ import { SessionCostDialog } from "./dialogs/SessionCostDialog.js";
 import { ShuvgeistSessionListDialog } from "./dialogs/SessionListDialog.js";
 import { ShuvgeistProvidersTab } from "./dialogs/ShuvgeistProvidersTab.js";
 import { SkillsTab } from "./dialogs/SkillsTab.js";
+import { TtsTab } from "./dialogs/TtsTab.js";
 import { UpdateNotificationDialog } from "./dialogs/UpdateNotificationDialog.js";
 import { UserScriptsPermissionDialog } from "./dialogs/UserScriptsPermissionDialog.js";
 import { WelcomeSetupDialog } from "./dialogs/WelcomeSetupDialog.js";
@@ -87,6 +88,7 @@ import { isToolNavigating, NavigateTool } from "./tools/navigate.js";
 import { createReplTool, executeJavaScript } from "./tools/repl/repl.js";
 import { registerReplRenderer } from "./tools/repl/repl-renderer.js";
 import { BrowserJsRuntimeProvider, NavigateRuntimeProvider } from "./tools/repl/runtime-providers.js";
+import { checkUserScriptsAvailability } from "./tools/repl/userscripts-helpers.js";
 import { registerSkillRenderer } from "./tools/skill-renderer.js";
 import * as port from "./utils/port.js";
 import { clearShownSkills } from "./utils/shown-skills.js";
@@ -381,6 +383,7 @@ function openApiKeysDialog(): Promise<void> {
 			[
 				new ShuvgeistProvidersTab(),
 				new ApiKeysOAuthTab(),
+				new TtsTab(),
 				new CostsTab(),
 				new SkillsTab(),
 				new BridgeTab(),
@@ -1366,6 +1369,39 @@ const newSession = () => {
 	window.location.href = url.toString();
 };
 
+const openSettingsDialog = () =>
+	SettingsDialog.open([
+		new ShuvgeistProvidersTab(),
+		new ApiKeysOAuthTab(),
+		new TtsTab(),
+		new CostsTab(),
+		new SkillsTab(),
+		new BridgeTab(),
+		new AboutTab(),
+	]);
+
+const onOpenTtsOverlayClick = async () => {
+	const availability = await checkUserScriptsAvailability();
+	if (!availability.available) {
+		await UserScriptsPermissionDialog.request();
+		const retry = await checkUserScriptsAvailability();
+		if (!retry.available) {
+			Toast.show(retry.message || availability.message || "userScripts API is unavailable", "error");
+			return;
+		}
+	}
+
+	const response = await chrome.runtime.sendMessage({
+		type: "tts-open-overlay",
+		windowId: currentWindowId,
+	});
+	if (!response?.ok) {
+		Toast.show(response?.error || "Failed to open TTS overlay", "error");
+		return;
+	}
+	Toast.success("TTS overlay opened");
+};
+
 // ============================================================================
 // RENDER
 // ============================================================================
@@ -1481,16 +1517,15 @@ const renderApp = () => {
 					${Button({
 						variant: "ghost",
 						size: "sm",
+						children: icon(Volume2, "sm"),
+						onClick: onOpenTtsOverlayClick,
+						title: "Text to speech",
+					})}
+					${Button({
+						variant: "ghost",
+						size: "sm",
 						children: icon(Settings, "sm"),
-						onClick: () =>
-							SettingsDialog.open([
-								new ShuvgeistProvidersTab(),
-								new ApiKeysOAuthTab(),
-								new CostsTab(),
-								new SkillsTab(),
-								new BridgeTab(),
-								new AboutTab(),
-							]),
+						onClick: () => openSettingsDialog(),
 						title: "Settings",
 					})}
 				</div>

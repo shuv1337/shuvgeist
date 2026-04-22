@@ -19,7 +19,11 @@ Object.defineProperty(globalThis, "localStorage", {
 });
 
 import { BridgeTab } from "../../../src/dialogs/BridgeTab.js";
-import { BRIDGE_SETTINGS_KEY, BRIDGE_STATE_KEY } from "../../../src/bridge/internal-messages.js";
+import {
+	BRIDGE_OTEL_STATE_KEY,
+	BRIDGE_SETTINGS_KEY,
+	BRIDGE_STATE_KEY,
+} from "../../../src/bridge/internal-messages.js";
 
 declare global {
 	var chrome: typeof chrome;
@@ -54,10 +58,16 @@ describe("BridgeTab", () => {
 				url: "ws://127.0.0.1:19285/ws",
 				token: "",
 				sensitiveAccessEnabled: false,
+				observability: {
+					enabled: false,
+					ingestUrl: "http://localhost:3474",
+					publicIngestKey: "",
+				},
 			},
 		});
 		sessionArea = createStorageArea({
 			[BRIDGE_STATE_KEY]: { state: "disconnected", detail: "waiting" },
+			[BRIDGE_OTEL_STATE_KEY]: { state: "disabled" },
 		});
 		listeners = [];
 		globalThis.chrome = {
@@ -85,6 +95,7 @@ describe("BridgeTab", () => {
 
 		expect(tab.textContent).toContain("CLI Bridge");
 		expect(tab.textContent).toContain("Disconnected");
+		expect(tab.textContent).toContain("Maple OTEL tracing");
 		expect(tab.textContent).toContain("Run any `shuvgeist` command or `shuvgeist serve` to start the local bridge.");
 		expect(tab.textContent).not.toContain("Enter the remote bridge token");
 		tab.remove();
@@ -122,8 +133,16 @@ describe("BridgeTab", () => {
 		expect(localArea._state[BRIDGE_SETTINGS_KEY]).toMatchObject({ sensitiveAccessEnabled: true });
 
 		const inputs = tab.querySelectorAll('input[type="text"], input[type="password"]');
-		const urlInput = inputs[0] as HTMLInputElement;
-		const tokenInput = inputs[1] as HTMLInputElement;
+		const ingestUrlInput = inputs[0] as HTMLInputElement;
+		const ingestKeyInput = inputs[1] as HTMLInputElement;
+		const urlInput = inputs[2] as HTMLInputElement;
+		const tokenInput = inputs[3] as HTMLInputElement;
+		ingestUrlInput.value = "http://localhost:3474";
+		ingestUrlInput.dispatchEvent(new Event("input"));
+		ingestUrlInput.dispatchEvent(new Event("blur"));
+		ingestKeyInput.value = "maple_pk_test";
+		ingestKeyInput.dispatchEvent(new Event("input"));
+		ingestKeyInput.dispatchEvent(new Event("blur"));
 		urlInput.value = "ws://bridge.example:19285/ws";
 		urlInput.dispatchEvent(new Event("input"));
 		urlInput.dispatchEvent(new Event("blur"));
@@ -135,7 +154,41 @@ describe("BridgeTab", () => {
 		expect(localArea._state[BRIDGE_SETTINGS_KEY]).toMatchObject({
 			url: "ws://bridge.example:19285/ws",
 			token: "manual-token",
+			observability: {
+				enabled: false,
+				ingestUrl: "http://localhost:3474",
+				publicIngestKey: "maple_pk_test",
+			},
 		});
+		tab.remove();
+	});
+
+	it("writes observability toggle and reacts to OTEL session-state updates", async () => {
+		const tab = new BridgeTab();
+		document.body.appendChild(tab);
+		await tab.updateComplete;
+		await Promise.resolve();
+		await tab.updateComplete;
+
+		const checkboxes = tab.querySelectorAll('input[type="checkbox"]');
+		const observabilityToggle = checkboxes[2] as HTMLInputElement;
+		observabilityToggle.checked = true;
+		observabilityToggle.dispatchEvent(new Event("change"));
+		await Promise.resolve();
+
+		expect(localArea._state[BRIDGE_SETTINGS_KEY]).toMatchObject({
+			observability: {
+				enabled: true,
+			},
+		});
+
+		(tab as unknown as { applyOtelState: (state: { state: "ok"; lastExportedAt: string }) => void }).applyOtelState({
+			state: "ok",
+			lastExportedAt: "2026-04-22T12:00:00.000Z",
+		});
+		expect(
+			(tab as unknown as { observabilityStateLabel: () => string }).observabilityStateLabel(),
+		).toBe("Exported 2026-04-22T12:00:00.000Z");
 		tab.remove();
 	});
 
@@ -146,9 +199,8 @@ describe("BridgeTab", () => {
 		await Promise.resolve();
 		await Promise.resolve();
 		await tab.updateComplete;
-		expect(listeners.length).toBeGreaterThan(0);
 
-		listeners[0](
+		((tab as unknown as { storageChangeListener: typeof listeners[number] }).storageChangeListener)(
 			{
 				[BRIDGE_STATE_KEY]: {
 					oldValue: { state: "disconnected", detail: "waiting" },
@@ -173,6 +225,11 @@ describe("BridgeTab", () => {
 				url: "ws://192.168.1.44:19285/ws",
 				token: "",
 				sensitiveAccessEnabled: false,
+				observability: {
+					enabled: false,
+					ingestUrl: "http://localhost:3474",
+					publicIngestKey: "",
+				},
 			},
 		});
 		globalThis.chrome.storage.local = localArea as unknown as chrome.storage.LocalStorageArea;

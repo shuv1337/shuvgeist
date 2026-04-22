@@ -19,6 +19,11 @@ describe("bridge settings helpers", () => {
 			url: "ws://127.0.0.1:19285/ws",
 			token: "",
 			sensitiveAccessEnabled: false,
+			observability: {
+				enabled: false,
+				ingestUrl: "http://localhost:3474",
+				publicIngestKey: "",
+			},
 		});
 	});
 
@@ -29,6 +34,11 @@ describe("bridge settings helpers", () => {
 				url: "ws://bridge.example/ws",
 				token: "manual-token",
 				sensitiveAccessEnabled: true,
+				observability: {
+					enabled: true,
+					ingestUrl: "http://localhost:3474",
+					publicIngestKey: "maple_pk_demo",
+				},
 			}),
 			setLocalSettings: vi.fn<(_: BridgeSettings) => Promise<void>>(),
 		};
@@ -43,6 +53,11 @@ describe("bridge settings helpers", () => {
 				url: "ws://bridge.example/ws",
 				token: "manual-token",
 				sensitiveAccessEnabled: true,
+				observability: {
+					enabled: true,
+					ingestUrl: "http://localhost:3474",
+					publicIngestKey: "maple_pk_demo",
+				},
 			},
 			source: "local",
 			seededLocalStorage: false,
@@ -69,6 +84,11 @@ describe("bridge settings helpers", () => {
 				url: "ws://192.168.1.50:19285/ws",
 				token: "legacy-token",
 				sensitiveAccessEnabled: true,
+				observability: {
+					enabled: false,
+					ingestUrl: "http://localhost:3474",
+					publicIngestKey: "",
+				},
 			},
 			source: "legacy",
 			seededLocalStorage: true,
@@ -178,5 +198,11 @@ describe("bridge settings helpers", () => {
 		expect(settingsRequireReconnect(base, { ...base, token: "x" })).toBe(true);
 		expect(settingsRequireReconnect(base, { ...base, sensitiveAccessEnabled: true })).toBe(true);
 		expect(settingsRequireReconnect(base, { ...base, enabled: false })).toBe(true);
+		expect(
+			settingsRequireReconnect(base, {
+				...base,
+				observability: { ...base.observability, enabled: true },
+			}),
+		).toBe(false);
 	});
 });

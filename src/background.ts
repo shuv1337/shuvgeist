@@ -24,8 +24,10 @@ import { bootstrapTokenIfNeeded } from "./bridge/bootstrap.js";
 import { BrowserCommandExecutor, type ReplRouter, type ScreenshotRouter } from "./bridge/browser-command-executor.js";
 import { BridgeClient } from "./bridge/extension-client.js";
 import {
+	BRIDGE_OTEL_STATE_KEY,
 	BRIDGE_SETTINGS_KEY,
 	BRIDGE_STATE_KEY,
+	type BridgeOtelStateData,
 	type BridgeReplMessageResponse,
 	type BridgeSessionCommandMessageResponse,
 	type BridgeSettings,
@@ -40,10 +42,36 @@ import {
 	loadBridgeSettings,
 	settingsRequireReconnect,
 } from "./bridge/settings.js";
+import { BridgeTelemetry, formatTraceparent, parseTraceparent } from "./bridge/telemetry.js";
 import { ShuvgeistAppStorage } from "./storage/app-storage.js";
-import { isUsableWindowId, resolveTabTarget } from "./tools/helpers/browser-target.js";
-import { getSharedDebuggerManager } from "./tools/helpers/debugger-manager.js";
+import { isProtectedTabUrl, isUsableWindowId, resolveTabTarget } from "./tools/helpers/browser-target.js";
+import { configureSharedDebuggerManagerTelemetry, getSharedDebuggerManager } from "./tools/helpers/debugger-manager.js";
+import type {
+	TtsOffscreenMessage,
+	TtsOffscreenResponse,
+	TtsOverlayMessage,
+	TtsRuntimeMessage,
+	TtsRuntimeResponse,
+} from "./tts/internal-messages.js";
+import { configureTtsOverlayWorld, injectTtsOverlay, removeTtsOverlay } from "./tts/overlay-inject.js";
+import {
+	buildProviderConfig,
+	getProviderVoiceId,
+	getSampleTtsPhrase,
+	listTtsVoices,
+	prepareTtsText,
+} from "./tts/service.js";
+import { DEFAULT_TTS_SETTINGS, loadTtsSettings } from "./tts/settings.js";
+import {
+	createInitialTtsPlaybackState,
+	reduceTtsPlaybackState,
+	type TtsOverlayState,
+	type TtsProviderId,
+	type TtsSettingsSnapshot,
+	type TtsVoice,
+} from "./tts/types.js";
 import type { SidepanelToBackgroundMessage } from "./utils/port.js";
+import { getShuvgeistVersion } from "./version.js";
 
 // ============================================================================
 // SIDEPANEL STATE TRACKING
@@ -69,6 +97,28 @@ function ensureBackgroundStorage(): ShuvgeistAppStorage {
 	return backgroundStorage;
 }
 
+async function setBridgeOtelState(state: BridgeOtelStateData): Promise<void> {
+	await chrome.storage.session.set({ [BRIDGE_OTEL_STATE_KEY]: state });
+}
+
+const extensionTelemetry = new BridgeTelemetry(
+	{
+		serviceName: "shuvgeist-extension",
+		serviceVersion: getShuvgeistVersion(),
+		resourceAttributes: {
+			"app.environment": "extension",
+		},
+	},
+	{
+		onExportStateChange: (state) => {
+			void setBridgeOtelState(state);
+		},
+	},
+);
+
+configureSharedDebuggerManagerTelemetry(extensionTelemetry);
+void setBridgeOtelState(extensionTelemetry.getExportState());
+
 let openSidepanels = new Set<number>();
 
 chrome.storage.session.get(SIDEPANEL_OPEN_KEY, (data) => {
@@ -81,8 +131,80 @@ function isSidepanelOpen(): boolean {
 }
 
 // ============================================================================
-// OFFSCREEN DOCUMENT MANAGEMENT
+// TTS RUNTIME STATE
 // ============================================================================
+
+let ttsSettingsSnapshot: TtsSettingsSnapshot = DEFAULT_TTS_SETTINGS;
+let ttsVoices: TtsVoice[] = [];
+let ttsState = createInitialTtsPlaybackState(DEFAULT_TTS_SETTINGS, []);
+let ttsOverlayTabId: number | null = null;
+let ttsWorldConfigured = false;
+
+function getBackgroundProviderSecrets() {
+	const storage = ensureBackgroundStorage();
+	return Promise.all([
+		storage.providerKeys.get("openai"),
+		storage.providerKeys.get("tts-elevenlabs"),
+		storage.providerKeys.get("tts-kokoro"),
+	]).then(([openaiKey, elevenLabsKey, kokoroKey]) => ({
+		openaiKey: typeof openaiKey === "string" ? openaiKey : undefined,
+		elevenLabsKey: typeof elevenLabsKey === "string" ? elevenLabsKey : undefined,
+		kokoroKey: typeof kokoroKey === "string" ? kokoroKey : undefined,
+	}));
+}
+
+async function refreshTtsSettingsState(): Promise<void> {
+	ensureBackgroundStorage();
+	ttsSettingsSnapshot = await loadTtsSettings();
+	const providerSecrets = await getBackgroundProviderSecrets();
+	ttsVoices = await listTtsVoices(ttsSettingsSnapshot.provider, ttsSettingsSnapshot, providerSecrets).catch(
+		(error) => {
+			console.warn("[Background:TTS] Failed to list voices:", error);
+			return [];
+		},
+	);
+	ttsState = reduceTtsPlaybackState(ttsState, {
+		type: "sync-settings",
+		settings: ttsSettingsSnapshot,
+		voices: ttsVoices,
+	});
+}
+
+function currentTtsOverlayState(): TtsOverlayState {
+	return {
+		...ttsState,
+		enabled: ttsSettingsSnapshot.enabled,
+	};
+}
+
+async function ensureTtsOverlayWorld(): Promise<void> {
+	if (ttsWorldConfigured) return;
+	await configureTtsOverlayWorld();
+	ttsWorldConfigured = true;
+}
+
+async function syncTtsOverlay(): Promise<void> {
+	if (!ttsOverlayTabId || !ttsState.overlayVisible) return;
+	await ensureTtsOverlayWorld();
+	await injectTtsOverlay(ttsOverlayTabId, currentTtsOverlayState());
+}
+
+async function closeTtsOverlay(tabId = ttsOverlayTabId): Promise<void> {
+	if (!tabId) return;
+	try {
+		await removeTtsOverlay(tabId);
+	} catch (error) {
+		console.warn("[Background:TTS] Failed to remove overlay:", error);
+	}
+	if (tabId === ttsOverlayTabId) {
+		ttsState = reduceTtsPlaybackState(ttsState, { type: "overlay-closed" });
+		ttsOverlayTabId = null;
+	}
+}
+
+export function getOffscreenDocumentReasons(): chrome.offscreen.Reason[] {
+	return [chrome.offscreen.Reason.WORKERS, chrome.offscreen.Reason.AUDIO_PLAYBACK, chrome.offscreen.Reason.BLOBS];
+}
 
 let offscreenReady = false;
 let offscreenSetupPromise: Promise<void> | null = null;
@@ -127,19 +249,12 @@ async function ensureOffscreenDocument(): Promise<void> {
 			documentUrls: [offscreenUrl],
 		});
 		if (contexts.length === 0) {
-			try {
-				await chrome.offscreen.createDocument({
-					url: "offscreen.html",
-					reasons: [chrome.offscreen.Reason.WORKERS],
-					justification: "REPL sandbox execution for bridge commands",
-				});
-				console.log("[Background] Offscreen document created");
-			} catch (err) {
-				console.error("[Background] Failed to create offscreen document:", err);
-				throw err;
-			}
+			await chrome.offscreen.createDocument({
+				url: "offscreen.html",
+				reasons: getOffscreenDocumentReasons(),
+				justification: "REPL sandbox execution and TTS audio playback",
+			});
 		}
-
 		await waitForOffscreenDocumentReady();
 	})();
 
@@ -150,15 +265,272 @@ async function ensureOffscreenDocument(): Promise<void> {
 	}
 }
 
+async function getTtsStateResponse(): Promise<TtsRuntimeResponse> {
+	await refreshTtsSettingsState();
+	return {
+		ok: true,
+		state: ttsState,
+		settings: ttsSettingsSnapshot,
+	};
+}
+
+async function dispatchTtsOffscreenMessage(message: TtsOffscreenMessage): Promise<TtsOffscreenResponse> {
+	await ensureOffscreenDocument();
+	const response = await sendMessageSafe<TtsOffscreenResponse>(message);
+	if (!response) {
+		return {
+			ok: false,
+			error: "Offscreen TTS runtime is unavailable",
+		};
+	}
+	return response;
+}
+
+async function applyOffscreenEvent(response: TtsOffscreenResponse): Promise<void> {
+	if (!response.ok) {
+		ttsState = reduceTtsPlaybackState(ttsState, {
+			type: "error",
+			message: response.error,
+		});
+		await syncTtsOverlay();
+		return;
+	}
+
+	ttsState = reduceTtsPlaybackState(
+		ttsState,
+		response.event === "playing"
+			? { type: "playing" }
+			: response.event === "paused"
+				? { type: "paused" }
+				: { type: "stopped" },
+	);
+	await syncTtsOverlay();
+}
+
+async function speakText(text: string, source: "overlay" | "click" | "sidepanel"): Promise<TtsRuntimeResponse> {
+	await refreshTtsSettingsState();
+	if (!ttsSettingsSnapshot.enabled) {
+		return { ok: false, error: "TTS is disabled in settings" };
+	}
+
+	const prepared = prepareTtsText(text, ttsSettingsSnapshot.maxTextChars);
+	if (!prepared.text) {
+		return { ok: false, error: "No readable text to speak" };
+	}
+
+	const providerSecrets = await getBackgroundProviderSecrets();
+	const voiceId = ttsState.voiceId || getProviderVoiceId(ttsSettingsSnapshot, ttsSettingsSnapshot.provider);
+	ttsState = reduceTtsPlaybackState(ttsState, {
+		type: "speak-start",
+		text: prepared.text,
+		truncated: prepared.truncated,
+	});
+	console.log("[Background:TTS] speak start", {
+		provider: ttsSettingsSnapshot.provider,
+		source,
+		length: prepared.text.length,
+		truncated: prepared.truncated,
+	});
+	await syncTtsOverlay();
+
+	const response = await dispatchTtsOffscreenMessage({
+		type: "tts-offscreen-synthesize",
+		provider: ttsSettingsSnapshot.provider,
+		request: {
+			text: prepared.text,
+			voiceId,
+			speed: ttsSettingsSnapshot.speed,
+			modelId:
+				ttsSettingsSnapshot.provider === "kokoro"
+					? ttsSettingsSnapshot.kokoroModelId
+					: ttsSettingsSnapshot.provider === "openai"
+						? ttsSettingsSnapshot.openaiModelId
+						: ttsSettingsSnapshot.elevenLabsModelId,
+		},
+		config: buildProviderConfig(ttsSettingsSnapshot, ttsSettingsSnapshot.provider, providerSecrets),
+	});
+
+	await applyOffscreenEvent(response);
+	return response.ok
+		? {
+				ok: true,
+				state: ttsState,
+				settings: ttsSettingsSnapshot,
+			}
+		: {
+				ok: false,
+				error: response.error,
+			};
+}
+
+async function openTtsOverlay(windowId?: number): Promise<TtsRuntimeResponse> {
+	await refreshTtsSettingsState();
+	if (!ttsSettingsSnapshot.enabled) {
+		return { ok: false, error: "TTS is disabled in settings" };
+	}
+	if (!chrome.userScripts?.execute) {
+		return { ok: false, error: "userScripts API is not available" };
+	}
+
+	const { tab, tabId } = await resolveTabTarget({ windowId });
+	if (isProtectedTabUrl(tab.url)) {
+		return { ok: false, error: "Cannot open the TTS overlay on this page" };
+	}
+
+	if (ttsOverlayTabId && ttsOverlayTabId !== tabId) {
+		await removeTtsOverlay(ttsOverlayTabId).catch(() => {});
+	}
+
+	await ensureTtsOverlayWorld();
+	ttsOverlayTabId = tabId;
+	ttsState = reduceTtsPlaybackState(ttsState, { type: "overlay-opened" });
+	await syncTtsOverlay();
+	return {
+		ok: true,
+		state: ttsState,
+		settings: ttsSettingsSnapshot,
+	};
+}
+
+async function handleTtsRuntimeMessage(message: TtsRuntimeMessage): Promise<TtsRuntimeResponse> {
+	switch (message.type) {
+		case "tts-open-overlay":
+			return openTtsOverlay(message.windowId);
+		case "tts-close-overlay":
+			await closeTtsOverlay(message.tabId);
+			return getTtsStateResponse();
+		case "tts-get-state":
+			return getTtsStateResponse();
+		case "tts-speak-test-phrase":
+			return speakText(message.text || getSampleTtsPhrase(), "sidepanel");
+		case "tts-speak-text":
+			return speakText(message.text, message.source || "sidepanel");
+		case "tts-pause": {
+			const response = await dispatchTtsOffscreenMessage({ type: "tts-offscreen-pause" });
+			await applyOffscreenEvent(response);
+			return response.ok ? getTtsStateResponse() : { ok: false, error: response.error };
+		}
+		case "tts-resume": {
+			const response = await dispatchTtsOffscreenMessage({ type: "tts-offscreen-resume" });
+			await applyOffscreenEvent(response);
+			return response.ok ? getTtsStateResponse() : { ok: false, error: response.error };
+		}
+		case "tts-stop": {
+			const response = await dispatchTtsOffscreenMessage({ type: "tts-offscreen-stop" });
+			await applyOffscreenEvent(response);
+			return response.ok ? getTtsStateResponse() : { ok: false, error: response.error };
+		}
+		case "tts-set-click-mode":
+			ttsState = reduceTtsPlaybackState(ttsState, {
+				type: "set-click-mode",
+				armed: message.armed,
+			});
+			await syncTtsOverlay();
+			return getTtsStateResponse();
+		case "tts-set-provider": {
+			const provider = message.provider as TtsProviderId;
+			const storage = ensureBackgroundStorage();
+			await storage.settings.set("tts.provider", provider);
+			ttsSettingsSnapshot = {
+				...ttsSettingsSnapshot,
+				provider,
+			};
+			const providerSecrets = await getBackgroundProviderSecrets();
+			ttsVoices = await listTtsVoices(provider, ttsSettingsSnapshot, providerSecrets).catch(() => []);
+			const voiceId = getProviderVoiceId(ttsSettingsSnapshot, provider);
+			ttsSettingsSnapshot = {
+				...ttsSettingsSnapshot,
+				voiceId,
+			};
+			ttsState = reduceTtsPlaybackState(ttsState, {
+				type: "set-provider",
+				provider,
+				voiceId,
+				voices: ttsVoices,
+			});
+			await storage.settings.set("tts.voiceId", voiceId);
+			await syncTtsOverlay();
+			return getTtsStateResponse();
+		}
+		case "tts-set-voice":
+			ttsState = reduceTtsPlaybackState(ttsState, {
+				type: "set-voice",
+				voiceId: message.voiceId,
+			});
+			ttsSettingsSnapshot = {
+				...ttsSettingsSnapshot,
+				voiceId: message.voiceId,
+				...(ttsSettingsSnapshot.provider === "kokoro" ? { kokoroVoiceId: message.voiceId } : {}),
+				...(ttsSettingsSnapshot.provider === "openai" ? { openaiVoiceId: message.voiceId } : {}),
+				...(ttsSettingsSnapshot.provider === "elevenlabs" ? { elevenLabsVoiceId: message.voiceId } : {}),
+			};
+			await ensureBackgroundStorage().settings.set("tts.voiceId", message.voiceId);
+			if (ttsSettingsSnapshot.provider === "kokoro") {
+				await ensureBackgroundStorage().settings.set("tts.kokoro.voiceId", message.voiceId);
+			}
+			if (ttsSettingsSnapshot.provider === "openai") {
+				await ensureBackgroundStorage().settings.set("tts.openai.voiceId", message.voiceId);
+			}
+			if (ttsSettingsSnapshot.provider === "elevenlabs") {
+				await ensureBackgroundStorage().settings.set("tts.elevenlabs.voiceId", message.voiceId);
+			}
+			await syncTtsOverlay();
+			return getTtsStateResponse();
+	}
+
+	return {
+		ok: false,
+		error: `Unsupported TTS runtime message: ${String((message as { type?: unknown }).type)}`,
+	};
+}
+
+async function handleTtsOverlayMessage(message: TtsOverlayMessage): Promise<TtsRuntimeResponse> {
+	if (message.type === "tts-overlay-ready") {
+		await syncTtsOverlay();
+		return getTtsStateResponse();
+	}
+
+	switch (message.command.type) {
+		case "speak":
+			return speakText(message.command.payload.text, message.command.payload.source);
+		case "pause":
+			return handleTtsRuntimeMessage({ type: "tts-pause" });
+		case "resume":
+			return handleTtsRuntimeMessage({ type: "tts-resume" });
+		case "stop":
+			return handleTtsRuntimeMessage({ type: "tts-stop" });
+		case "close":
+			return handleTtsRuntimeMessage({ type: "tts-close-overlay" });
+		case "set-click-mode":
+			return handleTtsRuntimeMessage({ type: "tts-set-click-mode", armed: message.command.armed });
+		case "set-provider":
+			return handleTtsRuntimeMessage({ type: "tts-set-provider", provider: message.command.provider });
+		case "set-voice":
+			return handleTtsRuntimeMessage({ type: "tts-set-voice", voiceId: message.command.voiceId });
+	}
+
+	return {
+		ok: false,
+		error: `Unsupported TTS overlay command: ${String((message as { type?: unknown }).type)}`,
+	};
+}
+
 // ============================================================================
 // REPL ROUTER (background -> sidepanel or offscreen)
 // ============================================================================
 
 const replRouter: ReplRouter = {
-	async execute(params, signal) {
+	async execute(params, signal, traceContext) {
 		if (signal?.aborted) {
 			throw Object.assign(new Error("REPL execution aborted"), { code: ErrorCodes.ABORTED });
 		}
+
+		const traceHeaders = traceContext
+			? {
+					traceparent: formatTraceparent(traceContext),
+					tracestate: traceContext.tracestate,
+				}
+			: {};
 
 		// Strategy 1: Route to sidepanel if open.
 		// - response.ok === true  -> success, return.
@@ -169,6 +541,7 @@ const replRouter: ReplRouter = {
 			const response = await sendMessageSafe<BridgeReplMessageResponse>({
 				type: "bridge-repl-execute",
 				params,
+				...traceHeaders,
 			} as BridgeToSidepanelMessage);
 			if (response?.ok) return response.result;
 			if (response && !response.ok) {
@@ -200,6 +573,7 @@ const replRouter: ReplRouter = {
 				type: "bridge-repl-execute",
 				params,
 				windowId,
+				...traceHeaders,
 			} as BridgeToOffscreenMessage);
 			if (response?.ok) return response.result;
 			if (response && !response.ok) {
@@ -221,7 +595,7 @@ const replRouter: ReplRouter = {
 const sharedDebuggerManager = getSharedDebuggerManager();
 
 const screenshotRouter: ScreenshotRouter = {
-	async capture(_params, signal) {
+	async capture(_params, signal, traceContext) {
 		if (signal?.aborted) {
 			throw Object.assign(new Error("Screenshot capture aborted"), { code: ErrorCodes.ABORTED });
 		}
@@ -241,17 +615,22 @@ const screenshotRouter: ScreenshotRouter = {
 		}
 		const owner = `screenshot:${tabId}:${Date.now()}`;
 
-		await sharedDebuggerManager.acquire(tabId, owner);
+		await sharedDebuggerManager.acquireWithTrace(tabId, owner, { parent: traceContext });
 		try {
-			await sharedDebuggerManager.ensureDomain(tabId, "Page");
-			const result = await sharedDebuggerManager.sendCommand<{ data: string }>(tabId, "Page.captureScreenshot", {
-				format: "png",
-				captureBeyondViewport: false,
-			});
+			await sharedDebuggerManager.ensureDomainWithTrace(tabId, "Page", { parent: traceContext });
+			const result = await sharedDebuggerManager.sendCommandWithTrace<{ data: string }>(
+				tabId,
+				"Page.captureScreenshot",
+				{
+					format: "png",
+					captureBeyondViewport: false,
+				},
+				{ parent: traceContext },
+			);
 			if (!result?.data) throw new Error("CDP Page.captureScreenshot returned no data");
 			return { mimeType: "image/png", dataUrl: `data:image/png;base64,${result.data}` };
 		} finally {
-			await sharedDebuggerManager.release(tabId, owner);
+			await sharedDebuggerManager.releaseWithTrace(tabId, owner, { parent: traceContext });
 		}
 	},
 };
@@ -389,6 +768,14 @@ async function setBridgeState(state: BridgeStateData["state"], detail?: string):
 	await chrome.storage.session.set({ [BRIDGE_STATE_KEY]: stateData });
 }
 
+function applyBridgeObservabilitySettings(settings: BridgeSettings): void {
+	extensionTelemetry.updateConfig({
+		enabled: settings.observability.enabled,
+		ingestUrl: settings.observability.ingestUrl,
+		ingestKey: settings.observability.publicIngestKey,
+	});
+}
+
 async function bootstrapSettingsForLoopback(settings: BridgeSettings): Promise<BridgeSettings> {
 	if (!bootstrapSettingsPromise || bootstrapSettingsUrl !== settings.url) {
 		bootstrapSettingsUrl = settings.url;
@@ -406,6 +793,7 @@ async function bootstrapSettingsForLoopback(settings: BridgeSettings): Promise<B
 async function ensureBridgeConnection(): Promise<void> {
 	const previousSettings = currentSettings;
 	const { settings } = await loadBridgeSettings(bridgeSettingsStorage);
+	applyBridgeObservabilitySettings(settings);
 
 	if (!settings.enabled) {
 		bridgeClient.disconnect();
@@ -473,6 +861,7 @@ async function ensureBridgeConnection(): Promise<void> {
 		sessionBridge: backgroundSessionBridge,
 		replRouter,
 		screenshotRouter,
+		telemetry: extensionTelemetry,
 	});
 
 	bridgeClient.connect({
@@ -481,6 +870,7 @@ async function ensureBridgeConnection(): Promise<void> {
 		windowId,
 		sensitiveAccessEnabled: resolvedSettings.sensitiveAccessEnabled,
 		executor,
+		telemetry: extensionTelemetry,
 		capabilitiesProvider: getCurrentCapabilities,
 		onStateChange: (state, detail) => {
 			void setBridgeState(state, detail);
@@ -527,15 +917,21 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
 chrome.runtime.onStartup.addListener(() => {
 	console.log("[Background] Extension startup");
 	void ensureBridgeConnection();
+	void refreshTtsSettingsState();
+	void ensureTtsOverlayWorld().catch((error) => {
+		console.warn("[Background:TTS] Failed to configure overlay world on startup:", error);
+	});
 });
 
 chrome.runtime.onInstalled.addListener(() => {
 	console.log("[Background] Extension installed/updated");
 	void ensureBridgeConnection();
+	void refreshTtsSettingsState();
 });
 
 // Also connect immediately when service worker loads
 void ensureBridgeConnection();
+void refreshTtsSettingsState();
 
 // ============================================================================
 // ACTIVE TAB TRACKING
@@ -563,6 +959,20 @@ chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
 		title: tab.title || "",
 		tabId: tab.id,
 	});
+});
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+	if (tabId !== ttsOverlayTabId || changeInfo.status !== "complete") return;
+	if (!ttsState.overlayVisible || isProtectedTabUrl(tab.url)) return;
+	void syncTtsOverlay().catch((error) => {
+		console.warn("[Background:TTS] Failed to re-sync overlay after navigation:", error);
+	});
+});
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+	if (tabId !== ttsOverlayTabId) return;
+	ttsOverlayTabId = null;
+	ttsState = reduceTtsPlaybackState(ttsState, { type: "overlay-closed" });
 });
 
 chrome.windows.onFocusChanged.addListener(async (windowId) => {
@@ -600,7 +1010,7 @@ chrome.windows.onFocusChanged.addListener(async (windowId) => {
 // Called when Shuvgeist icon is clicked - opens sidepanel for current tab
 chrome.action.onClicked.addListener((tab: chrome.tabs.Tab) => {
 	const tabId = tab?.id;
-	if (tabId && chrome.sidePanel.open) {
+	if (tabId) {
 		chrome.sidePanel.open({ tabId });
 	}
 });
@@ -609,6 +1019,23 @@ chrome.action.onClicked.addListener((tab: chrome.tabs.Tab) => {
 // from background-initiated chrome.userScripts.execute() invocations)
 if (chrome.runtime.onUserScriptMessage) {
 	chrome.runtime.onUserScriptMessage.addListener((message, sender, sendResponse) => {
+		if (
+			message &&
+			typeof message === "object" &&
+			typeof (message as { type?: unknown }).type === "string" &&
+			(message as { type: string }).type.startsWith("tts-")
+		) {
+			void handleTtsOverlayMessage(message as TtsOverlayMessage)
+				.then((response) => sendResponse(response))
+				.catch((error: unknown) =>
+					sendResponse({
+						ok: false,
+						error: error instanceof Error ? error.message : String(error),
+					} satisfies TtsRuntimeResponse),
+				);
+			return true;
+		}
+
 		// First, try to route to active background-initiated executions. This
 		// handles nested nativeClick()/nativeType()/etc. calls issued from
 		// inside skill code running in a browserjs() wrapper that was launched
@@ -632,6 +1059,30 @@ chrome.runtime.onMessage.addListener(
 		_sender: chrome.runtime.MessageSender,
 		sendResponse: (response: unknown) => void,
 	) => {
+		if (message.type === "tts-overlay-command" || message.type === "tts-overlay-ready") {
+			void handleTtsOverlayMessage(message as unknown as TtsOverlayMessage)
+				.then((response) => sendResponse(response))
+				.catch((error: unknown) =>
+					sendResponse({
+						ok: false,
+						error: error instanceof Error ? error.message : String(error),
+					} satisfies TtsRuntimeResponse),
+				);
+			return true;
+		}
+
+		if (typeof message.type === "string" && message.type.startsWith("tts-")) {
+			void handleTtsRuntimeMessage(message as TtsRuntimeMessage)
+				.then((response) => sendResponse(response))
+				.catch((error: unknown) =>
+					sendResponse({
+						ok: false,
+						error: error instanceof Error ? error.message : String(error),
+					} satisfies TtsRuntimeResponse),
+				);
+			return true;
+		}
+
 		if (message.type === "bridge-get-state") {
 			const stateData: BridgeStateData = {
 				state: bridgeClient.connectionState,
@@ -648,11 +1099,15 @@ chrome.runtime.onMessage.addListener(
 			const runtimeType = message.runtimeType as "browser-js" | "navigate" | "native-input";
 			const payload = (message.payload as Record<string, unknown>) ?? {};
 			const reqWindowId = typeof message.windowId === "number" ? (message.windowId as number) : currentWindowId;
+			const traceContext = parseTraceparent(
+				typeof message.traceparent === "string" ? message.traceparent : undefined,
+				typeof message.tracestate === "string" ? message.tracestate : undefined,
+			);
 			// Ensure storage exists for skill lookup during browser-js execution.
 			if (runtimeType === "browser-js") {
 				ensureBackgroundStorage();
 			}
-			handleBgRuntimeExec(runtimeType, payload, reqWindowId)
+			handleBgRuntimeExec(runtimeType, payload, reqWindowId, extensionTelemetry, traceContext)
 				.then((response) => sendResponse(response))
 				.catch((err: unknown) =>
 					sendResponse({
@@ -758,7 +1213,9 @@ function closeSidepanel(windowId: number, callCloseOnSidePanelAPI = true) {
  * Send a message via chrome.runtime.sendMessage with error handling.
  * Returns null if no receivers are available (sidepanel closed).
  */
-function sendMessageSafe<T>(message: BridgeToSidepanelMessage | BridgeToOffscreenMessage): Promise<T | null> {
+function sendMessageSafe<T>(
+	message: BridgeToSidepanelMessage | BridgeToOffscreenMessage | TtsOffscreenMessage,
+): Promise<T | null> {
 	return new Promise((resolve) => {
 		chrome.runtime.sendMessage(message, (response?: T) => {
 			if (chrome.runtime.lastError) {

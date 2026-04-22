@@ -59,6 +59,7 @@ globalThis.chrome = {
 };
 
 const { BridgeClient } = await import("../../../src/bridge/extension-client.js");
+const { BridgeTelemetry } = await import("../../../src/bridge/telemetry.js");
 
 describe("BridgeClient", () => {
 	beforeEach(() => {
@@ -129,8 +130,40 @@ describe("BridgeClient", () => {
 
 		socket.emitMessage({ id: 7, method: "status", params: { verbose: true } });
 		await Promise.resolve();
-		expect(executorDispatch).toHaveBeenCalledWith("status", { verbose: true }, expect.any(AbortSignal));
+		expect(executorDispatch).toHaveBeenCalledWith("status", { verbose: true }, expect.any(AbortSignal), undefined);
 		expect(JSON.parse(socket.sent.at(-1)!)).toEqual({ id: 7, result: { ok: true, title: "done" } });
+	});
+
+	it("propagates request tracing context into the executor when telemetry is enabled", async () => {
+		executorDispatch.mockResolvedValue({ ok: true });
+		const telemetry = new BridgeTelemetry({ serviceName: "test-extension", enabled: false });
+		const client = new BridgeClient();
+		client.connect({
+			url: "ws://127.0.0.1:19285/ws",
+			token: "secret",
+			windowId: 1,
+			sensitiveAccessEnabled: true,
+			executor: mockExecutor,
+			telemetry,
+		});
+		const socket = FakeWebSocket.instances.at(-1)!;
+		socket.emitOpen();
+		socket.emitMessage({ type: "register_result", ok: true });
+
+		socket.emitMessage({
+			id: 17,
+			method: "status",
+			params: {},
+			traceparent: "00-11111111111111111111111111111111-2222222222222222-01",
+		});
+		await Promise.resolve();
+
+		expect(executorDispatch).toHaveBeenCalledWith("status", {}, expect.any(AbortSignal), {
+			traceId: "11111111111111111111111111111111",
+			spanId: expect.any(String),
+			traceFlags: "01",
+			tracestate: undefined,
+		});
 	});
 
 	it("maps executor failures and aborts to bridge error responses", async () => {

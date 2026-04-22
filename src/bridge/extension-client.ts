@@ -12,6 +12,8 @@ import type { CommandDispatcher } from "./command-dispatcher.js";
 import { bridgeLog, type LogFields } from "./logging.js";
 import type { AbortMessage, BridgeCapability, BridgeRequest, BridgeResponse, RegisterResult } from "./protocol.js";
 import { ErrorCodes, getBridgeCapabilities } from "./protocol.js";
+import type { BridgeTelemetry } from "./telemetry.js";
+import { parseTraceparent } from "./telemetry.js";
 
 export type BridgeConnectionState = "disabled" | "disconnected" | "connecting" | "connected" | "error";
 
@@ -26,6 +28,7 @@ export interface BridgeClientOptions {
 	onStateChange?: (state: BridgeConnectionState, detail?: string) => void;
 	/** Optional callback to compute capabilities dynamically (e.g. based on sidepanel state). */
 	capabilitiesProvider?: () => BridgeCapability[];
+	telemetry?: BridgeTelemetry;
 }
 
 export class BridgeClient {
@@ -44,6 +47,7 @@ export class BridgeClient {
 	 */
 	private readonly maxReconnectDelay = 15_000;
 	private enabled = false;
+	private telemetry?: BridgeTelemetry;
 
 	/** Active abort controllers keyed by request id, so we can cancel on `abort` messages. */
 	private readonly pendingAborts = new Map<number, AbortController>();
@@ -72,6 +76,7 @@ export class BridgeClient {
 		this.enabled = true;
 		this.options = options;
 		this.executor = options.executor;
+		this.telemetry = options.telemetry;
 		this.reconnectAttempts = 0;
 		this.doConnect();
 	}
@@ -287,9 +292,20 @@ export class BridgeClient {
 		const controller = new AbortController();
 		this.pendingAborts.set(req.id, controller);
 		const startedAt = Date.now();
+		const parentContext = parseTraceparent(req.traceparent, req.tracestate);
+		const span = this.telemetry?.startSpan(`bridge.extension.request.${req.method}`, {
+			parent: parentContext,
+			kind: "server",
+			attributes: {
+				"bridge.method": req.method,
+				"bridge.request_id": req.id,
+				"bridge.window_id": this.options?.windowId,
+				"bridge.session_id": this.options?.sessionId,
+			},
+		});
 
 		try {
-			const result = await this.executor.dispatch(req.method, req.params, controller.signal);
+			const result = await this.executor.dispatch(req.method, req.params, controller.signal, span?.context);
 			bridgeLog("info", "command completed", {
 				role: "extension",
 				requestId: req.id,
@@ -297,6 +313,8 @@ export class BridgeClient {
 				durationMs: Date.now() - startedAt,
 				outcome: "success",
 			});
+			span?.setAttribute("bridge.outcome", "success");
+			span?.end("ok");
 			this.sendResponse(req.id, result);
 		} catch (err: any) {
 			const isAborted = controller.signal.aborted;
@@ -310,12 +328,16 @@ export class BridgeClient {
 				outcome: isAborted ? "aborted" : "error",
 				error: err?.message,
 			});
+			span?.setAttribute("bridge.outcome", isAborted ? "aborted" : "error");
+			span?.recordError(err);
+			span?.end("error");
 			this.sendResponse(req.id, undefined, {
 				code,
 				message: err?.message || "Command execution failed",
 			});
 		} finally {
 			this.pendingAborts.delete(req.id);
+			await this.telemetry?.flush();
 		}
 	}
 

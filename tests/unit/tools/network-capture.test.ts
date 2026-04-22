@@ -101,9 +101,12 @@ describe("NetworkCaptureEngine", () => {
 			encodedDataLength: 123,
 		});
 
-		await Promise.resolve();
 		const req = engine.list(11)[0];
-		const body = engine.getBody(11, req.id, "response");
+		let body = engine.getBody(11, req.id, "response");
+		for (let attempt = 0; !body && attempt < 4; attempt++) {
+			await Promise.resolve();
+			body = engine.getBody(11, req.id, "response");
+		}
 		expect(body).toBeDefined();
 		expect(body?.text.length).toBeLessThanOrEqual(5);
 		expect(body?.truncated).toBe(true);

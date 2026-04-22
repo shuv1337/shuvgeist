@@ -69,6 +69,7 @@ import type {
 } from "./protocol.js";
 import { ErrorCodes, getBridgeCapabilities } from "./protocol.js";
 import { buildSessionHistoryResult, type SessionBridgeAdapter } from "./session-bridge.js";
+import type { BridgeTelemetry, TraceContext } from "./telemetry.js";
 
 /**
  * Router interface for REPL execution.
@@ -76,7 +77,7 @@ import { buildSessionHistoryResult, type SessionBridgeAdapter } from "./session-
  * instead of executing directly (needed when running in service worker context).
  */
 export interface ReplRouter {
-	execute(params: ReplParams, signal?: AbortSignal): Promise<BridgeReplResult>;
+	execute(params: ReplParams, signal?: AbortSignal, traceContext?: TraceContext): Promise<BridgeReplResult>;
 }
 
 /**
@@ -86,7 +87,11 @@ export interface ReplRouter {
  * worker context where canvas/image APIs may hang).
  */
 export interface ScreenshotRouter {
-	capture(params: ScreenshotParams, signal?: AbortSignal): Promise<BridgeScreenshotResult>;
+	capture(
+		params: ScreenshotParams,
+		signal?: AbortSignal,
+		traceContext?: TraceContext,
+	): Promise<BridgeScreenshotResult>;
 }
 
 export interface BrowserCommandExecutorOptions {
@@ -96,6 +101,7 @@ export interface BrowserCommandExecutorOptions {
 	sessionBridge?: SessionBridgeAdapter;
 	replRouter?: ReplRouter;
 	screenshotRouter?: ScreenshotRouter;
+	telemetry?: BridgeTelemetry;
 }
 
 export class BrowserCommandExecutor {
@@ -113,6 +119,7 @@ export class BrowserCommandExecutor {
 	private readonly sessionBridge?: SessionBridgeAdapter;
 	private readonly replRouter?: ReplRouter;
 	private readonly screenshotRouter?: ScreenshotRouter;
+	private readonly telemetry?: BridgeTelemetry;
 	private readonly debuggerManager = getSharedDebuggerManager();
 	private readonly refMap = new RefMap();
 
@@ -123,6 +130,7 @@ export class BrowserCommandExecutor {
 		this.sessionBridge = options.sessionBridge;
 		this.replRouter = options.replRouter;
 		this.screenshotRouter = options.screenshotRouter;
+		this.telemetry = options.telemetry;
 	}
 
 	/** Dispatch a bridge command by method name. */
@@ -130,80 +138,132 @@ export class BrowserCommandExecutor {
 		method: BridgeMethod,
 		params: Record<string, unknown> | undefined,
 		signal?: AbortSignal,
+		traceContext?: TraceContext,
 	): Promise<unknown> {
-		switch (method) {
-			case "status":
-				return this.status();
-			case "navigate":
-				return this.navigate((params ?? {}) as NavigateParams, signal);
-			case "repl":
-				return this.repl(params as unknown as ReplParams, signal);
-			case "screenshot":
-				return this.screenshot((params ?? {}) as ScreenshotParams, signal);
-			case "eval":
-				return this.evalCode(params as unknown as EvalParams, signal);
-			case "cookies":
-				return this.cookies((params ?? {}) as CookiesParams, signal);
-			case "select_element":
-				return this.selectElement((params ?? {}) as SelectElementParams, signal);
-			case "workflow_run":
-				return this.workflowRun((params ?? {}) as unknown as WorkflowRunParams, signal);
-			case "workflow_validate":
-				return this.workflowValidate((params ?? {}) as unknown as WorkflowValidateParams);
-			case "page_snapshot":
-				return this.pageSnapshot((params ?? {}) as PageSnapshotBridgeParams, signal);
-			case "locate_by_role":
-				return this.locateByRole((params ?? {}) as unknown as LocateByRoleParams, signal);
-			case "locate_by_text":
-				return this.locateByText((params ?? {}) as unknown as LocateByTextParams, signal);
-			case "locate_by_label":
-				return this.locateByLabel((params ?? {}) as unknown as LocateByLabelParams, signal);
-			case "ref_click":
-				return this.refClick(params as unknown as RefClickParams, signal);
-			case "ref_fill":
-				return this.refFill(params as unknown as RefFillParams, signal);
-			case "frame_list":
-				return this.frameList((params ?? {}) as FrameListParams);
-			case "frame_tree":
-				return this.frameTree((params ?? {}) as FrameListParams);
-			case "network_start":
-				return this.networkStart((params ?? {}) as unknown as NetworkStartParams);
-			case "network_stop":
-				return this.networkStop((params ?? {}) as NetworkStartParams);
-			case "network_list":
-				return this.networkList((params ?? {}) as NetworkListParams);
-			case "network_clear":
-				return this.networkClear((params ?? {}) as NetworkStartParams);
-			case "network_stats":
-				return this.networkStats((params ?? {}) as NetworkStartParams);
-			case "network_get":
-				return this.networkGet((params ?? {}) as unknown as NetworkItemParams);
-			case "network_body":
-				return this.networkBody((params ?? {}) as unknown as NetworkItemParams);
-			case "network_curl":
-				return this.networkCurl((params ?? {}) as unknown as NetworkCurlParams);
-			case "device_emulate":
-				return this.deviceEmulate((params ?? {}) as DeviceEmulateParams);
-			case "device_reset":
-				return this.deviceReset((params ?? {}) as DeviceResetParams);
-			case "perf_metrics":
-				return this.perfMetrics((params ?? {}) as PerfMetricsParams);
-			case "perf_trace_start":
-				return this.perfTraceStart((params ?? {}) as PerfTraceStartParams);
-			case "perf_trace_stop":
-				return this.perfTraceStop((params ?? {}) as PerfTraceStopParams);
-			case "session_history":
-				return this.sessionHistory((params ?? {}) as SessionHistoryParams);
-			case "session_inject":
-				return this.sessionInject(params as unknown as SessionInjectParams, signal);
-			case "session_new":
-				return this.sessionNew((params ?? {}) as SessionNewParams);
-			case "session_set_model":
-				return this.sessionSetModel(params as unknown as SessionSetModelParams);
-			case "session_artifacts":
-				return this.sessionArtifacts();
-			default:
-				throw new Error("Unknown method: " + method);
+		const span = this.telemetry?.startSpan(`bridge.executor.${method}`, {
+			parent: traceContext,
+			attributes: {
+				"bridge.method": method,
+				"bridge.window_id": this.windowId,
+			},
+		});
+		try {
+			let result: unknown;
+			switch (method) {
+				case "status":
+					result = await this.status();
+					break;
+				case "navigate":
+					result = await this.navigate((params ?? {}) as NavigateParams, signal);
+					break;
+				case "repl":
+					result = await this.repl(params as unknown as ReplParams, signal, span?.context);
+					break;
+				case "screenshot":
+					result = await this.screenshot((params ?? {}) as ScreenshotParams, signal, span?.context);
+					break;
+				case "eval":
+					result = await this.evalCode(params as unknown as EvalParams, signal, span?.context);
+					break;
+				case "cookies":
+					result = await this.cookies((params ?? {}) as CookiesParams, signal, span?.context);
+					break;
+				case "select_element":
+					result = await this.selectElement((params ?? {}) as SelectElementParams, signal);
+					break;
+				case "workflow_run":
+					result = await this.workflowRun((params ?? {}) as unknown as WorkflowRunParams, signal);
+					break;
+				case "workflow_validate":
+					result = await this.workflowValidate((params ?? {}) as unknown as WorkflowValidateParams);
+					break;
+				case "page_snapshot":
+					result = await this.pageSnapshot((params ?? {}) as PageSnapshotBridgeParams, signal);
+					break;
+				case "locate_by_role":
+					result = await this.locateByRole((params ?? {}) as unknown as LocateByRoleParams, signal);
+					break;
+				case "locate_by_text":
+					result = await this.locateByText((params ?? {}) as unknown as LocateByTextParams, signal);
+					break;
+				case "locate_by_label":
+					result = await this.locateByLabel((params ?? {}) as unknown as LocateByLabelParams, signal);
+					break;
+				case "ref_click":
+					result = await this.refClick(params as unknown as RefClickParams, signal);
+					break;
+				case "ref_fill":
+					result = await this.refFill(params as unknown as RefFillParams, signal);
+					break;
+				case "frame_list":
+					result = await this.frameList((params ?? {}) as FrameListParams);
+					break;
+				case "frame_tree":
+					result = await this.frameTree((params ?? {}) as FrameListParams);
+					break;
+				case "network_start":
+					result = await this.networkStart((params ?? {}) as unknown as NetworkStartParams, span?.context);
+					break;
+				case "network_stop":
+					result = await this.networkStop((params ?? {}) as NetworkStartParams, span?.context);
+					break;
+				case "network_list":
+					result = await this.networkList((params ?? {}) as NetworkListParams);
+					break;
+				case "network_clear":
+					result = await this.networkClear((params ?? {}) as NetworkStartParams);
+					break;
+				case "network_stats":
+					result = await this.networkStats((params ?? {}) as NetworkStartParams);
+					break;
+				case "network_get":
+					result = await this.networkGet((params ?? {}) as unknown as NetworkItemParams, span?.context);
+					break;
+				case "network_body":
+					result = await this.networkBody((params ?? {}) as unknown as NetworkItemParams);
+					break;
+				case "network_curl":
+					result = await this.networkCurl((params ?? {}) as unknown as NetworkCurlParams);
+					break;
+				case "device_emulate":
+					result = await this.deviceEmulate((params ?? {}) as DeviceEmulateParams, span?.context);
+					break;
+				case "device_reset":
+					result = await this.deviceReset((params ?? {}) as DeviceResetParams, span?.context);
+					break;
+				case "perf_metrics":
+					result = await this.perfMetrics((params ?? {}) as PerfMetricsParams, span?.context);
+					break;
+				case "perf_trace_start":
+					result = await this.perfTraceStart((params ?? {}) as PerfTraceStartParams, span?.context);
+					break;
+				case "perf_trace_stop":
+					result = await this.perfTraceStop((params ?? {}) as PerfTraceStopParams, span?.context);
+					break;
+				case "session_history":
+					result = await this.sessionHistory((params ?? {}) as SessionHistoryParams);
+					break;
+				case "session_inject":
+					result = await this.sessionInject(params as unknown as SessionInjectParams, signal);
+					break;
+				case "session_new":
+					result = await this.sessionNew((params ?? {}) as SessionNewParams);
+					break;
+				case "session_set_model":
+					result = await this.sessionSetModel(params as unknown as SessionSetModelParams);
+					break;
+				case "session_artifacts":
+					result = await this.sessionArtifacts();
+					break;
+				default:
+					throw new Error("Unknown method: " + method);
+			}
+			span?.end("ok");
+			return result;
+		} catch (error) {
+			span?.recordError(error);
+			span?.end("error");
+			throw error;
 		}
 	}
 
@@ -233,19 +293,23 @@ export class BrowserCommandExecutor {
 		return result.details;
 	}
 
-	async repl(params: ReplParams, signal?: AbortSignal): Promise<BridgeReplResult> {
+	async repl(params: ReplParams, signal?: AbortSignal, traceContext?: TraceContext): Promise<BridgeReplResult> {
 		if (!this.replRouter) {
 			const error = new Error("REPL router is not available");
 			(error as Error & { code?: number }).code = ErrorCodes.CAPABILITY_DISABLED;
 			throw error;
 		}
-		return this.replRouter.execute(params, signal);
+		return this.replRouter.execute(params, signal, traceContext);
 	}
 
-	async screenshot(params: ScreenshotParams, signal?: AbortSignal): Promise<BridgeScreenshotResult> {
+	async screenshot(
+		params: ScreenshotParams,
+		signal?: AbortSignal,
+		traceContext?: TraceContext,
+	): Promise<BridgeScreenshotResult> {
 		// If a screenshot router is configured (running in service worker), delegate to it
 		if (this.screenshotRouter) {
-			return this.screenshotRouter.capture(params, signal);
+			return this.screenshotRouter.capture(params, signal, traceContext);
 		}
 
 		// Direct execution (running in sidepanel or extension page with DOM access)
@@ -266,23 +330,45 @@ export class BrowserCommandExecutor {
 		};
 	}
 
-	async evalCode(params: EvalParams, signal?: AbortSignal): Promise<unknown> {
+	async evalCode(params: EvalParams, signal?: AbortSignal, traceContext?: TraceContext): Promise<unknown> {
 		if (!this.sensitiveAccessEnabled) {
 			const error = new Error("Eval bridge command is disabled unless sensitive browser data access is enabled");
 			(error as Error & { code?: number }).code = ErrorCodes.CAPABILITY_DISABLED;
 			throw error;
 		}
-		const result = await this.getDebuggerTool().execute("bridge", { action: "eval", code: params.code }, signal);
+		const debuggerTool = this.getDebuggerTool() as DebuggerTool & {
+			executeBridge?: (
+				toolCallId: string,
+				args: { action: string; code?: string },
+				signal?: AbortSignal,
+				traceContext?: TraceContext,
+			) => Promise<{ details: unknown }>;
+		};
+		const result =
+			typeof debuggerTool.executeBridge === "function"
+				? await debuggerTool.executeBridge("bridge", { action: "eval", code: params.code }, signal, traceContext)
+				: await debuggerTool.execute("bridge", { action: "eval", code: params.code }, signal);
 		return result.details;
 	}
 
-	async cookies(_params: CookiesParams, signal?: AbortSignal): Promise<unknown> {
+	async cookies(_params: CookiesParams, signal?: AbortSignal, traceContext?: TraceContext): Promise<unknown> {
 		if (!this.sensitiveAccessEnabled) {
 			const error = new Error("Cookies bridge command is disabled unless sensitive browser data access is enabled");
 			(error as Error & { code?: number }).code = ErrorCodes.CAPABILITY_DISABLED;
 			throw error;
 		}
-		const result = await this.getDebuggerTool().execute("bridge", { action: "cookies" }, signal);
+		const debuggerTool = this.getDebuggerTool() as DebuggerTool & {
+			executeBridge?: (
+				toolCallId: string,
+				args: { action: string; code?: string },
+				signal?: AbortSignal,
+				traceContext?: TraceContext,
+			) => Promise<{ details: unknown }>;
+		};
+		const result =
+			typeof debuggerTool.executeBridge === "function"
+				? await debuggerTool.executeBridge("bridge", { action: "cookies" }, signal, traceContext)
+				: await debuggerTool.execute("bridge", { action: "cookies" }, signal);
 		return result.details;
 	}
 
@@ -394,17 +480,21 @@ export class BrowserCommandExecutor {
 		};
 	}
 
-	async networkStart(params: NetworkStartParams): Promise<unknown> {
+	async networkStart(params: NetworkStartParams, traceContext?: TraceContext): Promise<unknown> {
 		const tabId = await this.resolveBridgeTabId(params.tabId);
-		return this.getNetworkCapture().start(tabId, {
-			maxEntries: params.maxEntries,
-			maxBodyBytes: params.maxBodyBytes,
-		});
+		return this.getNetworkCapture().start(
+			tabId,
+			{
+				maxEntries: params.maxEntries,
+				maxBodyBytes: params.maxBodyBytes,
+			},
+			traceContext,
+		);
 	}
 
-	async networkStop(params: NetworkStartParams): Promise<unknown> {
+	async networkStop(params: NetworkStartParams, traceContext?: TraceContext): Promise<unknown> {
 		const tabId = await this.resolveBridgeTabId(params.tabId);
-		return this.getNetworkCapture().stop(tabId);
+		return this.getNetworkCapture().stop(tabId, traceContext);
 	}
 
 	async networkList(params: NetworkListParams): Promise<unknown> {
@@ -425,9 +515,9 @@ export class BrowserCommandExecutor {
 		return this.getNetworkCapture().stats(tabId);
 	}
 
-	async networkGet(params: NetworkItemParams): Promise<unknown> {
+	async networkGet(params: NetworkItemParams, traceContext?: TraceContext): Promise<unknown> {
 		const tabId = await this.resolveBridgeTabId(params.tabId);
-		return this.getNetworkCapture().get(tabId, params.requestId);
+		return this.getNetworkCapture().get(tabId, params.requestId, traceContext);
 	}
 
 	async networkBody(params: NetworkItemParams): Promise<unknown> {
@@ -443,27 +533,42 @@ export class BrowserCommandExecutor {
 		};
 	}
 
-	async deviceEmulate(params: DeviceEmulateParams): Promise<unknown> {
+	async deviceEmulate(params: DeviceEmulateParams, traceContext?: TraceContext): Promise<unknown> {
 		const tabId = await this.resolveBridgeTabId(params.tabId);
 		const normalized = normalizeDeviceEmulationRequest(params);
 		const owner = `device-emulation:${tabId}:${Date.now()}`;
-		await this.debuggerManager.acquire(tabId, owner);
+		await this.debuggerManager.acquireWithTrace(tabId, owner, { parent: traceContext });
 		try {
-			await this.debuggerManager.ensureDomain(tabId, "Page");
-			await this.debuggerManager.sendCommand(tabId, "Emulation.setDeviceMetricsOverride", {
-				width: normalized.viewport.width,
-				height: normalized.viewport.height,
-				deviceScaleFactor: normalized.viewport.deviceScaleFactor,
-				mobile: normalized.viewport.mobile,
-			});
-			await this.debuggerManager.sendCommand(tabId, "Emulation.setTouchEmulationEnabled", {
-				enabled: normalized.touch,
-				configuration: normalized.touch ? "mobile" : "desktop",
-			});
+			await this.debuggerManager.ensureDomainWithTrace(tabId, "Page", { parent: traceContext });
+			await this.debuggerManager.sendCommandWithTrace(
+				tabId,
+				"Emulation.setDeviceMetricsOverride",
+				{
+					width: normalized.viewport.width,
+					height: normalized.viewport.height,
+					deviceScaleFactor: normalized.viewport.deviceScaleFactor,
+					mobile: normalized.viewport.mobile,
+				},
+				{ parent: traceContext },
+			);
+			await this.debuggerManager.sendCommandWithTrace(
+				tabId,
+				"Emulation.setTouchEmulationEnabled",
+				{
+					enabled: normalized.touch,
+					configuration: normalized.touch ? "mobile" : "desktop",
+				},
+				{ parent: traceContext },
+			);
 			if (normalized.userAgent) {
-				await this.debuggerManager.sendCommand(tabId, "Emulation.setUserAgentOverride", {
-					userAgent: normalized.userAgent,
-				});
+				await this.debuggerManager.sendCommandWithTrace(
+					tabId,
+					"Emulation.setUserAgentOverride",
+					{
+						userAgent: normalized.userAgent,
+					},
+					{ parent: traceContext },
+				);
 			}
 			return {
 				ok: true,
@@ -474,45 +579,57 @@ export class BrowserCommandExecutor {
 				userAgent: normalized.userAgent,
 			};
 		} finally {
-			await this.debuggerManager.release(tabId, owner);
+			await this.debuggerManager.releaseWithTrace(tabId, owner, { parent: traceContext });
 		}
 	}
 
-	async deviceReset(params: DeviceResetParams): Promise<unknown> {
+	async deviceReset(params: DeviceResetParams, traceContext?: TraceContext): Promise<unknown> {
 		const tabId = await this.resolveBridgeTabId(params.tabId);
 		const owner = `device-reset:${tabId}:${Date.now()}`;
-		await this.debuggerManager.acquire(tabId, owner);
+		await this.debuggerManager.acquireWithTrace(tabId, owner, { parent: traceContext });
 		try {
-			await this.debuggerManager.sendCommand(tabId, "Emulation.clearDeviceMetricsOverride");
-			await this.debuggerManager.sendCommand(tabId, "Emulation.setTouchEmulationEnabled", {
-				enabled: false,
-				configuration: "desktop",
+			await this.debuggerManager.sendCommandWithTrace(tabId, "Emulation.clearDeviceMetricsOverride", undefined, {
+				parent: traceContext,
 			});
-			await this.debuggerManager.sendCommand(tabId, "Emulation.setUserAgentOverride", {
-				userAgent: "",
-			});
+			await this.debuggerManager.sendCommandWithTrace(
+				tabId,
+				"Emulation.setTouchEmulationEnabled",
+				{
+					enabled: false,
+					configuration: "desktop",
+				},
+				{ parent: traceContext },
+			);
+			await this.debuggerManager.sendCommandWithTrace(
+				tabId,
+				"Emulation.setUserAgentOverride",
+				{
+					userAgent: "",
+				},
+				{ parent: traceContext },
+			);
 			return { ok: true, tabId };
 		} finally {
-			await this.debuggerManager.release(tabId, owner);
+			await this.debuggerManager.releaseWithTrace(tabId, owner, { parent: traceContext });
 		}
 	}
 
-	async perfMetrics(params: PerfMetricsParams): Promise<unknown> {
+	async perfMetrics(params: PerfMetricsParams, traceContext?: TraceContext): Promise<unknown> {
 		const tabId = await this.resolveBridgeTabId(params.tabId);
 		return {
 			tabId,
-			metrics: await this.getPerformanceTools().getMetrics(tabId),
+			metrics: await this.getPerformanceTools().getMetrics(tabId, traceContext),
 		};
 	}
 
-	async perfTraceStart(params: PerfTraceStartParams): Promise<unknown> {
+	async perfTraceStart(params: PerfTraceStartParams, traceContext?: TraceContext): Promise<unknown> {
 		const tabId = await this.resolveBridgeTabId(params.tabId);
-		return this.getPerformanceTools().startTrace(tabId, { timeoutMs: params.autoStopMs });
+		return this.getPerformanceTools().startTrace(tabId, { timeoutMs: params.autoStopMs }, traceContext);
 	}
 
-	async perfTraceStop(params: PerfTraceStopParams): Promise<unknown> {
+	async perfTraceStop(params: PerfTraceStopParams, traceContext?: TraceContext): Promise<unknown> {
 		const tabId = await this.resolveBridgeTabId(params.tabId);
-		return this.getPerformanceTools().stopTrace(tabId);
+		return this.getPerformanceTools().stopTrace(tabId, traceContext);
 	}
 
 	async sessionHistory(params: SessionHistoryParams): Promise<SessionHistoryResult> {
@@ -606,14 +723,20 @@ export class BrowserCommandExecutor {
 
 	private getNetworkCapture(): NetworkCaptureEngine {
 		if (!this.networkCapture) {
-			this.networkCapture = new NetworkCaptureEngine(this.debuggerManager);
+			this.networkCapture = new NetworkCaptureEngine({
+				debuggerManager: this.debuggerManager,
+				telemetry: this.telemetry,
+			});
 		}
 		return this.networkCapture;
 	}
 
 	private getPerformanceTools(): PerformanceTools {
 		if (!this.performanceTools) {
-			this.performanceTools = new PerformanceTools({ debuggerManager: this.debuggerManager });
+			this.performanceTools = new PerformanceTools({
+				debuggerManager: this.debuggerManager,
+				telemetry: this.telemetry,
+			});
 		}
 		return this.performanceTools;
 	}

@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Added
+
+- Lightweight text-to-speech support in the extension: a new sidepanel header speaker button opens an on-page TTS overlay with speak, pause, resume, stop, provider switching, voice selection, and opt-in click-to-speak controls. Playback is owned by the background/offscreen runtime so it can survive sidepanel lifecycle changes, and the first shipped providers are local Kokoro, OpenAI TTS, and ElevenLabs.
+- Optional Maple OTEL trace export for bridge debugging: the CLI, bridge server, extension background/runtime, and debugger/network/perf seams can now emit end-to-end spans to a local Maple ingest endpoint. Extension tracing is configured from the Bridge settings tab, while CLI/server tracing uses env or `~/.shuvgeist/bridge.json` OTEL config.
+
 ## [1.1.9] - 2026-04-21
 
 ### Changed

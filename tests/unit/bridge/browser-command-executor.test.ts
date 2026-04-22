@@ -25,6 +25,7 @@ vi.mock("../../../src/tools/extract-image.js", () => ({
 vi.mock("../../../src/tools/debugger.js", () => ({
 	DebuggerTool: class {
 		execute = debuggerExecute;
+		executeBridge = debuggerExecute;
 	},
 }));
 
@@ -119,7 +120,7 @@ describe("BrowserCommandExecutor", () => {
 			output: "done",
 			files: [{ fileName: "out.txt", mimeType: "text/plain", size: 3, contentBase64: "YWJj" }],
 		});
-		expect(replRouter.execute).toHaveBeenCalledWith({ title: "CLI", code: "return 1" }, undefined);
+		expect(replRouter.execute).toHaveBeenCalledWith({ title: "CLI", code: "return 1" }, undefined, undefined);
 
 		await expect(executor.dispatch("screenshot", { maxWidth: 500 })).resolves.toEqual({
 			mimeType: "image/webp",
@@ -141,9 +142,14 @@ describe("BrowserCommandExecutor", () => {
 		});
 		const enabled = new BrowserCommandExecutor({ windowId: 1, sensitiveAccessEnabled: true });
 		await expect(enabled.evalCode({ code: "document.title" })).resolves.toEqual({ value: "Example" });
-		expect(debuggerExecute).toHaveBeenCalledWith("bridge", { action: "eval", code: "document.title" }, undefined);
+		expect(debuggerExecute).toHaveBeenCalledWith(
+			"bridge",
+			{ action: "eval", code: "document.title" },
+			undefined,
+			undefined,
+		);
 		await expect(enabled.cookies({})).resolves.toEqual({ value: [{ name: "auth_token", value: "secret" }] });
-		expect(debuggerExecute).toHaveBeenCalledWith("bridge", { action: "cookies" }, undefined);
+		expect(debuggerExecute).toHaveBeenCalledWith("bridge", { action: "cookies" }, undefined, undefined);
 	});
 
 	it("bridges session operations through the session adapter", async () => {

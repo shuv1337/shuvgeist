@@ -139,6 +139,8 @@ export interface BridgeRequest {
 	id: number;
 	method: BridgeMethod;
 	params?: Record<string, unknown>;
+	traceparent?: string;
+	tracestate?: string;
 }
 
 export interface BridgeError {
@@ -658,6 +660,11 @@ export interface BridgeServerConfig {
 	host: string;
 	port: number;
 	token: string;
+	otel?: {
+		enabled?: boolean;
+		ingestUrl?: string;
+		ingestKey?: string;
+	};
 }
 
 /** Client-side config (connect address). */
@@ -670,6 +677,11 @@ export interface BridgeClientConfig {
 export interface CliConfigFile {
 	url?: string;
 	token?: string;
+	otel?: {
+		enabled?: boolean;
+		ingestUrl?: string;
+		privateIngestKey?: string;
+	};
 }
 
 // ---------------------------------------------------------------------------

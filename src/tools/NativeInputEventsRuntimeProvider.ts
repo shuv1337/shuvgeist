@@ -1,4 +1,5 @@
 import type { SandboxRuntimeProvider } from "@mariozechner/pi-web-ui/sandbox/SandboxRuntimeProvider.js";
+import type { BridgeTelemetry, TraceContext } from "../bridge/telemetry.js";
 import { NATIVE_INPUT_EVENTS_DESCRIPTION } from "../prompts/prompts.js";
 import { resolveTabTarget } from "./helpers/browser-target.js";
 import { type DebuggerManager, getSharedDebuggerManager } from "./helpers/debugger-manager.js";
@@ -12,15 +13,26 @@ export class NativeInputEventsRuntimeProvider implements SandboxRuntimeProvider 
 	private modifiers = 0; // Track currently pressed modifiers
 	private readonly windowId?: number;
 	private readonly debuggerManager: DebuggerManager;
+	private readonly telemetry?: BridgeTelemetry;
+	private readonly traceContext?: TraceContext;
 	// Modifier bit flags for CDP
 	private readonly MODIFIER_ALT = 1;
 	private readonly MODIFIER_CTRL = 2;
 	private readonly MODIFIER_META = 4;
 	private readonly MODIFIER_SHIFT = 8;
 
-	constructor(options: { windowId?: number; debuggerManager?: DebuggerManager } = {}) {
+	constructor(
+		options: {
+			windowId?: number;
+			debuggerManager?: DebuggerManager;
+			telemetry?: BridgeTelemetry;
+			traceContext?: TraceContext;
+		} = {},
+	) {
 		this.windowId = options.windowId;
 		this.debuggerManager = options.debuggerManager ?? getSharedDebuggerManager();
+		this.telemetry = options.telemetry;
+		this.traceContext = options.traceContext;
 	}
 
 	getData(): Record<string, any> {
@@ -187,9 +199,16 @@ export class NativeInputEventsRuntimeProvider implements SandboxRuntimeProvider 
 		const tabId = await this.getActiveTabId();
 
 		const owner = `native-input:${tabId}`;
+		const span = this.telemetry?.startSpan(`native_input.${String(message.action || "unknown")}`, {
+			parent: this.traceContext,
+			attributes: {
+				"native_input.tab_id": tabId,
+				"native_input.action": String(message.action || "unknown"),
+			},
+		});
 		try {
-			await this.debuggerManager.acquire(tabId, owner);
-			await this.debuggerManager.ensureDomain(tabId, "Runtime");
+			await this.debuggerManager.acquireWithTrace(tabId, owner, { parent: this.traceContext });
+			await this.debuggerManager.ensureDomainWithTrace(tabId, "Runtime", { parent: this.traceContext });
 
 			if (message.action === "click") {
 				console.log("[NativeInput] Finding element:", message.selector);
@@ -348,12 +367,15 @@ export class NativeInputEventsRuntimeProvider implements SandboxRuntimeProvider 
 				console.error("[NativeInput] Unknown action:", message.action);
 				respond({ success: false, error: `Unknown action: ${message.action}` });
 			}
+			span?.end("ok");
 		} catch (error) {
+			span?.recordError(error);
+			span?.end("error");
 			console.error("[NativeInput] Error during operation:", error);
 			respond({ success: false, error: error instanceof Error ? error.message : String(error) });
 		} finally {
 			try {
-				await this.debuggerManager.release(tabId, owner);
+				await this.debuggerManager.releaseWithTrace(tabId, owner, { parent: this.traceContext });
 			} catch (detachError) {
 				console.warn("[NativeInput] Detach warning:", detachError);
 			}

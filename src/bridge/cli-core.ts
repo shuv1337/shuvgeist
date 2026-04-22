@@ -50,6 +50,9 @@ export interface CliEnvironment {
 	SHUVGEIST_BRIDGE_HOST?: string;
 	SHUVGEIST_BRIDGE_PORT?: string;
 	SHUVGEIST_BRIDGE_TOKEN?: string;
+	SHUVGEIST_OTEL_ENABLED?: string;
+	SHUVGEIST_OTEL_INGEST_URL?: string;
+	SHUVGEIST_OTEL_PRIVATE_INGEST_KEY?: string;
 }
 
 export type ResolveConfigResult = { ok: true; url: string; token: string } | { ok: false; message: string };

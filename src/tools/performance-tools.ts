@@ -1,3 +1,4 @@
+import type { BridgeTelemetry, BridgeTelemetrySpan, TraceContext } from "../bridge/telemetry.js";
 import { type DebuggerManager, getSharedDebuggerManager } from "./helpers/debugger-manager.js";
 
 interface TraceState {
@@ -13,6 +14,7 @@ interface TraceState {
 	autoStopTimer?: ReturnType<typeof setTimeout>;
 	completion?: Promise<void>;
 	resolveCompletion?: () => void;
+	traceSpan?: BridgeTelemetrySpan;
 }
 
 export function parsePerformanceMetrics(metrics: Array<{ name: string; value: number }>): Record<string, number> {
@@ -53,17 +55,66 @@ export function summarizePerformanceMetrics(metrics: Record<string, number>): {
 export class PerformanceTools {
 	private readonly traces = new Map<number, TraceState>();
 	private readonly debuggerManager: DebuggerManager;
+	private readonly telemetry?: BridgeTelemetry;
 
-	constructor(options: { debuggerManager?: DebuggerManager } = {}) {
+	constructor(options: { debuggerManager?: DebuggerManager; telemetry?: BridgeTelemetry } = {}) {
 		this.debuggerManager = options.debuggerManager ?? getSharedDebuggerManager();
+		this.telemetry = options.telemetry;
 	}
 
-	async getMetrics(tabId: number): Promise<Array<{ name: string; value: number }>> {
-		const owner = `perf-metrics:${tabId}:${Date.now()}`;
+	private async acquireDebugger(tabId: number, owner: string, traceContext?: TraceContext): Promise<void> {
+		if (typeof this.debuggerManager.acquireWithTrace === "function") {
+			await this.debuggerManager.acquireWithTrace(tabId, owner, { parent: traceContext });
+			return;
+		}
 		await this.debuggerManager.acquire(tabId, owner);
+	}
+
+	private async ensureDebuggerDomain(
+		tabId: number,
+		domain: "Performance" | "Tracing",
+		traceContext?: TraceContext,
+	): Promise<void> {
+		if (typeof this.debuggerManager.ensureDomainWithTrace === "function") {
+			await this.debuggerManager.ensureDomainWithTrace(tabId, domain, { parent: traceContext });
+			return;
+		}
+		await this.debuggerManager.ensureDomain(tabId, domain);
+	}
+
+	private async releaseDebugger(tabId: number, owner: string, traceContext?: TraceContext): Promise<void> {
+		if (typeof this.debuggerManager.releaseWithTrace === "function") {
+			await this.debuggerManager.releaseWithTrace(tabId, owner, { parent: traceContext });
+			return;
+		}
+		await this.debuggerManager.release(tabId, owner);
+	}
+
+	private async sendDebuggerCommand<T>(
+		tabId: number,
+		method: string,
+		params: Record<string, unknown> | undefined,
+		traceContext?: TraceContext,
+	): Promise<T> {
+		if (typeof this.debuggerManager.sendCommandWithTrace === "function") {
+			return this.debuggerManager.sendCommandWithTrace(tabId, method, params, {
+				parent: traceContext,
+			}) as Promise<T>;
+		}
+		return this.debuggerManager.sendCommand(tabId, method, params) as Promise<T>;
+	}
+
+	async getMetrics(tabId: number, traceContext?: TraceContext): Promise<Array<{ name: string; value: number }>> {
+		const owner = `perf-metrics:${tabId}:${Date.now()}`;
+		await this.acquireDebugger(tabId, owner, traceContext);
 		try {
-			await this.debuggerManager.ensureDomain(tabId, "Performance");
-			const response = (await this.debuggerManager.sendCommand(tabId, "Performance.getMetrics")) as {
+			await this.ensureDebuggerDomain(tabId, "Performance", traceContext);
+			const response = (await this.sendDebuggerCommand(
+				tabId,
+				"Performance.getMetrics",
+				undefined,
+				traceContext,
+			)) as {
 				metrics?: Array<{ name?: string; value?: number }>;
 			};
 			return (response.metrics ?? [])
@@ -73,7 +124,7 @@ export class PerformanceTools {
 				)
 				.map((metric) => ({ name: metric.name, value: metric.value }));
 		} finally {
-			await this.debuggerManager.release(tabId, owner);
+			await this.releaseDebugger(tabId, owner, traceContext);
 		}
 	}
 
@@ -101,13 +152,14 @@ export class PerformanceTools {
 	async startTrace(
 		tabId: number,
 		options: { timeoutMs?: number; maxEvents?: number; categories?: string[] } = {},
+		traceContext?: TraceContext,
 	): Promise<{ ok: true; tabId: number; startedAt: string; categories: string[] }> {
 		if (this.traces.has(tabId)) {
 			throw new Error(`Trace is already active for tab ${tabId}`);
 		}
 		const owner = `perf-trace:${tabId}`;
-		await this.debuggerManager.acquire(tabId, owner);
-		await this.debuggerManager.ensureDomain(tabId, "Tracing");
+		await this.acquireDebugger(tabId, owner, traceContext);
+		await this.ensureDebuggerDomain(tabId, "Tracing", traceContext);
 		const state: TraceState = {
 			tabId,
 			owner,
@@ -117,6 +169,15 @@ export class PerformanceTools {
 			categories: options.categories ?? [],
 			timedOut: false,
 			timeoutMs: options.timeoutMs ?? 0,
+			traceSpan: this.telemetry?.startSpan("perf.trace.session", {
+				parent: traceContext,
+				attributes: {
+					"perf.tab_id": tabId,
+					"perf.categories": (options.categories ?? []).join(","),
+					"perf.max_events": options.maxEvents ?? 5000,
+					"perf.timeout_ms": options.timeoutMs ?? 0,
+				},
+			}),
 		};
 		state.completion = new Promise<void>((resolve) => {
 			state.resolveCompletion = resolve;
@@ -141,10 +202,15 @@ export class PerformanceTools {
 			}, options.timeoutMs);
 		}
 		this.traces.set(tabId, state);
-		await this.debuggerManager.sendCommand(tabId, "Tracing.start", {
-			transferMode: "ReportEvents",
-			categories: state.categories.join(","),
-		});
+		await this.sendDebuggerCommand(
+			tabId,
+			"Tracing.start",
+			{
+				transferMode: "ReportEvents",
+				categories: state.categories.join(","),
+			},
+			traceContext,
+		);
 		return {
 			ok: true,
 			tabId,
@@ -153,7 +219,10 @@ export class PerformanceTools {
 		};
 	}
 
-	async stopTrace(tabId: number): Promise<{
+	async stopTrace(
+		tabId: number,
+		traceContext?: TraceContext,
+	): Promise<{
 		ok: true;
 		tabId: number;
 		startedAt: string;
@@ -171,7 +240,7 @@ export class PerformanceTools {
 		}
 		clearTimeout(state.autoStopTimer);
 		if (!state.timedOut) {
-			await this.debuggerManager.sendCommand(tabId, "Tracing.end");
+			await this.sendDebuggerCommand(tabId, "Tracing.end", undefined, traceContext ?? state.traceSpan?.context);
 		}
 		if (state.timeoutMs > 0) {
 			await Promise.race([
@@ -188,8 +257,15 @@ export class PerformanceTools {
 		}
 		state.removeListener?.();
 		this.traces.delete(tabId);
-		await this.debuggerManager.release(tabId, state.owner);
+		await this.releaseDebugger(tabId, state.owner, traceContext ?? state.traceSpan?.context);
 		const endedAt = Date.now();
+		state.traceSpan?.setAttributes({
+			"perf.event_count": state.events.length,
+			"perf.truncated": state.events.length >= state.maxEvents,
+			"perf.timed_out": state.timedOut,
+		});
+		state.traceSpan?.end("ok");
+		state.traceSpan = undefined;
 		return {
 			ok: true,
 			tabId,

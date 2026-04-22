@@ -1,3 +1,4 @@
+import type { BridgeTelemetry, BridgeTelemetrySpan, TraceContext } from "../bridge/telemetry.js";
 import { type DebuggerManager, getSharedDebuggerManager } from "./helpers/debugger-manager.js";
 
 const REDACTED_HEADERS = new Set(["authorization", "cookie", "set-cookie", "x-api-key", "proxy-authorization"]);
@@ -50,6 +51,7 @@ interface NetworkCaptureState {
 	storedBodyBytes: number;
 	evictedRequests: number;
 	removeListener?: () => void;
+	traceSpan?: BridgeTelemetrySpan;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -84,6 +86,7 @@ export class NetworkCaptureEngine {
 	private readonly debuggerManager: DebuggerManager;
 	private readonly maxEntries: number;
 	private readonly maxBodyBytesPerEntry: number;
+	private readonly telemetry?: BridgeTelemetry;
 
 	constructor(
 		options:
@@ -92,29 +95,74 @@ export class NetworkCaptureEngine {
 					debuggerManager?: DebuggerManager;
 					maxRequestsPerTab?: number;
 					maxBodyBytesPerEntry?: number;
+					telemetry?: BridgeTelemetry;
 			  } = {},
 	) {
 		if (isDebuggerManager(options)) {
 			this.debuggerManager = options;
 			this.maxEntries = 250;
 			this.maxBodyBytesPerEntry = 256_000;
+			this.telemetry = undefined;
 			return;
 		}
 		const config = options;
 		this.debuggerManager = config.debuggerManager ?? getSharedDebuggerManager();
 		this.maxEntries = config.maxRequestsPerTab ?? 250;
 		this.maxBodyBytesPerEntry = config.maxBodyBytesPerEntry ?? 256_000;
+		this.telemetry = config.telemetry;
 	}
 
-	async start(tabId: number, options: NetworkCaptureOptions = {}): Promise<NetworkCaptureStats> {
+	private async acquireDebugger(tabId: number, owner: string, traceContext?: TraceContext): Promise<void> {
+		if (typeof this.debuggerManager.acquireWithTrace === "function") {
+			await this.debuggerManager.acquireWithTrace(tabId, owner, { parent: traceContext });
+			return;
+		}
+		await this.debuggerManager.acquire(tabId, owner);
+	}
+
+	private async ensureDebuggerDomain(tabId: number, domain: "Network", traceContext?: TraceContext): Promise<void> {
+		if (typeof this.debuggerManager.ensureDomainWithTrace === "function") {
+			await this.debuggerManager.ensureDomainWithTrace(tabId, domain, { parent: traceContext });
+			return;
+		}
+		await this.debuggerManager.ensureDomain(tabId, domain);
+	}
+
+	private async releaseDebugger(tabId: number, owner: string, traceContext?: TraceContext): Promise<void> {
+		if (typeof this.debuggerManager.releaseWithTrace === "function") {
+			await this.debuggerManager.releaseWithTrace(tabId, owner, { parent: traceContext });
+			return;
+		}
+		await this.debuggerManager.release(tabId, owner);
+	}
+
+	private async sendDebuggerCommand<T>(
+		tabId: number,
+		method: string,
+		params: Record<string, unknown> | undefined,
+		traceContext?: TraceContext,
+	): Promise<T> {
+		if (typeof this.debuggerManager.sendCommandWithTrace === "function") {
+			return this.debuggerManager.sendCommandWithTrace(tabId, method, params, {
+				parent: traceContext,
+			}) as Promise<T>;
+		}
+		return this.debuggerManager.sendCommand(tabId, method, params) as Promise<T>;
+	}
+
+	async start(
+		tabId: number,
+		options: NetworkCaptureOptions = {},
+		traceContext?: TraceContext,
+	): Promise<NetworkCaptureStats> {
 		const existing = this.states.get(tabId);
 		if (existing?.active) {
 			return this.stats(tabId);
 		}
 
 		const owner = `network-capture:${tabId}`;
-		await this.debuggerManager.acquire(tabId, owner);
-		await this.debuggerManager.ensureDomain(tabId, "Network");
+		await this.acquireDebugger(tabId, owner, traceContext);
+		await this.ensureDebuggerDomain(tabId, "Network", traceContext);
 
 		const state: NetworkCaptureState = existing ?? {
 			tabId,
@@ -127,10 +175,28 @@ export class NetworkCaptureEngine {
 			order: [],
 			storedBodyBytes: 0,
 			evictedRequests: 0,
+			traceSpan: this.telemetry?.startSpan("network.capture.session", {
+				parent: traceContext,
+				attributes: {
+					"network.tab_id": tabId,
+					"network.max_entries": options.maxEntries ?? this.maxEntries,
+					"network.max_body_bytes": options.maxBodyBytes ?? this.maxBodyBytesPerEntry,
+				},
+			}),
 		};
 		state.active = true;
 		state.maxEntries = options.maxEntries ?? state.maxEntries;
 		state.maxBodyBytes = options.maxBodyBytes ?? state.maxBodyBytes;
+		state.traceSpan =
+			state.traceSpan ??
+			this.telemetry?.startSpan("network.capture.session", {
+				parent: traceContext,
+				attributes: {
+					"network.tab_id": tabId,
+					"network.max_entries": state.maxEntries,
+					"network.max_body_bytes": state.maxBodyBytes,
+				},
+			});
 		state.removeListener?.();
 		state.removeListener = this.debuggerManager.addEventListener(tabId, (method, params) => {
 			void this.handleEvent(state, method, params);
@@ -139,7 +205,7 @@ export class NetworkCaptureEngine {
 		return this.stats(tabId);
 	}
 
-	async stop(tabId: number): Promise<NetworkCaptureStats> {
+	async stop(tabId: number, traceContext?: TraceContext): Promise<NetworkCaptureStats> {
 		const state = this.states.get(tabId);
 		if (!state?.active) {
 			return this.stats(tabId);
@@ -147,7 +213,14 @@ export class NetworkCaptureEngine {
 		state.active = false;
 		state.removeListener?.();
 		state.removeListener = undefined;
-		await this.debuggerManager.release(tabId, state.owner);
+		await this.releaseDebugger(tabId, state.owner, traceContext ?? state.traceSpan?.context);
+		state.traceSpan?.setAttributes({
+			"network.request_count": state.requests.size,
+			"network.stored_body_bytes": state.storedBodyBytes,
+			"network.evicted_requests": state.evictedRequests,
+		});
+		state.traceSpan?.end("ok");
+		state.traceSpan = undefined;
 		return this.stats(tabId);
 	}
 
@@ -177,10 +250,23 @@ export class NetworkCaptureEngine {
 			.map((item) => ({ ...item, id: item.requestId }));
 	}
 
-	get(tabId: number, requestId: string): CapturedNetworkRequest {
+	get(tabId: number, requestId: string, traceContext?: TraceContext): CapturedNetworkRequest {
+		const span = this.telemetry?.startSpan("network.capture.get", {
+			parent: traceContext,
+			attributes: {
+				"network.tab_id": tabId,
+				"network.request_id": requestId,
+			},
+		});
 		const state = this.ensureState(tabId);
 		const item = state.requests.get(requestId);
-		if (!item) throw new Error(`Captured request ${requestId} was not found`);
+		if (!item) {
+			const error = new Error(`Captured request ${requestId} was not found`);
+			span?.recordError(error);
+			span?.end("error");
+			throw error;
+		}
+		span?.end("ok");
 		return { ...item, id: item.requestId };
 	}
 
@@ -366,9 +452,14 @@ export class NetworkCaptureEngine {
 		item.endedAt = Date.now();
 		item.durationMs = item.endedAt - item.startedAt;
 		try {
-			const bodyResult = (await this.debuggerManager.sendCommand(state.tabId, "Network.getResponseBody", {
-				requestId,
-			})) as { body?: string; base64Encoded?: boolean };
+			const bodyResult = await this.sendDebuggerCommand<{ body?: string; base64Encoded?: boolean }>(
+				state.tabId,
+				"Network.getResponseBody",
+				{
+					requestId,
+				},
+				state.traceSpan?.context,
+			);
 			const body =
 				typeof bodyResult.body === "string" && bodyResult.base64Encoded !== true ? bodyResult.body : undefined;
 			const boundedResponseBody = this.boundBody(state, body);

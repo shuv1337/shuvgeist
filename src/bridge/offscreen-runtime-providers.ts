@@ -20,6 +20,11 @@ import {
 } from "../prompts/prompts.js";
 import type { BgRuntimeExecMessage, BgRuntimeExecResponse, BgRuntimeType } from "./internal-messages.js";
 
+interface OffscreenTraceHeaders {
+	traceparent?: string;
+	tracestate?: string;
+}
+
 /**
  * Forward a runtime call to the background service worker. Wraps
  * `chrome.runtime.sendMessage` in a promise with explicit error translation.
@@ -29,6 +34,7 @@ async function forwardToBackground(
 	payload: Record<string, unknown>,
 	windowId: number | undefined,
 	sandboxId: string,
+	traceHeaders: OffscreenTraceHeaders = {},
 ): Promise<BgRuntimeExecResponse> {
 	const msg: BgRuntimeExecMessage = {
 		type: "bg-runtime-exec",
@@ -36,6 +42,8 @@ async function forwardToBackground(
 		payload,
 		windowId,
 		sandboxId,
+		traceparent: traceHeaders.traceparent,
+		tracestate: traceHeaders.tracestate,
 	};
 	try {
 		const response = (await chrome.runtime.sendMessage(msg)) as BgRuntimeExecResponse | undefined;
@@ -56,7 +64,10 @@ async function forwardToBackground(
 // ---------------------------------------------------------------------------
 
 export class OffscreenBrowserJsProxy implements SandboxRuntimeProvider {
-	constructor(private readonly windowId?: number) {}
+	constructor(
+		private readonly windowId?: number,
+		private readonly traceHeaders: OffscreenTraceHeaders = {},
+	) {}
 
 	getData(): Record<string, unknown> {
 		return {};
@@ -117,6 +128,7 @@ export class OffscreenBrowserJsProxy implements SandboxRuntimeProvider {
 			{ code: message.code, args: message.args },
 			this.windowId,
 			(message.sandboxId as string) || "offscreen",
+			this.traceHeaders,
 		);
 
 		respond({
@@ -135,7 +147,10 @@ export class OffscreenBrowserJsProxy implements SandboxRuntimeProvider {
 // ---------------------------------------------------------------------------
 
 export class OffscreenNavigateProxy implements SandboxRuntimeProvider {
-	constructor(private readonly windowId?: number) {}
+	constructor(
+		private readonly windowId?: number,
+		private readonly traceHeaders: OffscreenTraceHeaders = {},
+	) {}
 
 	getData(): Record<string, unknown> {
 		return {};
@@ -173,6 +188,7 @@ export class OffscreenNavigateProxy implements SandboxRuntimeProvider {
 			{ args: message.args },
 			this.windowId,
 			(message.sandboxId as string) || "offscreen",
+			this.traceHeaders,
 		);
 
 		respond({
@@ -189,7 +205,10 @@ export class OffscreenNavigateProxy implements SandboxRuntimeProvider {
 // ---------------------------------------------------------------------------
 
 export class OffscreenNativeInputProxy implements SandboxRuntimeProvider {
-	constructor(private readonly windowId?: number) {}
+	constructor(
+		private readonly windowId?: number,
+		private readonly traceHeaders: OffscreenTraceHeaders = {},
+	) {}
 
 	getData(): Record<string, unknown> {
 		return {};
@@ -238,6 +257,7 @@ export class OffscreenNativeInputProxy implements SandboxRuntimeProvider {
 			payload,
 			this.windowId,
 			(message.sandboxId as string) || "offscreen",
+			this.traceHeaders,
 		);
 
 		if (result.success) {
@@ -253,10 +273,13 @@ export class OffscreenNativeInputProxy implements SandboxRuntimeProvider {
  * The order mirrors the sidepanel path: native-input first so browserjs
  * skill code can still issue native input events.
  */
-export function buildOffscreenRuntimeProviders(windowId: number | undefined): SandboxRuntimeProvider[] {
+export function buildOffscreenRuntimeProviders(
+	windowId: number | undefined,
+	traceHeaders: OffscreenTraceHeaders = {},
+): SandboxRuntimeProvider[] {
 	return [
-		new OffscreenNativeInputProxy(windowId),
-		new OffscreenBrowserJsProxy(windowId),
-		new OffscreenNavigateProxy(windowId),
+		new OffscreenNativeInputProxy(windowId, traceHeaders),
+		new OffscreenBrowserJsProxy(windowId, traceHeaders),
+		new OffscreenNavigateProxy(windowId, traceHeaders),
 	];
 }

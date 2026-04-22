@@ -1,4 +1,4 @@
-import { BRIDGE_SETTINGS_KEY, type BridgeSettings } from "./internal-messages.js";
+import { BRIDGE_SETTINGS_KEY, type BridgeObservabilitySettings, type BridgeSettings } from "./internal-messages.js";
 
 export const LEGACY_BRIDGE_SETTINGS_DB_NAME = "shuvgeist-storage";
 export const LEGACY_BRIDGE_SETTINGS_STORE_NAME = "settings";
@@ -31,6 +31,11 @@ export function getDefaultBridgeSettings(): BridgeSettings {
 		url: "ws://127.0.0.1:19285/ws",
 		token: "",
 		sensitiveAccessEnabled: false,
+		observability: {
+			enabled: false,
+			ingestUrl: "http://localhost:3474",
+			publicIngestKey: "",
+		},
 	};
 }
 
@@ -41,6 +46,18 @@ export function normalizeBridgeSettings(settings?: Partial<BridgeSettings> | nul
 		url: settings?.url ?? defaults.url,
 		token: settings?.token ?? defaults.token,
 		sensitiveAccessEnabled: settings?.sensitiveAccessEnabled ?? defaults.sensitiveAccessEnabled,
+		observability: normalizeBridgeObservabilitySettings(settings?.observability),
+	};
+}
+
+export function normalizeBridgeObservabilitySettings(
+	settings?: Partial<BridgeObservabilitySettings> | null,
+): BridgeObservabilitySettings {
+	const defaults = getDefaultBridgeSettings().observability;
+	return {
+		enabled: settings?.enabled ?? defaults.enabled,
+		ingestUrl: settings?.ingestUrl ?? defaults.ingestUrl,
+		publicIngestKey: settings?.publicIngestKey ?? defaults.publicIngestKey,
 	};
 }
 

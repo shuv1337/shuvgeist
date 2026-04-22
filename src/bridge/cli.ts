@@ -54,6 +54,7 @@ import {
 	type WorkflowRunResultWire,
 } from "./protocol.js";
 import { BridgeServer } from "./server.js";
+import { BridgeTelemetry } from "./telemetry.js";
 import { formatWorkflowValidationErrors, validateWorkflowDefinition } from "./workflow-schema.js";
 
 declare const __SHUVGEIST_VERSION__: string;
@@ -73,18 +74,66 @@ function readConfigFile(): CliConfigFile {
 	}
 }
 
-function sendRequest(url: string, token: string, request: BridgeRequest, timeoutMs?: number): Promise<BridgeResponse> {
+function parseBooleanEnv(value: string | undefined): boolean | undefined {
+	if (!value) return undefined;
+	const normalized = value.trim().toLowerCase();
+	if (["1", "true", "yes", "on"].includes(normalized)) return true;
+	if (["0", "false", "no", "off"].includes(normalized)) return false;
+	return undefined;
+}
+
+function resolveCliTelemetry(configFile = readConfigFile()): BridgeTelemetry | undefined {
+	const enabled = parseBooleanEnv(process.env.SHUVGEIST_OTEL_ENABLED) ?? configFile.otel?.enabled ?? false;
+	const ingestUrl = process.env.SHUVGEIST_OTEL_INGEST_URL || configFile.otel?.ingestUrl || "http://localhost:3474";
+	const ingestKey = process.env.SHUVGEIST_OTEL_PRIVATE_INGEST_KEY || configFile.otel?.privateIngestKey || "";
+	return new BridgeTelemetry({
+		serviceName: "shuvgeist-cli",
+		serviceVersion: VERSION,
+		enabled,
+		ingestUrl,
+		ingestKey,
+	});
+}
+
+function sendRequest(
+	url: string,
+	token: string,
+	request: BridgeRequest,
+	timeoutMs?: number,
+	telemetry?: BridgeTelemetry,
+): Promise<BridgeResponse> {
 	return new Promise((resolve, reject) => {
 		const ws = new WebSocket(url);
 		let settled = false;
 		let timeout: ReturnType<typeof setTimeout> | undefined;
+		const span = telemetry?.startSpan(`bridge.cli.${request.method}`, {
+			kind: "client",
+			attributes: {
+				"bridge.method": request.method,
+				"bridge.request_id": request.id,
+			},
+		});
+		const tracedRequest: BridgeRequest = span ? { ...request, ...span.toTraceHeaders() } : request;
+
+		const finalize = (handler: () => void) => {
+			try {
+				handler();
+			} finally {
+				void telemetry?.flush();
+			}
+		};
 
 		if (timeoutMs && timeoutMs > 0) {
 			timeout = setTimeout(() => {
 				if (!settled) {
 					settled = true;
 					ws.close();
-					reject(Object.assign(new Error(`Connection timeout after ${timeoutMs}ms`), { code: "ETIMEDOUT" }));
+					span?.recordError(new Error(`Connection timeout after ${timeoutMs}ms`));
+					span?.setAttribute("bridge.outcome", "timeout");
+					span?.end("error");
+					finalize(() =>
+						reject(Object.assign(new Error(`Connection timeout after ${timeoutMs}ms`), { code: "ETIMEDOUT" })),
+					);
 				}
 			}, timeoutMs);
 		}
@@ -108,17 +157,32 @@ function sendRequest(url: string, token: string, request: BridgeRequest, timeout
 					settled = true;
 					if (timeout) clearTimeout(timeout);
 					ws.close();
-					reject(Object.assign(new Error("Registration failed: " + (reg.error || "unknown")), { code: "EAUTH" }));
+					span?.recordError(new Error("Registration failed: " + (reg.error || "unknown")));
+					span?.setAttribute("bridge.outcome", "error");
+					span?.end("error");
+					finalize(() =>
+						reject(
+							Object.assign(new Error("Registration failed: " + (reg.error || "unknown")), { code: "EAUTH" }),
+						),
+					);
 					return;
 				}
-				ws.send(JSON.stringify(request));
+				ws.send(JSON.stringify(tracedRequest));
 				return;
 			}
-			if ("id" in msg && msg.id === request.id) {
+			if ("id" in msg && msg.id === tracedRequest.id) {
 				settled = true;
 				if (timeout) clearTimeout(timeout);
 				ws.close();
-				resolve(msg as BridgeResponse);
+				const response = msg as BridgeResponse;
+				span?.setAttribute("bridge.outcome", response.error ? "error" : "success");
+				if (response.error) {
+					span?.recordError(new Error(response.error.message));
+					span?.end("error");
+				} else {
+					span?.end("ok");
+				}
+				finalize(() => resolve(response));
 			}
 		});
 
@@ -126,7 +190,10 @@ function sendRequest(url: string, token: string, request: BridgeRequest, timeout
 			if (!settled) {
 				settled = true;
 				if (timeout) clearTimeout(timeout);
-				reject(err);
+				span?.recordError(err);
+				span?.setAttribute("bridge.outcome", "error");
+				span?.end("error");
+				finalize(() => reject(err));
 			}
 		});
 
@@ -134,7 +201,12 @@ function sendRequest(url: string, token: string, request: BridgeRequest, timeout
 			if (timeout) clearTimeout(timeout);
 			if (!settled) {
 				settled = true;
-				reject(Object.assign(new Error("Connection closed before response"), { code: "ECONNRESET" }));
+				span?.recordError(new Error("Connection closed before response"));
+				span?.setAttribute("bridge.outcome", "error");
+				span?.end("error");
+				finalize(() =>
+					reject(Object.assign(new Error("Connection closed before response"), { code: "ECONNRESET" })),
+				);
 			}
 		});
 	});
@@ -253,9 +325,9 @@ async function cmdServe(args: string[]): Promise<void> {
 
 	// Resolve token: flag > env > config file > auto-generate and persist
 	let token = values.token || "";
+	const configFile = readConfigFile();
 	if (!token) {
-		const existing = readConfigFile();
-		token = existing.token || "";
+		token = configFile.token || "";
 	}
 	if (!token) {
 		token = generateToken();
@@ -269,7 +341,17 @@ async function cmdServe(args: string[]): Promise<void> {
 		console.log("");
 	}
 
-	await new BridgeServer({ host: values.host!, port: Number.parseInt(values.port!, 10), token }).start();
+	const telemetry = resolveCliTelemetry(configFile);
+	await new BridgeServer({
+		host: values.host!,
+		port: Number.parseInt(values.port!, 10),
+		token,
+		otel: {
+			enabled: telemetry?.getExportState().state !== "disabled",
+			ingestUrl: process.env.SHUVGEIST_OTEL_INGEST_URL || configFile.otel?.ingestUrl || "http://localhost:3474",
+			ingestKey: process.env.SHUVGEIST_OTEL_PRIVATE_INGEST_KEY || configFile.otel?.privateIngestKey || "",
+		},
+	}).start();
 }
 
 async function cmdOneShot(
@@ -278,7 +360,8 @@ async function cmdOneShot(
 	flags: { url?: string; host?: string; port?: string; token?: string; json?: boolean; timeout?: string },
 	defaultTimeoutMs?: number,
 ): Promise<BridgeResponse> {
-	const resolved = resolveConfig(flags, process.env, readConfigFile(), getConfigPath());
+	const configFile = readConfigFile();
+	const resolved = resolveConfig(flags, process.env, configFile, getConfigPath());
 	if (!resolved.ok) {
 		throw Object.assign(new Error(resolved.message), { code: "EAUTH" });
 	}
@@ -289,7 +372,7 @@ async function cmdOneShot(
 		method,
 		params,
 	};
-	return sendRequest(url, token, request, timeoutMs);
+	return sendRequest(url, token, request, timeoutMs, resolveCliTelemetry(configFile));
 }
 
 async function runOneShot(
