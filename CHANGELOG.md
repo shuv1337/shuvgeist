@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.1.10] - 2026-04-22
+
 ### Added
 
 - Lightweight text-to-speech support in the extension: a new sidepanel header speaker button opens an on-page TTS overlay with speak, pause, resume, stop, provider switching, voice selection, and opt-in click-to-speak controls. Playback is owned by the background/offscreen runtime so it can survive sidepanel lifecycle changes, and the first shipped providers are local Kokoro, OpenAI TTS, and ElevenLabs.
