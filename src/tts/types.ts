@@ -2,6 +2,37 @@ export const TTS_PROVIDER_IDS = ["kokoro", "openai", "elevenlabs"] as const;
 
 export type TtsProviderId = (typeof TTS_PROVIDER_IDS)[number];
 
+export interface TtsWordTimestamp {
+	word: string;
+	startTime: number;
+	endTime: number;
+}
+
+export interface TtsPlayhead {
+	charStart: number;
+	charEnd: number;
+	tAudioSeconds: number;
+	word: string;
+}
+
+export interface TtsReadingSession {
+	id: string;
+	tabId: number;
+	provider: TtsProviderId;
+	sourceKind: "raw-text" | "page-target";
+	text: string;
+	startedAt: number;
+	hasReadAlong: boolean;
+	overlayAttached: boolean;
+	fallbackReason?: "kokoro-unreachable" | "captioned-unsupported" | "legacy-provider-mode";
+}
+
+export interface KokoroHealthStatus {
+	status: "ok" | "unreachable" | "auth-required" | "captioned-unsupported" | "error";
+	latencyMs?: number;
+	message?: string;
+}
+
 export const TTS_PLAYBACK_STATUSES = ["idle", "loading", "playing", "paused", "error"] as const;
 
 export type TtsPlaybackStatus = (typeof TTS_PLAYBACK_STATUSES)[number];
@@ -24,6 +55,7 @@ export interface TtsSynthesisResult {
 	audioData: ArrayBuffer;
 	mimeType: string;
 	providerRequestId?: string;
+	timings?: TtsWordTimestamp[];
 }
 
 export interface TtsProviderConfig {
@@ -54,6 +86,7 @@ export interface TtsSettingsSnapshot {
 	speed: number;
 	clickModeDefault: boolean;
 	maxTextChars: number;
+	readAlongEnabled: boolean;
 	kokoroBaseUrl: string;
 	kokoroModelId: string;
 	kokoroVoiceId: string;
@@ -64,8 +97,26 @@ export interface TtsSettingsSnapshot {
 	elevenLabsVoiceId: string;
 }
 
+export type TtsSpeakCommand =
+	| {
+			kind: "raw-text";
+			text: string;
+			source: "overlay" | "sidepanel";
+	  }
+	| {
+			kind: "page-target";
+			text: string;
+			source: "selection" | "click";
+			truncated: boolean;
+			targetSummary: {
+				blockCount: number;
+				textLength: number;
+			};
+	  };
+
 export interface TtsOverlayState extends TtsPlaybackState {
 	enabled: boolean;
+	hasReadAlong?: boolean;
 }
 
 export type TtsStateEvent =

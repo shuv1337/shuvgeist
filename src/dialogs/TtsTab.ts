@@ -3,6 +3,7 @@ import { getAppStorage, SettingsTab } from "@mariozechner/pi-web-ui";
 import { html, type TemplateResult } from "lit";
 import { customElement, state } from "lit/decorators.js";
 import { Toast } from "../components/Toast.js";
+import { probeKokoroHealth } from "../tts/kokoro-health.js";
 import { getSampleTtsPhrase, listTtsVoices } from "../tts/service.js";
 import {
 	DEFAULT_KOKORO_VOICES,
@@ -11,7 +12,7 @@ import {
 	normalizeTtsProvider,
 	saveTtsSettings,
 } from "../tts/settings.js";
-import type { TtsSettingsSnapshot, TtsVoice } from "../tts/types.js";
+import type { KokoroHealthStatus, TtsSettingsSnapshot, TtsVoice } from "../tts/types.js";
 
 @customElement("tts-tab")
 export class TtsTab extends SettingsTab {
@@ -21,6 +22,8 @@ export class TtsTab extends SettingsTab {
 	@state() private elevenLabsKeyPresent = false;
 	@state() private voices: TtsVoice[] = DEFAULT_KOKORO_VOICES;
 	@state() private voiceError = "";
+	@state() private kokoroHealth: KokoroHealthStatus | null = null;
+	@state() private probingKokoro = false;
 
 	getTabName(): string {
 		return "TTS";
@@ -37,7 +40,28 @@ export class TtsTab extends SettingsTab {
 		this.openaiKeyPresent = Boolean(await storage.providerKeys.get("openai"));
 		this.elevenLabsKeyPresent = Boolean(await storage.providerKeys.get("tts-elevenlabs"));
 		await this.refreshVoices();
+		// Auto-probe Kokoro health on load
+		if (this.settings.provider === "kokoro") {
+			await this.probeKokoro();
+		}
 		this.loading = false;
+		this.requestUpdate();
+	}
+
+	private async probeKokoro() {
+		this.probingKokoro = true;
+		this.requestUpdate();
+		try {
+			const storage = getAppStorage();
+			const kokoroKey = await storage.providerKeys.get("tts-kokoro");
+			this.kokoroHealth = await probeKokoroHealth(
+				this.settings.kokoroBaseUrl,
+				typeof kokoroKey === "string" ? kokoroKey : undefined,
+			);
+		} catch {
+			this.kokoroHealth = { status: "unreachable", message: "Probe failed" };
+		}
+		this.probingKokoro = false;
 		this.requestUpdate();
 	}
 
@@ -104,6 +128,48 @@ export class TtsTab extends SettingsTab {
 		Toast.success("Playing test phrase");
 	}
 
+	private renderKokoroHealth(): TemplateResult {
+		if (!this.kokoroHealth) {
+			return html`<div class="text-xs text-muted-foreground">Click "Test connection" to check Kokoro status.</div>`;
+		}
+
+		const statusColors: Record<string, string> = {
+			ok: "text-green-400",
+			unreachable: "text-red-400",
+			"auth-required": "text-orange-400",
+			"captioned-unsupported": "text-yellow-400",
+			error: "text-red-400",
+		};
+
+		const statusLabels: Record<string, string> = {
+			ok: "Online with caption support",
+			unreachable: "Unreachable",
+			"auth-required": "Authentication required",
+			"captioned-unsupported": "Online - captions unavailable",
+			error: "Error",
+		};
+
+		return html`
+			<div class="space-y-1">
+				<div class="flex items-center gap-2">
+					<span class="text-xs font-medium ${statusColors[this.kokoroHealth.status] || "text-muted-foreground"}">
+						${statusLabels[this.kokoroHealth.status] || this.kokoroHealth.status}
+					</span>
+					${
+						this.kokoroHealth.latencyMs
+							? html`<span class="text-xs text-muted-foreground">(${this.kokoroHealth.latencyMs}ms)</span>`
+							: ""
+					}
+				</div>
+				${
+					this.kokoroHealth.message
+						? html`<div class="text-xs text-muted-foreground">${this.kokoroHealth.message}</div>`
+						: ""
+				}
+			</div>
+		`;
+	}
+
 	private renderProviderKeyStatus(): TemplateResult {
 		if (this.settings.provider === "openai") {
 			return html`
@@ -131,12 +197,14 @@ export class TtsTab extends SettingsTab {
 				</div>
 			`;
 		}
+		// Kokoro key input (only shown when auth is needed)
 		return html`
 			<div class="rounded-lg border border-border bg-muted/40 p-3 space-y-2">
-				<div class="text-sm font-medium text-foreground">Local Kokoro</div>
+				<div class="text-sm font-medium text-foreground">Kokoro key (optional)</div>
 				<div class="text-xs text-muted-foreground">
-					Kokoro uses the local OpenAI-compatible endpoint by default and does not require a key unless your local wrapper enforces auth.
+					Only needed if your Kokoro wrapper enforces authentication.
 				</div>
+				<provider-key-input provider="tts-kokoro"></provider-key-input>
 			</div>
 		`;
 	}
@@ -165,30 +233,48 @@ export class TtsTab extends SettingsTab {
 					<span class="text-sm font-medium text-foreground">Enable TTS</span>
 				</label>
 
-				<div class="grid gap-4 md:grid-cols-2">
-					<div class="space-y-1">
-						<label class="text-xs font-medium text-muted-foreground">Provider</label>
-						<select
-							class="w-full px-3 py-2 text-sm rounded-md border border-border bg-background text-foreground"
-							.value=${this.settings.provider}
-							@change=${async (event: Event) => {
-								const provider = normalizeTtsProvider((event.target as HTMLSelectElement).value);
-								await this.patchSettings({
-									provider,
-									voiceId:
-										provider === "kokoro"
-											? this.settings.kokoroVoiceId
-											: provider === "openai"
-												? this.settings.openaiVoiceId
-												: this.settings.elevenLabsVoiceId,
-								});
-							}}
-						>
-							<option value="kokoro">Kokoro</option>
-							<option value="openai">OpenAI</option>
-							<option value="elevenlabs">ElevenLabs</option>
-						</select>
-					</div>
+				${
+					this.settings.provider !== "kokoro"
+						? html`
+						<div class="rounded-lg border border-border bg-muted/40 p-3 space-y-2">
+							<div class="flex items-center gap-2">
+								<div class="w-2 h-2 rounded-full bg-yellow-400"></div>
+								<div class="text-sm font-medium text-foreground">Compatibility Mode</div>
+							</div>
+							<div class="text-xs text-muted-foreground">
+								You are using a cloud provider. For local-first TTS with read-along, switch to Kokoro.
+							</div>
+						</div>
+					`
+						: ""
+				}
+
+					<div class="grid gap-4 md:grid-cols-2">
+						<div class="space-y-1">
+							<label class="text-xs font-medium text-muted-foreground">Provider</label>
+							<select
+								class="w-full px-3 py-2 text-sm rounded-md border border-border bg-background text-foreground"
+								.value=${this.settings.provider}
+								@change=${async (event: Event) => {
+									const provider = normalizeTtsProvider((event.target as HTMLSelectElement).value);
+									await this.patchSettings({
+										provider,
+										voiceId:
+											provider === "kokoro"
+												? this.settings.kokoroVoiceId
+												: provider === "openai"
+													? this.settings.openaiVoiceId
+													: this.settings.elevenLabsVoiceId,
+									});
+								}}
+							>
+								<option value="kokoro">Kokoro (local)</option>
+								<optgroup label="Cloud providers (fallback)">
+									<option value="openai">OpenAI</option>
+									<option value="elevenlabs">ElevenLabs</option>
+								</optgroup>
+							</select>
+						</div>
 					<div class="space-y-1">
 						<label class="text-xs font-medium text-muted-foreground">Voice</label>
 						<select
@@ -231,29 +317,59 @@ export class TtsTab extends SettingsTab {
 					</label>
 				</div>
 
+				<label class="flex items-center gap-3 cursor-pointer">
+					<input
+						type="checkbox"
+						class="w-4 h-4 rounded border-border accent-primary"
+						.checked=${this.settings.readAlongEnabled}
+						@change=${(event: Event) =>
+							this.patchSettings({ readAlongEnabled: (event.target as HTMLInputElement).checked })}
+					/>
+					<span class="text-sm font-medium text-foreground">Enable word-level read-along</span>
+				</label>
+
 				${
 					this.settings.provider === "kokoro"
 						? html`
-						<div class="grid gap-4 md:grid-cols-2">
-							<div class="space-y-1">
-								<label class="text-xs font-medium text-muted-foreground">Kokoro base URL</label>
-								<input
-									type="text"
-									class="w-full px-3 py-2 text-sm rounded-md border border-border bg-background text-foreground"
-									.value=${this.settings.kokoroBaseUrl}
-									@change=${(event: Event) =>
-										this.patchSettings({ kokoroBaseUrl: (event.target as HTMLInputElement).value })}
-								/>
+						<div class="rounded-lg border border-border bg-muted/40 p-3 space-y-3">
+							<div class="text-sm font-medium text-foreground">Local Kokoro Setup</div>
+							<div class="grid gap-4 md:grid-cols-2">
+								<div class="space-y-1">
+									<label class="text-xs font-medium text-muted-foreground">Kokoro base URL</label>
+									<input
+										type="text"
+										class="w-full px-3 py-2 text-sm rounded-md border border-border bg-background text-foreground"
+										.value=${this.settings.kokoroBaseUrl}
+										@change=${(event: Event) =>
+											this.patchSettings({ kokoroBaseUrl: (event.target as HTMLInputElement).value })}
+									/>
+								</div>
+								<div class="space-y-1">
+									<label class="text-xs font-medium text-muted-foreground">Kokoro model</label>
+									<input
+										type="text"
+										class="w-full px-3 py-2 text-sm rounded-md border border-border bg-background text-foreground"
+										.value=${this.settings.kokoroModelId}
+										@change=${(event: Event) =>
+											this.patchSettings({ kokoroModelId: (event.target as HTMLInputElement).value })}
+									/>
+								</div>
 							</div>
 							<div class="space-y-1">
-								<label class="text-xs font-medium text-muted-foreground">Kokoro model</label>
-								<input
-									type="text"
-									class="w-full px-3 py-2 text-sm rounded-md border border-border bg-background text-foreground"
-									.value=${this.settings.kokoroModelId}
-									@change=${(event: Event) =>
-										this.patchSettings({ kokoroModelId: (event.target as HTMLInputElement).value })}
-								/>
+								<div class="flex items-center justify-between">
+									<div class="text-xs font-medium text-muted-foreground">Health Status</div>
+									${Button({
+										children: this.probingKokoro ? "Testing..." : "Test connection",
+										variant: "ghost",
+										onClick: () => this.probeKokoro(),
+										disabled: this.probingKokoro,
+									})}
+								</div>
+								${this.renderKokoroHealth()}
+							</div>
+							<div class="text-xs text-muted-foreground">
+								Kokoro runs locally and does not require a key unless your wrapper enforces auth.
+								For read-along, ensure your Kokoro instance supports <code>/dev/captioned_speech</code>.
 							</div>
 						</div>
 					`

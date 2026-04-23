@@ -140,6 +140,70 @@ let ttsState = createInitialTtsPlaybackState(DEFAULT_TTS_SETTINGS, []);
 let ttsOverlayTabId: number | null = null;
 let ttsWorldConfigured = false;
 
+// Overlay port registry: tabId -> port
+const overlayPorts = new Map<number, chrome.runtime.Port>();
+
+// Active reading sessions by session ID
+interface ActiveReadingSession {
+	id: string;
+	tabId: number;
+	provider: TtsProviderId;
+	sourceKind: "raw-text" | "page-target";
+	text: string;
+	startedAt: number;
+	hasReadAlong: boolean;
+	port: chrome.runtime.Port | null;
+}
+
+const activeReadingSessions = new Map<string, ActiveReadingSession>();
+
+function generateSessionId(): string {
+	return `tts-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+}
+
+function registerOverlayPort(tabId: number, port: chrome.runtime.Port): void {
+	// Clean up existing port for this tab
+	const existing = overlayPorts.get(tabId);
+	if (existing) {
+		try {
+			existing.disconnect();
+		} catch {}
+	}
+
+	overlayPorts.set(tabId, port);
+
+	port.onDisconnect.addListener(() => {
+		if (overlayPorts.get(tabId) === port) {
+			overlayPorts.delete(tabId);
+		}
+	});
+}
+
+function sendToOverlay(tabId: number, message: unknown): void {
+	const port = overlayPorts.get(tabId);
+	if (port) {
+		try {
+			port.postMessage(message);
+		} catch {
+			overlayPorts.delete(tabId);
+		}
+	}
+}
+
+function endReadingSession(sessionId: string): void {
+	const session = activeReadingSessions.get(sessionId);
+	if (session) {
+		activeReadingSessions.delete(sessionId);
+
+		// Send session end to overlay if connected
+		if (session.port) {
+			try {
+				session.port.postMessage({ type: "tts-session-end", sessionId });
+			} catch {}
+		}
+	}
+}
+
 function getBackgroundProviderSecrets() {
 	const storage = ensureBackgroundStorage();
 	return Promise.all([
@@ -318,8 +382,18 @@ async function speakText(text: string, source: "overlay" | "click" | "sidepanel"
 		return { ok: false, error: "No readable text to speak" };
 	}
 
+	// Determine if this is page-target or raw-text
+	// click source and typed text from overlay are page-target candidates
+	const isPageTarget = source === "click";
+	const isRawText = source === "overlay" || source === "sidepanel";
+
+	// Check if read-along is possible
+	const canReadAlong =
+		isPageTarget && ttsSettingsSnapshot.provider === "kokoro" && ttsSettingsSnapshot.readAlongEnabled;
+
 	const providerSecrets = await getBackgroundProviderSecrets();
 	const voiceId = ttsState.voiceId || getProviderVoiceId(ttsSettingsSnapshot, ttsSettingsSnapshot.provider);
+
 	ttsState = reduceTtsPlaybackState(ttsState, {
 		type: "speak-start",
 		text: prepared.text,
@@ -330,25 +404,63 @@ async function speakText(text: string, source: "overlay" | "click" | "sidepanel"
 		source,
 		length: prepared.text.length,
 		truncated: prepared.truncated,
+		canReadAlong,
 	});
 	await syncTtsOverlay();
 
-	const response = await dispatchTtsOffscreenMessage({
-		type: "tts-offscreen-synthesize",
-		provider: ttsSettingsSnapshot.provider,
-		request: {
+	// Choose synthesis path
+	const offscreenMessage: TtsOffscreenMessage = canReadAlong
+		? {
+				type: "tts-offscreen-synthesize-captioned",
+				request: {
+					text: prepared.text,
+					voiceId,
+					speed: ttsSettingsSnapshot.speed,
+					modelId: ttsSettingsSnapshot.kokoroModelId,
+				},
+				config: buildProviderConfig(ttsSettingsSnapshot, "kokoro", providerSecrets),
+			}
+		: {
+				type: "tts-offscreen-synthesize",
+				provider: ttsSettingsSnapshot.provider,
+				request: {
+					text: prepared.text,
+					voiceId,
+					speed: ttsSettingsSnapshot.speed,
+					modelId:
+						ttsSettingsSnapshot.provider === "kokoro"
+							? ttsSettingsSnapshot.kokoroModelId
+							: ttsSettingsSnapshot.provider === "openai"
+								? ttsSettingsSnapshot.openaiModelId
+								: ttsSettingsSnapshot.elevenLabsModelId,
+				},
+				config: buildProviderConfig(ttsSettingsSnapshot, ttsSettingsSnapshot.provider, providerSecrets),
+			};
+
+	const response = await dispatchTtsOffscreenMessage(offscreenMessage);
+
+	// Track reading session for read-along
+	if (response.ok && canReadAlong && ttsOverlayTabId) {
+		const sessionId = generateSessionId();
+		const port = overlayPorts.get(ttsOverlayTabId) ?? null;
+		activeReadingSessions.set(sessionId, {
+			id: sessionId,
+			tabId: ttsOverlayTabId,
+			provider: "kokoro",
+			sourceKind: "page-target",
 			text: prepared.text,
-			voiceId,
-			speed: ttsSettingsSnapshot.speed,
-			modelId:
-				ttsSettingsSnapshot.provider === "kokoro"
-					? ttsSettingsSnapshot.kokoroModelId
-					: ttsSettingsSnapshot.provider === "openai"
-						? ttsSettingsSnapshot.openaiModelId
-						: ttsSettingsSnapshot.elevenLabsModelId,
-		},
-		config: buildProviderConfig(ttsSettingsSnapshot, ttsSettingsSnapshot.provider, providerSecrets),
-	});
+			startedAt: Date.now(),
+			hasReadAlong: true,
+			port,
+		});
+
+		// Send session ack to overlay
+		if (port) {
+			try {
+				port.postMessage({ type: "tts-session-ack", sessionId, hasReadAlong: true });
+			} catch {}
+		}
+	}
 
 	await applyOffscreenEvent(response);
 	return response.ok
@@ -1130,6 +1242,19 @@ chrome.runtime.onMessage.addListener(
 
 // Handle port connections from sidepanels (session locks + sidepanel tracking)
 chrome.runtime.onConnect.addListener((port: chrome.runtime.Port) => {
+	// Handle overlay port connections from userScript
+	if (port.name === "shuvgeist-tts-overlay") {
+		const tabId = port.sender?.tab?.id;
+		if (tabId) {
+			registerOverlayPort(tabId, port);
+			// Send current state to overlay
+			try {
+				port.postMessage({ type: "tts-sync-state", state: ttsState });
+			} catch {}
+		}
+		return;
+	}
+
 	const match = /^sidepanel:(\d+)$/.exec(port.name);
 	if (!match) return;
 

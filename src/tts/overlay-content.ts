@@ -1,15 +1,23 @@
+/**
+ * TTS Overlay content - generates the script injected into pages.
+ *
+ * Uses Shadow DOM for isolation and persistent port for communication.
+ */
+
 import type { TtsOverlayState } from "./types.js";
 
-const OVERLAY_ID = "shuvgeist-tts-overlay";
-const STYLE_ID = "shuvgeist-tts-overlay-style";
+const OVERLAY_TAG = "shuvgeist-tts-root";
 
 const OVERLAY_CSS = `
-#shuvgeist-tts-overlay {
+:host {
 	position: fixed;
 	right: 20px;
 	bottom: 20px;
 	z-index: 2147483647;
 	width: min(360px, calc(100vw - 24px));
+	contain: layout paint style;
+}
+.overlay-container {
 	background: rgba(16, 16, 16, 0.94);
 	color: #f3f4f6;
 	border: 1px solid rgba(255,255,255,0.12);
@@ -18,41 +26,41 @@ const OVERLAY_CSS = `
 	backdrop-filter: blur(14px);
 	font: 13px/1.45 ui-sans-serif, system-ui, sans-serif;
 }
-#shuvgeist-tts-overlay * {
+.overlay-container * {
 	box-sizing: border-box;
 }
-#shuvgeist-tts-overlay button,
-#shuvgeist-tts-overlay select,
-#shuvgeist-tts-overlay textarea {
+.overlay-container button,
+.overlay-container select,
+.overlay-container textarea {
 	font: inherit;
 }
-#shuvgeist-tts-overlay .sg-tts-header {
+.sg-tts-header {
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
 	padding: 12px 14px 10px;
 	border-bottom: 1px solid rgba(255,255,255,0.08);
 }
-#shuvgeist-tts-overlay .sg-tts-body {
+.sg-tts-body {
 	padding: 12px 14px 14px;
 	display: grid;
 	gap: 10px;
 }
-#shuvgeist-tts-overlay .sg-tts-row {
+.sg-tts-row {
 	display: grid;
 	gap: 6px;
 }
-#shuvgeist-tts-overlay .sg-tts-grid {
+.sg-tts-grid {
 	display: grid;
 	grid-template-columns: 1fr 1fr;
 	gap: 8px;
 }
-#shuvgeist-tts-overlay .sg-tts-actions {
+.sg-tts-actions {
 	display: grid;
 	grid-template-columns: repeat(4, 1fr);
 	gap: 8px;
 }
-#shuvgeist-tts-overlay .sg-tts-button {
+.sg-tts-button {
 	border: none;
 	border-radius: 10px;
 	padding: 8px 10px;
@@ -60,17 +68,21 @@ const OVERLAY_CSS = `
 	color: inherit;
 	cursor: pointer;
 }
-#shuvgeist-tts-overlay .sg-tts-button[data-kind="primary"] {
+.sg-tts-button[data-kind="primary"] {
 	background: #f97316;
 	color: #111827;
 	font-weight: 600;
 }
-#shuvgeist-tts-overlay .sg-tts-button[data-active="true"] {
+.sg-tts-button[data-active="true"] {
 	background: #fb923c;
 	color: #111827;
 }
-#shuvgeist-tts-overlay .sg-tts-input,
-#shuvgeist-tts-overlay .sg-tts-select {
+.sg-tts-button:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
+}
+.sg-tts-input,
+.sg-tts-select {
 	width: 100%;
 	background: rgba(255,255,255,0.06);
 	border: 1px solid rgba(255,255,255,0.12);
@@ -78,16 +90,16 @@ const OVERLAY_CSS = `
 	border-radius: 10px;
 	padding: 8px 10px;
 }
-#shuvgeist-tts-overlay .sg-tts-select {
+.sg-tts-select {
 	color-scheme: dark;
 	background-color: #1f1f1f;
 	color: #f3f4f6;
 }
-#shuvgeist-tts-overlay .sg-tts-select option {
+.sg-tts-select option {
 	background-color: #1f1f1f;
 	color: #f3f4f6;
 }
-#shuvgeist-tts-overlay .sg-tts-status {
+.sg-tts-status {
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
@@ -95,47 +107,68 @@ const OVERLAY_CSS = `
 	font-size: 12px;
 	color: rgba(243,244,246,0.8);
 }
-#shuvgeist-tts-overlay .sg-tts-meta {
+.sg-tts-meta {
 	font-size: 11px;
 	color: rgba(243,244,246,0.6);
+}
+.sg-tts-status-banner {
+	font-size: 11px;
+	padding: 6px 10px;
+	border-radius: 8px;
+	margin-top: 8px;
+}
+.sg-tts-status-banner.info {
+	background: rgba(59, 130, 246, 0.2);
+	color: rgba(147, 197, 253, 0.9);
+}
+.sg-tts-status-banner.warning {
+	background: rgba(234, 179, 8, 0.2);
+	color: rgba(253, 224, 71, 0.9);
+}
+.sg-tts-status-banner.error {
+	background: rgba(239, 68, 68, 0.2);
+	color: rgba(252, 165, 165, 0.9);
 }
 `;
 
 const OVERLAY_HTML = `
-<div class="sg-tts-header">
-	<div>
-		<div style="font-weight:600">Text to Speech</div>
-		<div class="sg-tts-meta">Top frame only in v1</div>
+<div class="overlay-container">
+	<div class="sg-tts-header">
+		<div>
+			<div style="font-weight:600">Text to Speech</div>
+			<div class="sg-tts-meta" id="sg-tts-subtitle">Top frame only in v1</div>
+		</div>
+		<button id="sg-tts-close" class="sg-tts-button" aria-label="Close overlay">Close</button>
 	</div>
-	<button id="sg-tts-close" class="sg-tts-button" aria-label="Close overlay">Close</button>
-</div>
-<div class="sg-tts-body">
-	<div class="sg-tts-row">
-		<label>Text</label>
-		<textarea class="sg-tts-input" id="sg-tts-text" rows="4" placeholder="Type text here or arm click-to-speak."></textarea>
-	</div>
-	<div class="sg-tts-grid">
+	<div class="sg-tts-body">
 		<div class="sg-tts-row">
-			<label>Provider</label>
-			<select class="sg-tts-select" id="sg-tts-provider"></select>
+			<label>Text</label>
+			<textarea class="sg-tts-input" id="sg-tts-text" rows="4" placeholder="Type text here or arm click-to-speak."></textarea>
+		</div>
+		<div class="sg-tts-grid">
+			<div class="sg-tts-row">
+				<label>Provider</label>
+				<select class="sg-tts-select" id="sg-tts-provider"></select>
+			</div>
+			<div class="sg-tts-row">
+				<label>Voice</label>
+				<select class="sg-tts-select" id="sg-tts-voice"></select>
+			</div>
+		</div>
+		<div class="sg-tts-actions">
+			<button class="sg-tts-button" data-kind="primary" id="sg-tts-speak">Speak</button>
+			<button class="sg-tts-button" id="sg-tts-pause">Pause</button>
+			<button class="sg-tts-button" id="sg-tts-resume">Resume</button>
+			<button class="sg-tts-button" id="sg-tts-stop">Stop</button>
 		</div>
 		<div class="sg-tts-row">
-			<label>Voice</label>
-			<select class="sg-tts-select" id="sg-tts-voice"></select>
+			<button class="sg-tts-button" id="sg-tts-click-mode">Arm click-to-speak</button>
 		</div>
-	</div>
-	<div class="sg-tts-actions">
-		<button class="sg-tts-button" data-kind="primary" id="sg-tts-speak">Speak</button>
-		<button class="sg-tts-button" id="sg-tts-pause">Pause</button>
-		<button class="sg-tts-button" id="sg-tts-resume">Resume</button>
-		<button class="sg-tts-button" id="sg-tts-stop">Stop</button>
-	</div>
-	<div class="sg-tts-row">
-		<button class="sg-tts-button" id="sg-tts-click-mode">Arm click-to-speak</button>
-	</div>
-	<div class="sg-tts-status">
-		<span id="sg-tts-status"></span>
-		<span id="sg-tts-extra" class="sg-tts-meta"></span>
+		<div class="sg-tts-status">
+			<span id="sg-tts-status"></span>
+			<span id="sg-tts-extra" class="sg-tts-meta"></span>
+		</div>
+		<div id="sg-tts-status-banner" class="sg-tts-status-banner" style="display:none"></div>
 	</div>
 </div>
 `;
@@ -143,66 +176,112 @@ const OVERLAY_HTML = `
 export function createTtsOverlayScript(state: TtsOverlayState): string {
 	return `
 (function() {
-	const overlayId = ${JSON.stringify(OVERLAY_ID)};
-	const styleId = ${JSON.stringify(STYLE_ID)};
-	const overlayCss = ${JSON.stringify(OVERLAY_CSS)};
-	const overlayHtml = ${JSON.stringify(OVERLAY_HTML)};
+	const OVERLAY_TAG = ${JSON.stringify(OVERLAY_TAG)};
+	const OVERLAY_CSS = ${JSON.stringify(OVERLAY_CSS)};
+	const OVERLAY_HTML = ${JSON.stringify(OVERLAY_HTML)};
 	const initialState = ${JSON.stringify(state)};
 
-	function ensureStyle() {
-		if (document.getElementById(styleId)) return;
-		const style = document.createElement("style");
-		style.id = styleId;
-		style.textContent = overlayCss;
-		document.documentElement.appendChild(style);
-	}
+	// State management
+	let currentState = initialState;
+	let port = null;
+	let clickHandler = null;
+	let keyHandler = null;
+	let root = null;
+	let shadow = null;
 
 	function sendCommand(command) {
-		chrome.runtime.sendMessage({ type: "tts-overlay-command", command });
+		if (port) {
+			port.postMessage({ type: "tts-overlay-command", command });
+		} else {
+			chrome.runtime.sendMessage({ type: "tts-overlay-command", command });
+		}
 	}
 
-	function ensureOverlay() {
-		ensureStyle();
-		let root = document.getElementById(overlayId);
-		if (!root) {
-			root = document.createElement("div");
-			root.id = overlayId;
-			root.innerHTML = overlayHtml;
-			document.documentElement.appendChild(root);
-
-			const textArea = root.querySelector("#sg-tts-text");
-			const providerSelect = root.querySelector("#sg-tts-provider");
-			const voiceSelect = root.querySelector("#sg-tts-voice");
-
-			root.querySelector("#sg-tts-speak").addEventListener("click", () => {
-				sendCommand({
-					type: "speak",
-					payload: {
-						source: "overlay",
-						text: textArea.value || "",
-					},
-				});
+	function connectPort() {
+		if (port) return;
+		try {
+			port = chrome.runtime.connect({ name: "shuvgeist-tts-overlay" });
+			port.onMessage.addListener((message) => {
+				if (message && message.type === "tts-sync-state" && message.state) {
+					applyState(message.state);
+				}
 			});
-			root.querySelector("#sg-tts-pause").addEventListener("click", () => sendCommand({ type: "pause" }));
-			root.querySelector("#sg-tts-resume").addEventListener("click", () => sendCommand({ type: "resume" }));
-			root.querySelector("#sg-tts-stop").addEventListener("click", () => sendCommand({ type: "stop" }));
-			root.querySelector("#sg-tts-click-mode").addEventListener("click", () => {
-				sendCommand({
-					type: "set-click-mode",
-					armed: !window.__shuvgeistTtsOverlay.state.clickModeArmed,
-				});
+			port.onDisconnect.addListener(() => {
+				port = null;
 			});
-			providerSelect.addEventListener("change", () => {
-				sendCommand({ type: "set-provider", provider: providerSelect.value });
-			});
-			voiceSelect.addEventListener("change", () => {
-				sendCommand({ type: "set-voice", voiceId: voiceSelect.value });
-			});
-			root.querySelector("#sg-tts-close").addEventListener("click", () => {
-				sendCommand({ type: "close" });
-			});
+		} catch (e) {
+			console.warn("[TTS Overlay] Failed to connect port:", e);
 		}
-		return root;
+	}
+
+	function disconnectPort() {
+		if (port) {
+			port.disconnect();
+			port = null;
+		}
+	}
+
+	function createOverlay() {
+		// Remove existing
+		const existing = document.querySelector(OVERLAY_TAG);
+		if (existing) existing.remove();
+
+		// Create host element
+		root = document.createElement(OVERLAY_TAG);
+		document.documentElement.appendChild(root);
+
+		// Create shadow DOM
+		shadow = root.attachShadow({ mode: "open" });
+
+		// Add styles
+		const style = document.createElement("style");
+		style.textContent = OVERLAY_CSS;
+		shadow.appendChild(style);
+
+		// Add content
+		const container = document.createElement("div");
+		container.innerHTML = OVERLAY_HTML;
+		shadow.appendChild(container);
+
+		// Bind events
+		const textArea = shadow.querySelector("#sg-tts-text");
+		const providerSelect = shadow.querySelector("#sg-tts-provider");
+		const voiceSelect = shadow.querySelector("#sg-tts-voice");
+
+		shadow.querySelector("#sg-tts-speak").addEventListener("click", () => {
+			sendCommand({
+				type: "speak",
+				payload: {
+					source: "overlay",
+					text: textArea.value || "",
+				},
+			});
+		});
+
+		shadow.querySelector("#sg-tts-pause").addEventListener("click", () => sendCommand({ type: "pause" }));
+		shadow.querySelector("#sg-tts-resume").addEventListener("click", () => sendCommand({ type: "resume" }));
+		shadow.querySelector("#sg-tts-stop").addEventListener("click", () => sendCommand({ type: "stop" }));
+
+		shadow.querySelector("#sg-tts-click-mode").addEventListener("click", () => {
+			sendCommand({
+				type: "set-click-mode",
+				armed: !currentState.clickModeArmed,
+			});
+		});
+
+		providerSelect.addEventListener("change", () => {
+			sendCommand({ type: "set-provider", provider: providerSelect.value });
+		});
+
+		voiceSelect.addEventListener("change", () => {
+			sendCommand({ type: "set-voice", voiceId: voiceSelect.value });
+		});
+
+		shadow.querySelector("#sg-tts-close").addEventListener("click", () => {
+			sendCommand({ type: "close" });
+		});
+
+		return shadow;
 	}
 
 	function resolveSpeakableText(event) {
@@ -212,7 +291,7 @@ export function createTtsOverlayScript(state: TtsOverlayState): string {
 		}
 		const target = event.target instanceof Node ? event.target : null;
 		const element = target instanceof HTMLElement ? target : target && target.parentElement;
-		if (!element || element.closest("#" + overlayId)) return "";
+		if (!element || element.closest(OVERLAY_TAG)) return "";
 		if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement || element.isContentEditable) {
 			return "";
 		}
@@ -222,10 +301,8 @@ export function createTtsOverlayScript(state: TtsOverlayState): string {
 	}
 
 	function setClickMode(armed) {
-		const overlay = window.__shuvgeistTtsOverlay;
-		if (!overlay) return;
-		if (armed && !overlay.clickHandler) {
-			overlay.clickHandler = (event) => {
+		if (armed && !clickHandler) {
+			clickHandler = (event) => {
 				const text = resolveSpeakableText(event);
 				if (!text) return;
 				event.preventDefault();
@@ -238,37 +315,44 @@ export function createTtsOverlayScript(state: TtsOverlayState): string {
 					},
 				});
 			};
-			overlay.keyHandler = (event) => {
+			keyHandler = (event) => {
 				if (event.key === "Escape") {
 					sendCommand({ type: "set-click-mode", armed: false });
 				}
 			};
-			document.addEventListener("click", overlay.clickHandler, { capture: true });
-			document.addEventListener("keydown", overlay.keyHandler, { capture: true });
+			document.addEventListener("click", clickHandler, { capture: true });
+			document.addEventListener("keydown", keyHandler, { capture: true });
 		}
-		if (!armed && overlay.clickHandler) {
-			document.removeEventListener("click", overlay.clickHandler, { capture: true });
-			document.removeEventListener("keydown", overlay.keyHandler, { capture: true });
-			overlay.clickHandler = null;
-			overlay.keyHandler = null;
+		if (!armed && clickHandler) {
+			document.removeEventListener("click", clickHandler, { capture: true });
+			document.removeEventListener("keydown", keyHandler, { capture: true });
+			clickHandler = null;
+			keyHandler = null;
 		}
 	}
 
 	function applyState(nextState) {
-		const root = ensureOverlay();
-		const status = root.querySelector("#sg-tts-status");
-		const extra = root.querySelector("#sg-tts-extra");
-		const textArea = root.querySelector("#sg-tts-text");
-		const providerSelect = root.querySelector("#sg-tts-provider");
-		const voiceSelect = root.querySelector("#sg-tts-voice");
-		const clickModeButton = root.querySelector("#sg-tts-click-mode");
+		currentState = nextState;
 
-		window.__shuvgeistTtsOverlay.state = nextState;
+		if (!shadow) {
+			createOverlay();
+		}
 
+		const status = shadow.querySelector("#sg-tts-status");
+		const extra = shadow.querySelector("#sg-tts-extra");
+		const textArea = shadow.querySelector("#sg-tts-text");
+		const providerSelect = shadow.querySelector("#sg-tts-provider");
+		const voiceSelect = shadow.querySelector("#sg-tts-voice");
+		const clickModeButton = shadow.querySelector("#sg-tts-click-mode");
+		const statusBanner = shadow.querySelector("#sg-tts-status-banner");
+
+		// Update text area if empty and we have current text
 		if (!textArea.value && nextState.currentText) {
 			textArea.value = nextState.currentText;
 		}
 
+		// Update provider options
+		const currentProvider = providerSelect.value;
 		providerSelect.innerHTML = "";
 		["kokoro", "openai", "elevenlabs"].forEach((provider) => {
 			const option = document.createElement("option");
@@ -278,6 +362,7 @@ export function createTtsOverlayScript(state: TtsOverlayState): string {
 			providerSelect.appendChild(option);
 		});
 
+		// Update voice options
 		voiceSelect.innerHTML = "";
 		(nextState.availableVoices || []).forEach((voice) => {
 			const option = document.createElement("option");
@@ -294,6 +379,7 @@ export function createTtsOverlayScript(state: TtsOverlayState): string {
 			voiceSelect.appendChild(option);
 		}
 
+		// Update status
 		status.textContent = nextState.error ? "Error" : nextState.status;
 		extra.textContent = nextState.error
 			? nextState.error
@@ -302,23 +388,50 @@ export function createTtsOverlayScript(state: TtsOverlayState): string {
 				: nextState.currentTextLength
 					? nextState.currentTextLength + " chars"
 					: "";
+
+		// Update click mode button
 		clickModeButton.dataset.active = nextState.clickModeArmed ? "true" : "false";
 		clickModeButton.textContent = nextState.clickModeArmed ? "Disarm click-to-speak" : "Arm click-to-speak";
+
+		// Update status banner for read-along mode
+		if (nextState.status === "playing" && nextState.hasReadAlong) {
+			statusBanner.style.display = "block";
+			statusBanner.className = "sg-tts-status-banner info";
+			statusBanner.textContent = "Read-along active";
+		} else if (nextState.status === "playing" && nextState.provider === "kokoro") {
+			statusBanner.style.display = "block";
+			statusBanner.className = "sg-tts-status-banner warning";
+			statusBanner.textContent = "Audio only - caption support unavailable";
+		} else {
+			statusBanner.style.display = "none";
+		}
+
+		// Apply click mode
 		setClickMode(Boolean(nextState.clickModeArmed));
 	}
 
-	window.__shuvgeistTtsOverlay = window.__shuvgeistTtsOverlay || {
+	function remove() {
+		setClickMode(false);
+		disconnectPort();
+		if (root) {
+			root.remove();
+			root = null;
+			shadow = null;
+		}
+	}
+
+	// Initialize
+	connectPort();
+	applyState(initialState);
+
+	// Register global for external access
+	window.__shuvgeistTtsOverlay = {
 		state: initialState,
-		clickHandler: null,
-		keyHandler: null,
 		update: applyState,
-		remove: () => {
-			setClickMode(false);
-			document.getElementById(overlayId)?.remove();
-		},
+		remove,
 	};
 
-	applyState(initialState);
+	// Notify background that overlay is ready
 	chrome.runtime.sendMessage({ type: "tts-overlay-ready" });
 })();
 `;
@@ -330,6 +443,8 @@ export function createRemoveTtsOverlayScript(): string {
 	if (window.__shuvgeistTtsOverlay && typeof window.__shuvgeistTtsOverlay.remove === "function") {
 		window.__shuvgeistTtsOverlay.remove();
 	}
+	const root = document.querySelector("shuvgeist-tts-root");
+	if (root) root.remove();
 })();
 `;
 }
@@ -338,8 +453,6 @@ declare global {
 	interface Window {
 		__shuvgeistTtsOverlay?: {
 			state: TtsOverlayState;
-			clickHandler: ((event: MouseEvent) => void) | null;
-			keyHandler: ((event: KeyboardEvent) => void) | null;
 			update: (state: TtsOverlayState) => void;
 			remove: () => void;
 		};

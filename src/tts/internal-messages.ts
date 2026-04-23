@@ -1,4 +1,12 @@
-import type { TtsPlaybackState, TtsProviderConfig, TtsProviderId, TtsSettingsSnapshot, TtsVoice } from "./types.js";
+import type {
+	KokoroHealthStatus,
+	TtsPlaybackState,
+	TtsPlayhead,
+	TtsProviderConfig,
+	TtsProviderId,
+	TtsSettingsSnapshot,
+	TtsVoice,
+} from "./types.js";
 
 export interface TtsSpeakPayload {
 	text: string;
@@ -50,12 +58,24 @@ export type TtsRuntimeMessage =
 	| { type: "tts-stop" }
 	| { type: "tts-set-click-mode"; armed: boolean }
 	| { type: "tts-set-provider"; provider: TtsProviderId }
-	| { type: "tts-set-voice"; voiceId: string };
+	| { type: "tts-set-voice"; voiceId: string }
+	| { type: "tts-kokoro-probe"; baseUrl: string; apiKey?: string };
 
 export type TtsOffscreenMessage =
 	| {
 			type: "tts-offscreen-synthesize";
 			provider: TtsProviderId;
+			request: {
+				text: string;
+				voiceId: string;
+				speed: number;
+				modelId?: string;
+			};
+			config: TtsProviderConfig;
+			wantTimings?: boolean;
+	  }
+	| {
+			type: "tts-offscreen-synthesize-captioned";
 			request: {
 				text: string;
 				voiceId: string;
@@ -77,3 +97,11 @@ export interface TtsVoicesResponse {
 	ok: true;
 	voices: TtsVoice[];
 }
+
+// Port-based messages (for persistent overlay connection)
+export type TtsPortMessage =
+	| { type: "tts-session-ack"; sessionId: string; hasReadAlong: boolean }
+	| { type: "tts-playhead"; playhead: TtsPlayhead }
+	| { type: "tts-session-end"; sessionId: string }
+	| { type: "tts-kokoro-probe-result"; status: KokoroHealthStatus }
+	| { type: "tts-sync-state"; state: TtsPlaybackState };

@@ -24,6 +24,7 @@ describe("tts settings", () => {
 	it("normalizes missing values to defaults", () => {
 		expect(settingsModule.normalizeTtsSettings({})).toEqual(settingsModule.DEFAULT_TTS_SETTINGS);
 		expect(settingsModule.DEFAULT_TTS_SETTINGS.voiceId).toBe("am_onyx");
+		expect(settingsModule.DEFAULT_TTS_SETTINGS.readAlongEnabled).toBe(true);
 	});
 
 	it("loads settings from the existing flat store keys", async () => {
@@ -46,5 +47,6 @@ describe("tts settings", () => {
 
 		expect(storageMock.settings.set).toHaveBeenCalledWith("tts.provider", "kokoro");
 		expect(storageMock.settings.set).toHaveBeenCalledWith("tts.voiceId", "af_bella");
+		expect(storageMock.settings.set).toHaveBeenCalledWith("tts.readAlongEnabled", true);
 	});
 });

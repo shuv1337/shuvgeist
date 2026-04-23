@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Kokoro-first TTS read-along with word-level highlighting**: When using the local Kokoro provider, TTS now supports full read-along with current-word highlighting on the page and center-band auto-scroll. The implementation uses the `/dev/captioned_speech` endpoint for timing data and synchronizes audio playback with CSS Custom Highlight API (with fallback to positioned divs).
+
+### Changed
+
+- **TTS overlay now uses Shadow DOM** for style isolation and connects via a persistent `chrome.runtime.Port` for bidirectional state sync and playhead updates.
+
+- **Kokoro-first UX in settings**: The TTS settings tab now surfaces Kokoro as the primary local-first option, with cloud providers (OpenAI/ElevenLabs) grouped as fallback options. A "Compatibility Mode" banner appears when using cloud providers, and the new "Enable word-level read-along" toggle controls read-along behavior.
+
+- **Kokoro health status**: Added connection health probe with "Test connection" button that checks Kokoro reachability and `/dev/captioned_speech` endpoint availability. Status indicators show: "Online with caption support", "Online - captions unavailable", "Unreachable", or "Authentication required".
+
+### Technical
+
+- New TTS modules: `text-normalization.ts` (shared text processing), `kokoro-health.ts` (health probes with caching), `reading-surface.ts` (DOM token mapping), `highlight-renderer.ts` (CSS Custom Highlight API + fallback), `scroll-controller.ts` (center-band auto-scroll), `overlay-controller.ts` (extracted overlay logic), `page-runtime.ts` (read-along session management).
+
+- Extended types: `TtsWordTimestamp`, `TtsPlayhead`, `TtsReadingSession`, `KokoroHealthStatus`, and `readAlongEnabled` setting.
+
 ## [1.1.10] - 2026-04-22
 
 ### Added

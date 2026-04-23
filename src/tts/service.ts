@@ -1,7 +1,8 @@
 import { listElevenLabsVoices, synthesizeWithElevenLabs } from "./providers/elevenlabs.js";
-import { listKokoroVoices, synthesizeWithKokoro } from "./providers/kokoro.js";
+import { listKokoroVoices, synthesizeKokoroCaptioned, synthesizeWithKokoro } from "./providers/kokoro.js";
 import { getOpenAiVoiceOptions, synthesizeWithOpenAi } from "./providers/openai.js";
 import { DEFAULT_TTS_SETTINGS, getDefaultVoiceId, OPENAI_TTS_VOICES } from "./settings.js";
+import { clampReadableText, type NormalizedText } from "./text-normalization.js";
 import type {
 	TtsProviderConfig,
 	TtsProviderId,
@@ -11,10 +12,7 @@ import type {
 	TtsVoice,
 } from "./types.js";
 
-export interface PreparedTtsText {
-	text: string;
-	truncated: boolean;
-}
+export type { NormalizedText as PreparedTtsText };
 
 export interface TtsProviderSecrets {
 	openaiKey?: string;
@@ -22,18 +20,11 @@ export interface TtsProviderSecrets {
 	kokoroKey?: string;
 }
 
-export function prepareTtsText(text: string, maxChars = DEFAULT_TTS_SETTINGS.maxTextChars): PreparedTtsText {
-	const normalized = text.replace(/\s+/g, " ").trim();
-	if (normalized.length <= maxChars) {
-		return {
-			text: normalized,
-			truncated: false,
-		};
-	}
-	return {
-		text: normalized.slice(0, maxChars).trimEnd(),
-		truncated: true,
-	};
+/**
+ * Prepare text for TTS synthesis using shared normalization.
+ */
+export function prepareTtsText(text: string, maxChars = DEFAULT_TTS_SETTINGS.maxTextChars): NormalizedText {
+	return clampReadableText(text, maxChars);
 }
 
 export function buildProviderConfig(
@@ -86,6 +77,7 @@ export async function synthesizeTts(
 	secrets: TtsProviderSecrets = {},
 	fetchImpl: typeof fetch = fetch,
 	signal?: AbortSignal,
+	wantReadAlong = false,
 ): Promise<TtsSynthesisResult> {
 	const config = buildProviderConfig(settings, provider, secrets);
 	switch (provider) {
@@ -109,8 +101,18 @@ export async function synthesizeTts(
 		}
 		case "elevenlabs":
 			return synthesizeWithElevenLabs(config, request, fetchImpl, signal);
-		case "kokoro":
+		case "kokoro": {
+			if (wantReadAlong) {
+				try {
+					return await synthesizeKokoroCaptioned(config, request, fetchImpl, signal);
+				} catch (captionError) {
+					// If captioned fails, fall back to regular synthesis
+					console.warn("[TTS] Captioned synthesis failed, falling back to regular:", captionError);
+					return synthesizeWithKokoro(config, request, fetchImpl, signal);
+				}
+			}
 			return synthesizeWithKokoro(config, request, fetchImpl, signal);
+		}
 	}
 }
 

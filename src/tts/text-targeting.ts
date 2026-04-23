@@ -1,7 +1,6 @@
-export interface ResolvedTtsTextTarget {
-	text: string;
-	truncated: boolean;
-}
+import { clampReadableText, type NormalizedText } from "./text-normalization.js";
+
+export type ResolvedTtsTextTarget = NormalizedText;
 
 const READABLE_BLOCK_TAGS = new Set([
 	"P",
@@ -19,15 +18,8 @@ const READABLE_BLOCK_TAGS = new Set([
 ]);
 const NOISY_TAGS = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "NAV", "HEADER", "FOOTER"]);
 
-function clamp(text: string, maxChars = 3000): ResolvedTtsTextTarget {
-	const normalized = text.replace(/\s+/g, " ").trim();
-	if (normalized.length <= maxChars) {
-		return { text: normalized, truncated: false };
-	}
-	return {
-		text: normalized.slice(0, maxChars).trimEnd(),
-		truncated: true,
-	};
+function clamp(text: string, maxChars = 3000): NormalizedText {
+	return clampReadableText(text, maxChars);
 }
 
 function textFromNode(node: Node | null): string {

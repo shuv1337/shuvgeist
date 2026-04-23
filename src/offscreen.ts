@@ -12,7 +12,28 @@ import { buildOffscreenRuntimeProviders } from "./bridge/offscreen-runtime-provi
 import type { TtsOffscreenMessage, TtsOffscreenResponse } from "./tts/internal-messages.js";
 import { synthesizeTts } from "./tts/service.js";
 import { DEFAULT_TTS_SETTINGS } from "./tts/settings.js";
-import { createInitialTtsPlaybackState, type TtsPlaybackState } from "./tts/types.js";
+import {
+	createInitialTtsPlaybackState,
+	type TtsPlaybackState,
+	type TtsPlayhead,
+	type TtsWordTimestamp,
+} from "./tts/types.js";
+
+// Callback for playhead updates during playback
+let playheadCallback: ((playhead: TtsPlayhead) => void) | null = null;
+let playheadInterval: ReturnType<typeof setInterval> | null = null;
+
+export function setPlayheadCallback(callback: ((playhead: TtsPlayhead) => void) | null): void {
+	playheadCallback = callback;
+}
+
+export function clearPlayheadCallback(): void {
+	playheadCallback = null;
+	if (playheadInterval) {
+		clearInterval(playheadInterval);
+		playheadInterval = null;
+	}
+}
 
 interface TtsController {
 	audio: HTMLAudioElement;
@@ -188,6 +209,131 @@ async function synthesizeAndPlay(
 	}
 }
 
+async function synthesizeAndPlayCaptioned(
+	message: Extract<TtsOffscreenMessage, { type: "tts-offscreen-synthesize-captioned" }>,
+): Promise<TtsOffscreenResponse> {
+	const controller = getOrCreateTtsController();
+	controller.abortController?.abort();
+	controller.audio.pause();
+	resetAudioSource(controller);
+	const abortController = new AbortController();
+	controller.abortController = abortController;
+	controller.state = {
+		...controller.state,
+		status: "loading",
+		provider: "kokoro",
+		voiceId: message.request.voiceId,
+		currentText: message.request.text,
+		currentTextLength: message.request.text.length,
+		error: undefined,
+	};
+
+	try {
+		const result = await synthesizeTts(
+			"kokoro",
+			{
+				...DEFAULT_TTS_SETTINGS,
+				provider: "kokoro",
+				voiceId: message.request.voiceId,
+				speed: message.request.speed,
+				kokoroModelId: message.request.modelId || DEFAULT_TTS_SETTINGS.kokoroModelId,
+				kokoroBaseUrl: message.config.baseUrl || DEFAULT_TTS_SETTINGS.kokoroBaseUrl,
+			},
+			message.request,
+			{
+				kokoroKey: message.config.apiKey,
+			},
+			fetch,
+			abortController.signal,
+			true, // wantReadAlong
+		);
+
+		const blob = new Blob([result.audioData], { type: result.mimeType });
+		const objectUrl = URL.createObjectURL(blob);
+		controller.objectUrl = objectUrl;
+		controller.audio.src = objectUrl;
+
+		// Start playback with playhead tracking if we have timings
+		if (result.timings && result.timings.length > 0) {
+			startPlayheadTracking(controller.audio, result.timings);
+		}
+
+		await controller.audio.play();
+		controller.state = {
+			...controller.state,
+			status: "playing",
+		};
+		return { ok: true, event: "playing", requestId: result.providerRequestId };
+	} catch (error) {
+		if (abortController.signal.aborted) {
+			controller.state = {
+				...controller.state,
+				status: "idle",
+				error: undefined,
+			};
+			return { ok: true, event: "stopped" };
+		}
+		resetAudioSource(controller);
+		controller.state = {
+			...controller.state,
+			status: "error",
+			error: error instanceof Error ? error.message : String(error),
+		};
+		return {
+			ok: false,
+			error: controller.state.error || "TTS synthesis failed",
+		};
+	}
+}
+
+function startPlayheadTracking(audio: HTMLAudioElement, timings: TtsWordTimestamp[]): void {
+	// Clear any existing interval
+	if (playheadInterval) {
+		clearInterval(playheadInterval);
+	}
+
+	playheadInterval = setInterval(() => {
+		if (!playheadCallback || audio.paused || audio.ended) {
+			return;
+		}
+
+		const currentTime = audio.currentTime;
+
+		// Find the current word based on time
+		const currentTiming = timings.find((t) => currentTime >= t.startTime && currentTime < t.endTime);
+
+		if (currentTiming) {
+			// Calculate character position based on word index
+			let charStart = 0;
+			for (let i = 0; i < timings.length; i++) {
+				if (timings[i] === currentTiming) {
+					const playhead: TtsPlayhead = {
+						charStart,
+						charEnd: charStart + currentTiming.word.length,
+						tAudioSeconds: currentTime,
+						word: currentTiming.word,
+					};
+					playheadCallback(playhead);
+					break;
+				}
+				charStart += timings[i].word.length + 1; // +1 for space
+			}
+		}
+	}, 50); // 50ms update interval
+
+	// Clean up when audio ends
+	audio.addEventListener(
+		"ended",
+		() => {
+			if (playheadInterval) {
+				clearInterval(playheadInterval);
+				playheadInterval = null;
+			}
+		},
+		{ once: true },
+	);
+}
+
 function pausePlayback(): TtsOffscreenResponse {
 	const controller = getOrCreateTtsController();
 	controller.audio.pause();
@@ -241,6 +387,8 @@ export async function handleOffscreenTtsMessage(message: TtsOffscreenMessage): P
 	switch (message.type) {
 		case "tts-offscreen-synthesize":
 			return synthesizeAndPlay(message);
+		case "tts-offscreen-synthesize-captioned":
+			return synthesizeAndPlayCaptioned(message);
 		case "tts-offscreen-pause":
 			return pausePlayback();
 		case "tts-offscreen-resume":
@@ -257,6 +405,8 @@ export async function handleOffscreenTtsMessage(message: TtsOffscreenMessage): P
 							? "playing"
 							: "stopped",
 			};
+		default:
+			return { ok: false, error: `Unknown message type: ${(message as { type?: string }).type}` };
 	}
 }
 
