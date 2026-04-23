@@ -21,19 +21,12 @@ const entryPoints = {
 	offscreen: join(packageRoot, "src/offscreen.ts"),
 };
 
-rmSync(outDir, { recursive: true, force: true });
-mkdirSync(outDir, { recursive: true });
-
-const buildOptions = {
+const overlayRuntimeEntry = join(packageRoot, "src/tts/overlay-runtime.ts");
+const sharedBuildOptions = {
 	absWorkingDir: packageRoot,
-	entryPoints,
-	bundle: true,
-	outdir: outDir,
-	format: "esm",
 	target: ["chrome120"],
 	platform: "browser",
 	sourcemap: isWatch ? "inline" : true,
-	entryNames: "[name]",
 	loader: {
 		".ts": "ts",
 		".tsx": "tsx",
@@ -53,6 +46,26 @@ const buildOptions = {
 		"lit/directives/class-map.js": join(packageRoot, "node_modules/lit/directives/class-map.js"),
 		"lit/directives/unsafe-html.js": join(packageRoot, "node_modules/lit/directives/unsafe-html.js"),
 	},
+};
+
+rmSync(outDir, { recursive: true, force: true });
+mkdirSync(outDir, { recursive: true });
+
+const buildOptions = {
+	...sharedBuildOptions,
+	entryPoints,
+	bundle: true,
+	outdir: outDir,
+	format: "esm",
+	entryNames: "[name]",
+};
+
+const overlayRuntimeBuildOptions = {
+	...sharedBuildOptions,
+	entryPoints: [overlayRuntimeEntry],
+	bundle: true,
+	outfile: join(outDir, "tts-overlay-runtime.js"),
+	format: "iife",
 };
 
 // Get all files from static directory
@@ -94,7 +107,8 @@ const copyStatic = () => {
 const run = async () => {
 	if (isWatch) {
 		const ctx = await context(buildOptions);
-		await ctx.watch();
+		const overlayCtx = await context(overlayRuntimeBuildOptions);
+		await Promise.all([ctx.watch(), overlayCtx.watch()]);
 		copyStatic();
 
 		// Watch the entire static directory
@@ -117,6 +131,7 @@ const run = async () => {
 		process.stdout.write("Watching for changes...\n");
 	} else {
 		await build(buildOptions);
+		await build(overlayRuntimeBuildOptions);
 		copyStatic();
 	}
 };

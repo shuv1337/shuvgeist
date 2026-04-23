@@ -1,16 +1,19 @@
 import type {
 	KokoroHealthStatus,
+	TtsOverlayState,
 	TtsPlaybackState,
 	TtsPlayhead,
 	TtsProviderConfig,
 	TtsProviderId,
 	TtsSettingsSnapshot,
+	TtsSpeakCommand,
 	TtsVoice,
 } from "./types.js";
 
 export interface TtsSpeakPayload {
-	text: string;
-	source: "overlay" | "click" | "sidepanel";
+	command: TtsSpeakCommand;
+	sessionId?: string;
+	fallbackProvider?: Exclude<TtsProviderId, "kokoro">;
 }
 
 export type TtsOverlayCommand =
@@ -19,6 +22,7 @@ export type TtsOverlayCommand =
 	| { type: "resume" }
 	| { type: "stop" }
 	| { type: "close" }
+	| { type: "probe-kokoro" }
 	| { type: "set-click-mode"; armed: boolean }
 	| { type: "set-provider"; provider: TtsProviderId }
 	| { type: "set-voice"; voiceId: string };
@@ -76,6 +80,7 @@ export type TtsOffscreenMessage =
 	  }
 	| {
 			type: "tts-offscreen-synthesize-captioned";
+			sessionId: string;
 			request: {
 				text: string;
 				voiceId: string;
@@ -100,8 +105,13 @@ export interface TtsVoicesResponse {
 
 // Port-based messages (for persistent overlay connection)
 export type TtsPortMessage =
-	| { type: "tts-session-ack"; sessionId: string; hasReadAlong: boolean }
-	| { type: "tts-playhead"; playhead: TtsPlayhead }
+	| {
+			type: "tts-session-ack";
+			sessionId: string;
+			hasReadAlong: boolean;
+			fallbackReason?: "kokoro-unreachable" | "captioned-unsupported" | "legacy-provider-mode";
+	  }
+	| { type: "tts-playhead"; sessionId: string; playhead: TtsPlayhead }
 	| { type: "tts-session-end"; sessionId: string }
 	| { type: "tts-kokoro-probe-result"; status: KokoroHealthStatus }
-	| { type: "tts-sync-state"; state: TtsPlaybackState };
+	| { type: "tts-sync-state"; state: TtsOverlayState; settings: TtsSettingsSnapshot };

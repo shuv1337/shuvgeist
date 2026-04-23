@@ -370,6 +370,13 @@ export class TtsTab extends SettingsTab {
 							<div class="text-xs text-muted-foreground">
 								Kokoro runs locally and does not require a key unless your wrapper enforces auth.
 								For read-along, ensure your Kokoro instance supports <code>/dev/captioned_speech</code>.
+								<a
+									href="https://github.com/remsky/Kokoro-FastAPI"
+									target="_blank"
+									rel="noreferrer"
+									class="text-primary hover:underline ml-1"
+									>Setup docs</a
+								>
 							</div>
 						</div>
 					`

@@ -12,6 +12,7 @@ import { createHighlightRenderer } from "./highlight-renderer.js";
 import {
 	buildReadingSurface,
 	disposeReadingSurface,
+	findTokenAtCharIndex,
 	findTokenForWord,
 	type PreparedReadingSurface,
 } from "./reading-surface.js";
@@ -36,17 +37,20 @@ export function startReadAlongSession(
 	options: {
 		selection?: Selection | null;
 		maxChars?: number;
+		surface?: PreparedReadingSurface;
 	} = {},
 ): { success: boolean; error?: string; surfaceText?: string } {
 	// Clean up any existing session
 	endReadAlongSession();
 
 	try {
-		const surface = buildReadingSurface({
-			sessionId,
-			selection: options.selection,
-			maxChars: options.maxChars ?? 3000,
-		});
+		const surface =
+			options.surface ??
+			buildReadingSurface({
+				sessionId,
+				selection: options.selection,
+				maxChars: options.maxChars ?? 3000,
+			});
 
 		if (!surface) {
 			return { success: false, error: "No readable text found on page" };
@@ -97,8 +101,9 @@ export function handlePlayheadUpdate(playhead: TtsPlayhead): void {
 
 	const { surface, highlightRenderer, scrollController } = activeSession;
 
-	// Find the token for this word
-	const token = findTokenForWord(surface, playhead.word, activeSession.currentWordIndex);
+	const token =
+		findTokenAtCharIndex(surface, playhead.charStart) ??
+		findTokenForWord(surface, playhead.word, activeSession.currentWordIndex);
 
 	if (token && !token.dirty) {
 		// Update highlight

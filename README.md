@@ -33,6 +33,7 @@ The extension lives in the browser sidepanel and persists its data locally in In
 - domain skills that inject reusable site-specific helpers into page scripts
 - interactive element disambiguation when DOM targeting is unclear
 - image extraction and document extraction tools
+- Kokoro-first text-to-speech with page-bound read-along highlighting and audio-only cloud fallback paths
 - optional debugger-backed tooling for stubborn sites that reject synthetic DOM events
 - daily cost tracking with provider/model breakdowns
 - settings tabs for subscriptions, providers/models, skills, bridge state, costs, and about/theme
@@ -105,7 +106,7 @@ Important entry points:
 - `src/dialogs/`: settings tabs and first-run dialogs
 - `src/storage/`: IndexedDB-backed sessions, skills, providers, and cost tracking
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for a deeper code-oriented walkthrough.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for a deeper code-oriented walkthrough. For the local-first TTS overlay and Kokoro read-along flow, see [docs/tts.md](docs/tts.md).
 
 ## Install
 

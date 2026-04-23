@@ -55,4 +55,18 @@ describe("TtsTab", () => {
 		expect(tab.textContent).toContain('Using the shared provider-keys["openai"] credential.');
 		expect(tab.textContent).toContain("Open overlay on current page");
 	});
+
+	it("renders Kokoro setup guidance with the upstream docs link", async () => {
+		settingsStore.set("tts.provider", "kokoro");
+		const { TtsTab } = await import("../../../src/dialogs/TtsTab.js");
+		const tab = new TtsTab();
+		document.body.appendChild(tab);
+		await tab.updateComplete;
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		await tab.updateComplete;
+
+		const link = tab.shadowRoot?.querySelector<HTMLAnchorElement>('a[href="https://github.com/remsky/Kokoro-FastAPI"]');
+		expect(link).toBeTruthy();
+		expect(tab.textContent).toContain("Enable word-level read-along");
+	});
 });

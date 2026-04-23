@@ -1,4 +1,4 @@
-import { createRemoveTtsOverlayScript, createTtsOverlayScript } from "./overlay-content.js";
+import { createRemoveTtsOverlayScript } from "./overlay-content.js";
 import type { TtsOverlayState } from "./types.js";
 
 export const TTS_OVERLAY_WORLD_ID = "shuvgeist-tts-overlay";
@@ -15,9 +15,9 @@ export async function configureTtsOverlayWorld(): Promise<void> {
 	});
 }
 
-export async function injectTtsOverlay(tabId: number, state: TtsOverlayState): Promise<void> {
+export async function injectTtsOverlay(tabId: number, _state: TtsOverlayState): Promise<void> {
 	await chrome.userScripts.execute({
-		js: [{ code: createTtsOverlayScript(state) }],
+		js: [{ file: "tts-overlay-runtime.js" }],
 		target: { tabId, allFrames: false },
 		world: "USER_SCRIPT",
 		worldId: TTS_OVERLAY_WORLD_ID,

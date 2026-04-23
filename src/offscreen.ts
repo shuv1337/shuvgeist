@@ -19,20 +19,15 @@ import {
 	type TtsWordTimestamp,
 } from "./tts/types.js";
 
-// Callback for playhead updates during playback
-let playheadCallback: ((playhead: TtsPlayhead) => void) | null = null;
 let playheadInterval: ReturnType<typeof setInterval> | null = null;
 
-export function setPlayheadCallback(callback: ((playhead: TtsPlayhead) => void) | null): void {
-	playheadCallback = callback;
-}
-
-export function clearPlayheadCallback(): void {
-	playheadCallback = null;
-	if (playheadInterval) {
-		clearInterval(playheadInterval);
-		playheadInterval = null;
-	}
+function sendTtsRuntimeEvent(message: Record<string, unknown>): void {
+	try {
+		const response = chrome.runtime.sendMessage(message);
+		if (response && typeof (response as Promise<unknown>).catch === "function") {
+			void (response as Promise<unknown>).catch(() => undefined);
+		}
+	} catch {}
 }
 
 interface TtsController {
@@ -40,6 +35,7 @@ interface TtsController {
 	objectUrl?: string;
 	abortController?: AbortController;
 	state: TtsPlaybackState;
+	captionSessionId?: string;
 }
 
 declare global {
@@ -55,11 +51,23 @@ function cloneState(state: TtsPlaybackState): TtsPlaybackState {
 	};
 }
 
+function clearPlayheadTracking(sessionId?: string): void {
+	if (playheadInterval) {
+		clearInterval(playheadInterval);
+		playheadInterval = null;
+	}
+	if (sessionId) {
+		sendTtsRuntimeEvent({ type: "tts-offscreen-session-end", sessionId });
+	}
+}
+
 function resetAudioSource(controller: TtsController): void {
 	if (controller.objectUrl) {
 		URL.revokeObjectURL(controller.objectUrl);
 		controller.objectUrl = undefined;
 	}
+	clearPlayheadTracking(controller.captionSessionId);
+	controller.captionSessionId = undefined;
 	controller.audio.removeAttribute("src");
 	controller.audio.load();
 }
@@ -253,9 +261,9 @@ async function synthesizeAndPlayCaptioned(
 		controller.objectUrl = objectUrl;
 		controller.audio.src = objectUrl;
 
-		// Start playback with playhead tracking if we have timings
+		controller.captionSessionId = message.sessionId;
 		if (result.timings && result.timings.length > 0) {
-			startPlayheadTracking(controller.audio, result.timings);
+			startPlayheadTracking(controller.audio, result.timings, message.sessionId);
 		}
 
 		await controller.audio.play();
@@ -286,49 +294,35 @@ async function synthesizeAndPlayCaptioned(
 	}
 }
 
-function startPlayheadTracking(audio: HTMLAudioElement, timings: TtsWordTimestamp[]): void {
-	// Clear any existing interval
-	if (playheadInterval) {
-		clearInterval(playheadInterval);
-	}
+function startPlayheadTracking(audio: HTMLAudioElement, timings: TtsWordTimestamp[], sessionId: string): void {
+	clearPlayheadTracking();
 
 	playheadInterval = setInterval(() => {
-		if (!playheadCallback || audio.paused || audio.ended) {
+		if (audio.paused || audio.ended) {
 			return;
 		}
 
 		const currentTime = audio.currentTime;
-
-		// Find the current word based on time
-		const currentTiming = timings.find((t) => currentTime >= t.startTime && currentTime < t.endTime);
-
-		if (currentTiming) {
-			// Calculate character position based on word index
-			let charStart = 0;
-			for (let i = 0; i < timings.length; i++) {
-				if (timings[i] === currentTiming) {
-					const playhead: TtsPlayhead = {
-						charStart,
-						charEnd: charStart + currentTiming.word.length,
-						tAudioSeconds: currentTime,
-						word: currentTiming.word,
-					};
-					playheadCallback(playhead);
-					break;
-				}
-				charStart += timings[i].word.length + 1; // +1 for space
+		let charStart = 0;
+		for (const timing of timings) {
+			if (currentTime >= timing.startTime && currentTime < timing.endTime) {
+				const playhead: TtsPlayhead = {
+					charStart,
+					charEnd: charStart + timing.word.length,
+					tAudioSeconds: currentTime,
+					word: timing.word,
+				};
+				sendTtsRuntimeEvent({ type: "tts-offscreen-playhead", sessionId, playhead });
+				break;
 			}
+			charStart += timing.word.length + 1;
 		}
-	}, 50); // 50ms update interval
+	}, 50);
 
-	// Clean up when audio ends
 	audio.addEventListener(
 		"ended",
 		() => {
-			if (playheadInterval) {
-				clearInterval(playheadInterval);
-				playheadInterval = null;
-			}
+			clearPlayheadTracking(sessionId);
 		},
 		{ once: true },
 	);

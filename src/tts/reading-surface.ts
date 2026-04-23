@@ -1,12 +1,5 @@
-/**
- * Page-local reading surface for TTS read-along.
- *
- * This module builds and maintains the mapping between synthesized text
- * character positions and actual DOM Text nodes. It lives entirely in the
- * page/userScript context and never crosses context boundaries.
- */
-
 import { normalizeReadableText } from "./text-normalization.js";
+import { collectBlocksFromRange, isTtsOverlayElement } from "./text-targeting.js";
 
 export interface TokenMapEntry {
 	blockId: number;
@@ -47,26 +40,21 @@ const READABLE_BLOCK_TAGS = new Set([
 ]);
 
 const NOISY_TAGS = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "NAV", "HEADER", "FOOTER", "ASIDE"]);
+const WORD_PATTERN = /[\p{L}\p{N}][\p{L}\p{N}'’_-]*/gu;
 
-/**
- * Collect all readable blocks within a root element.
- */
 export function collectReadableBlocks(root: HTMLElement = document.body): HTMLElement[] {
 	const blocks: HTMLElement[] = [];
 	const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT, {
 		acceptNode: (node) => {
-			const el = node as HTMLElement;
-			if (NOISY_TAGS.has(el.tagName) || el.closest("#shuvgeist-tts-overlay, shuvgeist-tts-root")) {
+			const element = node as HTMLElement;
+			if (NOISY_TAGS.has(element.tagName) || isTtsOverlayElement(element)) {
 				return NodeFilter.FILTER_REJECT;
 			}
-			if (READABLE_BLOCK_TAGS.has(el.tagName)) {
-				// Check if it has visible text content
-				const text = getVisibleText(el).trim();
-				if (text.length >= 8) {
-					return NodeFilter.FILTER_ACCEPT;
-				}
+			if (!READABLE_BLOCK_TAGS.has(element.tagName)) {
+				return NodeFilter.FILTER_SKIP;
 			}
-			return NodeFilter.FILTER_SKIP;
+			const text = getVisibleText(element).trim();
+			return text.length >= 8 ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP;
 		},
 	});
 
@@ -79,30 +67,28 @@ export function collectReadableBlocks(root: HTMLElement = document.body): HTMLEl
 	return blocks;
 }
 
-/**
- * Get visible text from an element, excluding hidden elements.
- */
 function getVisibleText(element: HTMLElement): string {
 	const style = window.getComputedStyle(element);
 	if (style.display === "none" || style.visibility === "hidden") {
 		return "";
 	}
-	return element.innerText || "";
+	return element.innerText || element.textContent || "";
 }
 
-/**
- * Collect all text nodes within a block element.
- */
-function collectTextNodes(block: HTMLElement): Text[] {
+function collectTextNodes(block: HTMLElement, range?: Range | null): Text[] {
 	const texts: Text[] = [];
 	const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT, {
 		acceptNode: (node) => {
 			const parent = node.parentElement;
 			if (!parent) return NodeFilter.FILTER_REJECT;
-			if (NOISY_TAGS.has(parent.tagName)) return NodeFilter.FILTER_REJECT;
+			if (NOISY_TAGS.has(parent.tagName) || isTtsOverlayElement(parent)) {
+				return NodeFilter.FILTER_REJECT;
+			}
+			if (range && !range.intersectsNode(node)) {
+				return NodeFilter.FILTER_REJECT;
+			}
 			const text = node.textContent || "";
-			if (text.trim().length === 0) return NodeFilter.FILTER_REJECT;
-			return NodeFilter.FILTER_ACCEPT;
+			return text.trim().length > 0 ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
 		},
 	});
 
@@ -115,9 +101,44 @@ function collectTextNodes(block: HTMLElement): Text[] {
 	return texts;
 }
 
-/**
- * Build a reading surface from blocks or selection.
- */
+function getNodeSlice(node: Text, range?: Range | null): { text: string; startOffset: number } | null {
+	const value = node.textContent || "";
+	if (!value) {
+		return null;
+	}
+
+	let startOffset = 0;
+	let endOffset = value.length;
+
+	if (range?.intersectsNode(node)) {
+		if (range.startContainer === node) {
+			startOffset = range.startOffset;
+		}
+		if (range.endContainer === node) {
+			endOffset = range.endOffset;
+		}
+	}
+
+	if (endOffset <= startOffset) {
+		return null;
+	}
+
+	const text = value.slice(startOffset, endOffset);
+	if (!text.trim()) {
+		return null;
+	}
+
+	return { text, startOffset };
+}
+
+function extractWordMatches(text: string): Array<{ word: string; start: number; end: number }> {
+	return Array.from(text.matchAll(WORD_PATTERN)).map((match) => ({
+		word: match[0],
+		start: match.index ?? 0,
+		end: (match.index ?? 0) + match[0].length,
+	}));
+}
+
 export function buildReadingSurface(options: {
 	sessionId: string;
 	blocks?: HTMLElement[];
@@ -125,55 +146,43 @@ export function buildReadingSurface(options: {
 	maxChars?: number;
 }): PreparedReadingSurface | null {
 	const { sessionId, maxChars = 3000 } = options;
+	const selection = options.selection;
+	const range = selection && selection.rangeCount > 0 && !selection.isCollapsed ? selection.getRangeAt(0) : null;
 
 	let blocks = options.blocks;
-	let truncated = false;
-
-	// If selection provided, try to get blocks from selection
-	if (options.selection && !options.selection.isCollapsed) {
-		const range = options.selection.getRangeAt(0);
-		const selectedBlocks = getBlocksFromRange(range);
-		if (selectedBlocks.length > 0) {
-			blocks = selectedBlocks;
-		}
+	if ((!blocks || blocks.length === 0) && range) {
+		blocks = collectBlocksFromRange(range);
 	}
-
-	// Collect blocks if not provided
 	if (!blocks || blocks.length === 0) {
 		blocks = collectReadableBlocks();
 	}
-
 	if (blocks.length === 0) {
 		return null;
 	}
 
 	const tokens: TokenMapEntry[] = [];
-	let charOffset = 0;
 	const mutObservers: MutationObserver[] = [];
+	let charOffset = 0;
+	let tokenIndex = 0;
+	let truncated = false;
+	const activeBlocks: HTMLElement[] = [];
 
-	for (let blockId = 0; blockId < blocks.length; blockId++) {
-		const block = blocks[blockId];
-		const textNodes = collectTextNodes(block);
+	for (const [blockId, block] of blocks.entries()) {
+		const textNodes = collectTextNodes(block, range);
+		if (textNodes.length === 0) {
+			continue;
+		}
 
-		if (textNodes.length === 0) continue;
+		const blockStartTokenCount = tokens.length;
+		for (const node of textNodes) {
+			const slice = getNodeSlice(node, range);
+			if (!slice) {
+				continue;
+			}
 
-		// Build tokens for this block
-		for (let nodeIdx = 0; nodeIdx < textNodes.length; nodeIdx++) {
-			const node = textNodes[nodeIdx];
-			const text = node.textContent || "";
-			const words = splitIntoWords(text);
-
-			let nodeOffset = 0;
-			for (let wordIdx = 0; wordIdx < words.length; wordIdx++) {
-				const word = words[wordIdx];
-				const wordStart = text.indexOf(word, nodeOffset);
-				if (wordStart === -1) continue;
-
-				const wordEnd = wordStart + word.length;
+			for (const match of extractWordMatches(slice.text)) {
 				const charStart = charOffset;
-				const charEnd = charStart + word.length;
-
-				// Check max chars limit
+				const charEnd = charStart + match.word.length;
 				if (charEnd > maxChars) {
 					truncated = true;
 					break;
@@ -181,130 +190,81 @@ export function buildReadingSurface(options: {
 
 				tokens.push({
 					blockId,
-					tokenIndex: wordIdx,
+					tokenIndex,
 					charStart,
 					charEnd,
 					startNode: node,
-					startOffset: wordStart,
+					startOffset: slice.startOffset + match.start,
 					endNode: node,
-					endOffset: wordEnd,
+					endOffset: slice.startOffset + match.end,
 					dirty: false,
 				});
-
-				charOffset = charEnd + 1; // +1 for space between words
-				nodeOffset = wordEnd;
+				tokenIndex += 1;
+				charOffset = charEnd + 1;
 			}
 
-			if (truncated) break;
+			if (truncated) {
+				break;
+			}
 		}
 
-		if (truncated) break;
-
-		// Add block separator (space)
-		charOffset++;
-
-		// Setup mutation observer for this block
-		const observer = new MutationObserver(() => {
-			// Mark all tokens in this block as dirty
-			tokens.forEach((token) => {
-				if (token.blockId === blockId) {
-					token.dirty = true;
+		if (tokens.length > blockStartTokenCount) {
+			activeBlocks.push(block);
+			const observer = new MutationObserver(() => {
+				for (const token of tokens) {
+					if (token.blockId === blockId) {
+						token.dirty = true;
+					}
 				}
 			});
-		});
+			observer.observe(block, {
+				childList: true,
+				subtree: true,
+				characterData: true,
+			});
+			mutObservers.push(observer);
+		}
 
-		observer.observe(block, {
-			childList: true,
-			subtree: true,
-			characterData: true,
-		});
-
-		mutObservers.push(observer);
+		if (truncated) {
+			break;
+		}
 	}
 
-	// Build the normalized text string
-	const text = tokens.map((t) => t.startNode.textContent?.slice(t.startOffset, t.endOffset) || "").join(" ");
+	if (tokens.length === 0) {
+		for (const observer of mutObservers) {
+			observer.disconnect();
+		}
+		return null;
+	}
+
+	const text = normalizeReadableText(
+		tokens.map((token) => token.startNode.textContent?.slice(token.startOffset, token.endOffset) || "").join(" "),
+	);
 
 	return {
 		sessionId,
-		text: normalizeReadableText(text),
+		text,
 		truncated,
 		tokens,
-		blocks,
+		blocks: activeBlocks,
 		mutObservers,
 	};
 }
 
-/**
- * Split text into words for tokenization.
- */
-function splitIntoWords(text: string): string[] {
-	// Split on whitespace and punctuation, keeping words
-	return text
-		.replace(/[^\w\s'-]/g, " ")
-		.split(/\s+/)
-		.filter((w) => w.length > 0);
-}
-
-/**
- * Get blocks that intersect with a range.
- */
-function getBlocksFromRange(range: Range): HTMLElement[] {
-	const blocks = new Set<HTMLElement>();
-	const commonAncestor = range.commonAncestorContainer;
-
-	// Get the parent element
-	let container: HTMLElement | null;
-	if (commonAncestor.nodeType === Node.ELEMENT_NODE) {
-		container = commonAncestor as HTMLElement;
-	} else {
-		container = commonAncestor.parentElement;
-	}
-
-	if (!container) return [];
-
-	// Walk through the range and collect blocks
-	const treeWalker = document.createTreeWalker(container, NodeFilter.SHOW_ELEMENT, {
-		acceptNode: (node) => {
-			if (READABLE_BLOCK_TAGS.has((node as HTMLElement).tagName)) {
-				return NodeFilter.FILTER_ACCEPT;
-			}
-			return NodeFilter.FILTER_SKIP;
-		},
-	});
-
-	let node: Node | null = treeWalker.nextNode();
-	while (node) {
-		const el = node as HTMLElement;
-		// Check if element intersects with range
-		if (range.intersectsNode(el) || el.contains(range.startContainer) || el.contains(range.endContainer)) {
-			blocks.add(el);
-		}
-		node = treeWalker.nextNode();
-	}
-
-	return Array.from(blocks);
-}
-
-/**
- * Find the token at a given character index.
- * Uses binary search for efficiency.
- */
 export function findTokenAtCharIndex(surface: PreparedReadingSurface, charIndex: number): TokenMapEntry | null {
 	const { tokens } = surface;
-	if (tokens.length === 0) return null;
+	if (tokens.length === 0) {
+		return null;
+	}
 
 	let left = 0;
 	let right = tokens.length - 1;
-
 	while (left <= right) {
 		const mid = Math.floor((left + right) / 2);
 		const token = tokens[mid];
-
 		if (charIndex >= token.charStart && charIndex < token.charEnd) {
 			return token;
 		}
-
 		if (charIndex < token.charStart) {
 			right = mid - 1;
 		} else {
@@ -315,33 +275,25 @@ export function findTokenAtCharIndex(surface: PreparedReadingSurface, charIndex:
 	return null;
 }
 
-/**
- * Find the best matching token for a word, accounting for normalization drift.
- */
-export function findTokenForWord(surface: PreparedReadingSurface, word: string, afterIndex = 0): TokenMapEntry | null {
-	const normalizedWord = normalizeReadableText(word).toLowerCase();
-	const { tokens } = surface;
-
-	// Search forward from afterIndex
-	for (let i = afterIndex; i < tokens.length; i++) {
-		const token = tokens[i];
-		if (token.dirty) continue;
-
+export function findTokenForWord(surface: PreparedReadingSurface, word: string, afterIndex = -1): TokenMapEntry | null {
+	const normalizedWord = normalizeReadableText(word)
+		.toLowerCase()
+		.replace(/[^\p{L}\p{N}'’_-]+/gu, "");
+	for (let index = Math.max(0, afterIndex + 1); index < surface.tokens.length; index += 1) {
+		const token = surface.tokens[index];
+		if (token.dirty) {
+			continue;
+		}
 		const tokenText = (token.startNode.textContent?.slice(token.startOffset, token.endOffset) || "")
 			.toLowerCase()
-			.replace(/[^\w]/g, "");
-
+			.replace(/[^\p{L}\p{N}'’_-]+/gu, "");
 		if (tokenText === normalizedWord) {
 			return token;
 		}
 	}
-
 	return null;
 }
 
-/**
- * Dispose of a reading surface, cleaning up mutation observers.
- */
 export function disposeReadingSurface(surface: PreparedReadingSurface): void {
 	for (const observer of surface.mutObservers) {
 		observer.disconnect();
@@ -351,16 +303,10 @@ export function disposeReadingSurface(surface: PreparedReadingSurface): void {
 	surface.blocks.length = 0;
 }
 
-/**
- * Check if a reading surface has any dirty tokens.
- */
 export function hasDirtyTokens(surface: PreparedReadingSurface): boolean {
-	return surface.tokens.some((t) => t.dirty);
+	return surface.tokens.some((token) => token.dirty);
 }
 
-/**
- * Get statistics about a reading surface.
- */
 export function getReadingSurfaceStats(surface: PreparedReadingSurface): {
 	tokenCount: number;
 	blockCount: number;
@@ -371,6 +317,6 @@ export function getReadingSurfaceStats(surface: PreparedReadingSurface): {
 		tokenCount: surface.tokens.length,
 		blockCount: surface.blocks.length,
 		charCount: surface.text.length,
-		dirtyCount: surface.tokens.filter((t) => t.dirty).length,
+		dirtyCount: surface.tokens.filter((token) => token.dirty).length,
 	};
 }

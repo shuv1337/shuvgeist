@@ -15,6 +15,8 @@ export interface TtsPlayhead {
 	word: string;
 }
 
+export type TtsFallbackReason = "kokoro-unreachable" | "captioned-unsupported" | "legacy-provider-mode";
+
 export interface TtsReadingSession {
 	id: string;
 	tabId: number;
@@ -24,7 +26,7 @@ export interface TtsReadingSession {
 	startedAt: number;
 	hasReadAlong: boolean;
 	overlayAttached: boolean;
-	fallbackReason?: "kokoro-unreachable" | "captioned-unsupported" | "legacy-provider-mode";
+	fallbackReason?: TtsFallbackReason;
 }
 
 export interface KokoroHealthStatus {

@@ -6,9 +6,9 @@
 
 import type { TtsOverlayState } from "./types.js";
 
-const OVERLAY_TAG = "shuvgeist-tts-root";
+export const OVERLAY_TAG = "shuvgeist-tts-root";
 
-const OVERLAY_CSS = `
+export const OVERLAY_CSS = `
 :host {
 	position: fixed;
 	right: 20px;
@@ -113,25 +113,43 @@ const OVERLAY_CSS = `
 }
 .sg-tts-status-banner {
 	font-size: 11px;
-	padding: 6px 10px;
+	padding: 8px 10px;
 	border-radius: 8px;
-	margin-top: 8px;
+	display: grid;
+	gap: 8px;
 }
 .sg-tts-status-banner.info {
-	background: rgba(59, 130, 246, 0.2);
-	color: rgba(147, 197, 253, 0.9);
+	background: rgba(59, 130, 246, 0.18);
+	color: rgba(191, 219, 254, 0.95);
 }
 .sg-tts-status-banner.warning {
-	background: rgba(234, 179, 8, 0.2);
-	color: rgba(253, 224, 71, 0.9);
+	background: rgba(234, 179, 8, 0.18);
+	color: rgba(254, 240, 138, 0.95);
 }
 .sg-tts-status-banner.error {
-	background: rgba(239, 68, 68, 0.2);
-	color: rgba(252, 165, 165, 0.9);
+	background: rgba(239, 68, 68, 0.18);
+	color: rgba(254, 202, 202, 0.95);
+}
+.sg-tts-inline-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+}
+.sg-tts-inline-actions .sg-tts-button {
+	flex: 1 0 auto;
+	padding: 6px 8px;
+	font-size: 11px;
+}
+.sg-tts-link {
+	color: #fdba74;
+	text-decoration: none;
+}
+.sg-tts-link:hover {
+	text-decoration: underline;
 }
 `;
 
-const OVERLAY_HTML = `
+export const OVERLAY_HTML = `
 <div class="overlay-container">
 	<div class="sg-tts-header">
 		<div>
@@ -155,6 +173,15 @@ const OVERLAY_HTML = `
 				<select class="sg-tts-select" id="sg-tts-voice"></select>
 			</div>
 		</div>
+		<div class="sg-tts-row">
+			<div class="sg-tts-status">
+				<span id="sg-tts-kokoro-status">Checking Kokoro…</span>
+				<button class="sg-tts-button" id="sg-tts-retry-kokoro" type="button">Retry Kokoro</button>
+			</div>
+			<div class="sg-tts-meta">
+				Kokoro-first read-along works for page text in the top frame. <a class="sg-tts-link" id="sg-tts-kokoro-link" href="https://github.com/remsky/Kokoro-FastAPI" target="_blank" rel="noreferrer">Setup docs</a>
+			</div>
+		</div>
 		<div class="sg-tts-actions">
 			<button class="sg-tts-button" data-kind="primary" id="sg-tts-speak">Speak</button>
 			<button class="sg-tts-button" id="sg-tts-pause">Pause</button>
@@ -168,7 +195,13 @@ const OVERLAY_HTML = `
 			<span id="sg-tts-status"></span>
 			<span id="sg-tts-extra" class="sg-tts-meta"></span>
 		</div>
-		<div id="sg-tts-status-banner" class="sg-tts-status-banner" style="display:none"></div>
+		<div id="sg-tts-status-banner" class="sg-tts-status-banner" style="display:none">
+			<div id="sg-tts-status-banner-text"></div>
+			<div id="sg-tts-status-banner-actions" class="sg-tts-inline-actions" style="display:none">
+				<button class="sg-tts-button" id="sg-tts-fallback-openai" type="button">Use OpenAI once</button>
+				<button class="sg-tts-button" id="sg-tts-fallback-elevenlabs" type="button">Use ElevenLabs once</button>
+			</div>
+		</div>
 	</div>
 </div>
 `;
@@ -440,6 +473,9 @@ export function createTtsOverlayScript(state: TtsOverlayState): string {
 export function createRemoveTtsOverlayScript(): string {
 	return `
 (function() {
+	if (window.__shuvgeistTtsOverlayRuntime && typeof window.__shuvgeistTtsOverlayRuntime.remove === "function") {
+		window.__shuvgeistTtsOverlayRuntime.remove();
+	}
 	if (window.__shuvgeistTtsOverlay && typeof window.__shuvgeistTtsOverlay.remove === "function") {
 		window.__shuvgeistTtsOverlay.remove();
 	}
@@ -454,6 +490,10 @@ declare global {
 		__shuvgeistTtsOverlay?: {
 			state: TtsOverlayState;
 			update: (state: TtsOverlayState) => void;
+			remove: () => void;
+		};
+		__shuvgeistTtsOverlayRuntime?: {
+			reconnect: () => void;
 			remove: () => void;
 		};
 	}
