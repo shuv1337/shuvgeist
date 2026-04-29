@@ -21,7 +21,12 @@ import {
 } from "./background-state.js";
 import { handleBgRuntimeExec, resolveBackgroundUserScriptMessage } from "./bridge/background-runtime-handler.js";
 import { bootstrapTokenIfNeeded } from "./bridge/bootstrap.js";
-import { BrowserCommandExecutor, type ReplRouter, type ScreenshotRouter } from "./bridge/browser-command-executor.js";
+import {
+	BrowserCommandExecutor,
+	type RecordingRouter,
+	type ReplRouter,
+	type ScreenshotRouter,
+} from "./bridge/browser-command-executor.js";
 import { BridgeClient } from "./bridge/extension-client.js";
 import {
 	BRIDGE_OTEL_STATE_KEY,
@@ -34,6 +39,7 @@ import {
 	type BridgeStateData,
 	type BridgeToOffscreenMessage,
 	type BridgeToSidepanelMessage,
+	type OffscreenToBackgroundMessage,
 } from "./bridge/internal-messages.js";
 import { type BridgeCapability, ErrorCodes, getBridgeCapabilities } from "./bridge/protocol.js";
 import type { SessionBridgeAdapter } from "./bridge/session-bridge.js";
@@ -46,6 +52,7 @@ import { BridgeTelemetry, formatTraceparent, parseTraceparent } from "./bridge/t
 import { ShuvgeistAppStorage } from "./storage/app-storage.js";
 import { isProtectedTabUrl, isUsableWindowId, resolveTabTarget } from "./tools/helpers/browser-target.js";
 import { configureSharedDebuggerManagerTelemetry, getSharedDebuggerManager } from "./tools/helpers/debugger-manager.js";
+import { RecordingTools } from "./tools/recording-tools.js";
 import type {
 	TtsOffscreenMessage,
 	TtsOffscreenResponse,
@@ -299,7 +306,12 @@ async function closeTtsOverlay(tabId = ttsOverlayTabId): Promise<void> {
 }
 
 export function getOffscreenDocumentReasons(): chrome.offscreen.Reason[] {
-	return [chrome.offscreen.Reason.WORKERS, chrome.offscreen.Reason.AUDIO_PLAYBACK, chrome.offscreen.Reason.BLOBS];
+	return [
+		chrome.offscreen.Reason.WORKERS,
+		chrome.offscreen.Reason.AUDIO_PLAYBACK,
+		chrome.offscreen.Reason.BLOBS,
+		chrome.offscreen.Reason.USER_MEDIA,
+	];
 }
 
 let offscreenReady = false;
@@ -908,6 +920,81 @@ const screenshotRouter: ScreenshotRouter = {
 };
 
 // ============================================================================
+// RECORDING ROUTER (background -> offscreen tabCapture recorder)
+// ============================================================================
+
+async function getOffscreenDocumentTabId(): Promise<number> {
+	await ensureOffscreenDocument();
+	const offscreenUrl = chrome.runtime.getURL("offscreen.html");
+	const contexts = await chrome.runtime.getContexts({
+		contextTypes: [chrome.runtime.ContextType.OFFSCREEN_DOCUMENT],
+		documentUrls: [offscreenUrl],
+	});
+	const context = contexts.find((candidate) => typeof candidate.tabId === "number" && candidate.tabId >= 0);
+	if (typeof context?.tabId !== "number" || context.tabId < 0) {
+		throw new Error("Offscreen document tab id is unavailable for tabCapture");
+	}
+	return context.tabId;
+}
+
+const recordingToolsByWindowId = new Map<number, RecordingTools>();
+
+async function getRecordingTools(): Promise<RecordingTools> {
+	const windowId = await resolveWindowId();
+	if (!isUsableWindowId(windowId)) {
+		throw new Error("No usable browser window for recording");
+	}
+	let tools = recordingToolsByWindowId.get(windowId);
+	if (!tools) {
+		tools = new RecordingTools({
+			windowId,
+			ensureOffscreenDocument,
+			getOffscreenTabId: getOffscreenDocumentTabId,
+			sendToOffscreen: (message) => sendMessageSafe(message),
+			emitRecordChunk: (data) => bridgeClient.sendEvent("record_chunk", { ...data }),
+			telemetry: extensionTelemetry,
+		});
+		recordingToolsByWindowId.set(windowId, tools);
+	}
+	return tools;
+}
+
+function dispatchRecordingOffscreenMessage(message: OffscreenToBackgroundMessage): void {
+	for (const tools of recordingToolsByWindowId.values()) {
+		if (tools.hasRecording(message.recordingId)) {
+			tools.handleOffscreenMessage(message);
+			return;
+		}
+	}
+}
+
+async function getRecordingToolsForControl(tabId?: number): Promise<RecordingTools> {
+	if (typeof tabId === "number") {
+		for (const tools of recordingToolsByWindowId.values()) {
+			if (tools.hasRecordingForTab(tabId)) return tools;
+		}
+		return getRecordingTools();
+	}
+	const activeTools = Array.from(recordingToolsByWindowId.values()).filter(
+		(tools) => tools.getActiveTabIds().length > 0,
+	);
+	if (activeTools.length === 1) return activeTools[0];
+	return getRecordingTools();
+}
+
+const recordingRouter: RecordingRouter = {
+	async start(params, signal, traceContext) {
+		return (await getRecordingTools()).start(params, signal, traceContext);
+	},
+	async stop(params, signal, traceContext) {
+		return (await getRecordingToolsForControl(params.tabId)).stop(params, signal, traceContext);
+	},
+	async status(params, traceContext) {
+		return (await getRecordingToolsForControl(params.tabId)).status(params, traceContext);
+	},
+};
+
+// ============================================================================
 // SESSION BRIDGE ADAPTER (background -> sidepanel routing)
 // ============================================================================
 
@@ -1133,6 +1220,7 @@ async function ensureBridgeConnection(): Promise<void> {
 		sessionBridge: backgroundSessionBridge,
 		replRouter,
 		screenshotRouter,
+		recordingRouter,
 		telemetry: extensionTelemetry,
 	});
 
@@ -1248,6 +1336,9 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
+	for (const tools of recordingToolsByWindowId.values()) {
+		tools.handleTabClosed(tabId);
+	}
 	if (tabId === ttsOverlayTabId) {
 		ttsOverlayTabId = null;
 		ttsState = reduceTtsPlaybackState(ttsState, { type: "overlay-closed" });
@@ -1378,6 +1469,12 @@ chrome.runtime.onMessage.addListener(
 					} satisfies TtsRuntimeResponse),
 				);
 			return true;
+		}
+
+		if (message.type === "record-chunk" || message.type === "record-error" || message.type === "record-stopped") {
+			dispatchRecordingOffscreenMessage(message as unknown as OffscreenToBackgroundMessage);
+			sendResponse({ ok: true });
+			return false;
 		}
 
 		if (message.type === "bridge-get-state") {

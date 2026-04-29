@@ -59,8 +59,13 @@ globalThis.chrome = {
 };
 
 const { BrowserCommandExecutor } = await import("../../../src/bridge/browser-command-executor.js");
+const { getBridgeCapabilities } = await import("../../../src/bridge/protocol.js");
 
 describe("BrowserCommandExecutor", () => {
+	it("gates record capabilities behind sensitive access", () => {
+		expect(getBridgeCapabilities(false)).not.toEqual(expect.arrayContaining(["record_start", "record_stop", "record_status"]));
+		expect(getBridgeCapabilities(true)).toEqual(expect.arrayContaining(["record_start", "record_stop", "record_status"]));
+	});
 	beforeEach(() => {
 		navigateExecute.mockReset();
 		selectExecute.mockReset();
@@ -150,6 +155,60 @@ describe("BrowserCommandExecutor", () => {
 		);
 		await expect(enabled.cookies({})).resolves.toEqual({ value: [{ name: "auth_token", value: "secret" }] });
 		expect(debuggerExecute).toHaveBeenCalledWith("bridge", { action: "cookies" }, undefined, undefined);
+	});
+
+	it("dispatches record requests through the recording router", async () => {
+		const recordingRouter = {
+			start: vi.fn().mockResolvedValue({
+				ok: true,
+				recordingId: "rec-1",
+				tabId: 9,
+				startedAt: "2026-01-01T00:00:00.000Z",
+				mimeType: "video/webm",
+				maxDurationMs: 30_000,
+			}),
+			stop: vi.fn().mockResolvedValue({
+				ok: true,
+				recordingId: "rec-1",
+				tabId: 9,
+				startedAt: "2026-01-01T00:00:00.000Z",
+				endedAt: "2026-01-01T00:00:01.000Z",
+				durationMs: 1000,
+				mimeType: "video/webm",
+				sizeBytes: 3,
+				chunkCount: 1,
+				outcome: "stopped_user",
+			}),
+			status: vi.fn().mockResolvedValue({ active: false }),
+		};
+		const executor = new BrowserCommandExecutor({
+			windowId: 7,
+			sensitiveAccessEnabled: true,
+			recordingRouter,
+		});
+		await expect(executor.dispatch("record_start", { tabId: 9, maxDurationMs: 5000 })).resolves.toMatchObject({
+			recordingId: "rec-1",
+		});
+		await expect(executor.dispatch("record_status", { tabId: 9 })).resolves.toEqual({ active: false });
+		await expect(executor.dispatch("record_stop", { tabId: 9 })).resolves.toMatchObject({ outcome: "stopped_user" });
+		expect(recordingRouter.start).toHaveBeenCalledWith({ tabId: 9, maxDurationMs: 5000 }, undefined, undefined);
+		expect(recordingRouter.status).toHaveBeenCalledWith({ tabId: 9 }, undefined);
+		expect(recordingRouter.stop).toHaveBeenCalledWith({ tabId: 9 }, undefined, undefined);
+	});
+
+	it("rejects record requests when sensitive access is disabled", async () => {
+		const executor = new BrowserCommandExecutor({
+			windowId: 7,
+			sensitiveAccessEnabled: false,
+			recordingRouter: {
+				start: vi.fn(),
+				stop: vi.fn(),
+				status: vi.fn(),
+			},
+		});
+		await expect(executor.dispatch("record_start", {})).rejects.toMatchObject({ code: -32008 });
+		await expect(executor.dispatch("record_status", {})).rejects.toMatchObject({ code: -32008 });
+		await expect(executor.dispatch("record_stop", {})).rejects.toMatchObject({ code: -32008 });
 	});
 
 	it("bridges session operations through the session adapter", async () => {

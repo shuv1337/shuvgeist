@@ -49,6 +49,12 @@ import type {
 	PerfMetricsParams,
 	PerfTraceStartParams,
 	PerfTraceStopParams,
+	RecordStartParams,
+	RecordStartResult,
+	RecordStatusParams,
+	RecordStatusResult,
+	RecordStopParams,
+	RecordStopResult,
 	RefClickParams,
 	RefFillParams,
 	ReplParams,
@@ -94,6 +100,12 @@ export interface ScreenshotRouter {
 	): Promise<BridgeScreenshotResult>;
 }
 
+export interface RecordingRouter {
+	start(params: RecordStartParams, signal?: AbortSignal, traceContext?: TraceContext): Promise<RecordStartResult>;
+	stop(params: RecordStopParams, signal?: AbortSignal, traceContext?: TraceContext): Promise<RecordStopResult>;
+	status(params: RecordStatusParams, traceContext?: TraceContext): Promise<RecordStatusResult>;
+}
+
 export interface BrowserCommandExecutorOptions {
 	windowId: number;
 	sessionId?: string;
@@ -101,6 +113,7 @@ export interface BrowserCommandExecutorOptions {
 	sessionBridge?: SessionBridgeAdapter;
 	replRouter?: ReplRouter;
 	screenshotRouter?: ScreenshotRouter;
+	recordingRouter?: RecordingRouter;
 	telemetry?: BridgeTelemetry;
 }
 
@@ -119,6 +132,7 @@ export class BrowserCommandExecutor {
 	private readonly sessionBridge?: SessionBridgeAdapter;
 	private readonly replRouter?: ReplRouter;
 	private readonly screenshotRouter?: ScreenshotRouter;
+	private readonly recordingRouter?: RecordingRouter;
 	private readonly telemetry?: BridgeTelemetry;
 	private readonly debuggerManager = getSharedDebuggerManager();
 	private readonly refMap = new RefMap();
@@ -130,6 +144,7 @@ export class BrowserCommandExecutor {
 		this.sessionBridge = options.sessionBridge;
 		this.replRouter = options.replRouter;
 		this.screenshotRouter = options.screenshotRouter;
+		this.recordingRouter = options.recordingRouter;
 		this.telemetry = options.telemetry;
 	}
 
@@ -239,6 +254,15 @@ export class BrowserCommandExecutor {
 					break;
 				case "perf_trace_stop":
 					result = await this.perfTraceStop((params ?? {}) as PerfTraceStopParams, span?.context);
+					break;
+				case "record_start":
+					result = await this.recordStart((params ?? {}) as RecordStartParams, signal, span?.context);
+					break;
+				case "record_stop":
+					result = await this.recordStop((params ?? {}) as RecordStopParams, signal, span?.context);
+					break;
+				case "record_status":
+					result = await this.recordStatus((params ?? {}) as RecordStatusParams, span?.context);
 					break;
 				case "session_history":
 					result = await this.sessionHistory((params ?? {}) as SessionHistoryParams);
@@ -630,6 +654,59 @@ export class BrowserCommandExecutor {
 	async perfTraceStop(params: PerfTraceStopParams, traceContext?: TraceContext): Promise<unknown> {
 		const tabId = await this.resolveBridgeTabId(params.tabId);
 		return this.getPerformanceTools().stopTrace(tabId, traceContext);
+	}
+
+	async recordStart(
+		params: RecordStartParams,
+		signal?: AbortSignal,
+		traceContext?: TraceContext,
+	): Promise<RecordStartResult> {
+		if (!this.sensitiveAccessEnabled) {
+			throw Object.assign(
+				new Error("Record bridge command is disabled unless sensitive browser data access is enabled"),
+				{
+					code: ErrorCodes.CAPABILITY_DISABLED,
+				},
+			);
+		}
+		if (!this.recordingRouter) {
+			throw Object.assign(new Error("Recording router is not available"), { code: ErrorCodes.CAPABILITY_DISABLED });
+		}
+		return this.recordingRouter.start(params, signal, traceContext);
+	}
+
+	async recordStop(
+		params: RecordStopParams,
+		signal?: AbortSignal,
+		traceContext?: TraceContext,
+	): Promise<RecordStopResult> {
+		if (!this.sensitiveAccessEnabled) {
+			throw Object.assign(
+				new Error("Record bridge command is disabled unless sensitive browser data access is enabled"),
+				{
+					code: ErrorCodes.CAPABILITY_DISABLED,
+				},
+			);
+		}
+		if (!this.recordingRouter) {
+			throw Object.assign(new Error("Recording router is not available"), { code: ErrorCodes.CAPABILITY_DISABLED });
+		}
+		return this.recordingRouter.stop(params, signal, traceContext);
+	}
+
+	async recordStatus(params: RecordStatusParams, traceContext?: TraceContext): Promise<RecordStatusResult> {
+		if (!this.sensitiveAccessEnabled) {
+			throw Object.assign(
+				new Error("Record bridge command is disabled unless sensitive browser data access is enabled"),
+				{
+					code: ErrorCodes.CAPABILITY_DISABLED,
+				},
+			);
+		}
+		if (!this.recordingRouter) {
+			throw Object.assign(new Error("Recording router is not available"), { code: ErrorCodes.CAPABILITY_DISABLED });
+		}
+		return this.recordingRouter.status(params, traceContext);
 	}
 
 	async sessionHistory(params: SessionHistoryParams): Promise<SessionHistoryResult> {

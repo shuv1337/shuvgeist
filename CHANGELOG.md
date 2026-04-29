@@ -8,6 +8,8 @@
 
 - `shuvgeist launch` now defaults to an isolated, persistent, per-browser user-data-dir under `~/.shuvgeist/profile/<browser-name>` so a spawned browser does not collide with an already-open instance of the same browser using its default profile (the most common reason `launch` previously appeared to do nothing or to time out waiting for extension registration). Two new flags expose the policy: `--user-data-dir <path>` overrides the default with an explicit directory, and `--use-default-profile` skips `--user-data-dir` entirely so the launched browser shares the user's existing profile, logins, and extensions. The default's persistence means logins inside Shuvgeist's managed profile survive across runs, so `launch` does not re-prompt every time.
 
+- `shuvgeist record` captures short tab repro videos through `chrome.tabCapture` and the existing offscreen document. `record start --out file.webm` streams MediaRecorder chunks to the CLI, `record stop` terminates the active recording from another terminal, and `record status --json` reports active recording metadata without exposing media bytes. Recording is gated behind sensitive bridge access and enforces duration/byte ceilings.
+
 ### Changed
 
 - **TTS overlay now uses Shadow DOM** for style isolation and connects via a persistent `chrome.runtime.Port` for bidirectional state sync and playhead updates.

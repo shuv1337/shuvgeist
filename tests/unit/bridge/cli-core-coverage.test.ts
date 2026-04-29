@@ -21,6 +21,54 @@ describe("cli-core coverage cases", () => {
 		expect(parseTimeout("nope", 123)).toBe(123);
 	});
 
+	it("parses record command plans", () => {
+		const readFileText = vi.fn();
+		expect(
+			createCommandPlan(
+				"record",
+				["start"],
+				{
+					out: "/tmp/repro.webm",
+					tabId: "9",
+					maxDuration: "5s",
+					videoBitrate: "2500000",
+					mimeType: "video/webm;codecs=vp9",
+				},
+				readFileText,
+			),
+		).toEqual({
+			kind: "record",
+			action: "start",
+			params: {
+				tabId: 9,
+				maxDurationMs: 5000,
+				videoBitsPerSecond: 2500000,
+				mimeType: "video/webm;codecs=vp9",
+			},
+			defaultTimeoutMs: undefined,
+		});
+		expect(createCommandPlan("record", ["stop"], { tabId: "9" }, readFileText)).toEqual({
+			kind: "record",
+			action: "stop",
+			params: { tabId: 9 },
+			defaultTimeoutMs: 60_000,
+		});
+		expect(createCommandPlan("record", ["status"], { tabId: "9", json: true }, readFileText)).toEqual({
+			kind: "record",
+			action: "status",
+			params: { tabId: 9 },
+			defaultTimeoutMs: 60_000,
+		});
+		expect(createCommandPlan("record", ["start"], {}, readFileText)).toEqual({
+			kind: "usage-error",
+			message: "Usage: shuvgeist record start --out file.webm [--max-duration 30s]",
+		});
+		expect(createCommandPlan("record", ["start"], { out: "x.webm", maxDuration: "3m" }, readFileText)).toEqual({
+			kind: "usage-error",
+			message: "--max-duration exceeds hard limit of 120000ms",
+		});
+	});
+
 	it("covers remaining command plan branches", () => {
 		const readFileText = vi.fn((path: string) => `code from ${path}`);
 		expect(createCommandPlan("status", [], {}, readFileText)).toEqual({ kind: "status" });

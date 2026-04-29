@@ -38,6 +38,9 @@ export interface CliFlags {
 	touch?: boolean;
 	userAgent?: string;
 	autoStop?: string;
+	maxDuration?: string;
+	videoBitrate?: string;
+	mimeType?: string;
 	browser?: string;
 	extensionPath?: string;
 	profile?: string;
@@ -75,6 +78,12 @@ export type CliCommandPlan =
 			dryRun?: boolean;
 	  }
 	| { kind: "session"; follow: boolean; params: Record<string, unknown>; defaultTimeoutMs: number }
+	| {
+			kind: "record";
+			action: "start" | "stop" | "status";
+			params: Record<string, unknown>;
+			defaultTimeoutMs: number | undefined;
+	  }
 	| { kind: "inject"; text: string; role: "user" | "assistant" }
 	| { kind: "launch"; options: LaunchOptions }
 	| { kind: "close" }
@@ -589,6 +598,61 @@ export function createCommandPlan(
 				params,
 				defaultTimeoutMs: BridgeDefaults.REQUEST_TIMEOUT_MS,
 			};
+		}
+		case "record": {
+			const action = positionals[0];
+			const params: Record<string, unknown> = {};
+			applyTargetFlags(flags, params);
+			if (action === "start") {
+				if (!flags.out) {
+					return {
+						kind: "usage-error",
+						message: "Usage: shuvgeist record start --out file.webm [--max-duration 30s]",
+					};
+				}
+				const maxDurationMs = parseTimeout(flags.maxDuration, BridgeDefaults.RECORD_DEFAULT_MAX_DURATION_MS);
+				if (typeof maxDurationMs !== "number") {
+					return { kind: "usage-error", message: "--max-duration must be greater than 0" };
+				}
+				if (maxDurationMs > BridgeDefaults.RECORD_HARD_MAX_DURATION_MS) {
+					return {
+						kind: "usage-error",
+						message: `--max-duration exceeds hard limit of ${BridgeDefaults.RECORD_HARD_MAX_DURATION_MS}ms`,
+					};
+				}
+				params.maxDurationMs = maxDurationMs;
+				if (flags.videoBitrate) {
+					const videoBitsPerSecond = Number.parseInt(flags.videoBitrate, 10);
+					if (!Number.isFinite(videoBitsPerSecond) || videoBitsPerSecond <= 0) {
+						return { kind: "usage-error", message: "--video-bitrate must be a positive integer" };
+					}
+					params.videoBitsPerSecond = videoBitsPerSecond;
+				}
+				if (flags.mimeType) params.mimeType = flags.mimeType;
+				return {
+					kind: "record",
+					action,
+					params,
+					defaultTimeoutMs: undefined,
+				};
+			}
+			if (action === "stop") {
+				return {
+					kind: "record",
+					action,
+					params,
+					defaultTimeoutMs: BridgeDefaults.REQUEST_TIMEOUT_MS,
+				};
+			}
+			if (action === "status") {
+				return {
+					kind: "record",
+					action,
+					params,
+					defaultTimeoutMs: BridgeDefaults.REQUEST_TIMEOUT_MS,
+				};
+			}
+			return { kind: "usage-error", message: "Usage: shuvgeist record <start|stop|status> ..." };
 		}
 		case "perf": {
 			const action = positionals[0];

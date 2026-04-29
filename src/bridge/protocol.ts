@@ -40,6 +40,9 @@ export const BridgeCapabilities = [
 	"perf_metrics",
 	"perf_trace_start",
 	"perf_trace_stop",
+	"record_start",
+	"record_stop",
+	"record_status",
 	"status",
 	"session_history",
 	"session_inject",
@@ -56,6 +59,9 @@ export function getBridgeCapabilities(sensitiveAccessEnabled: boolean): BridgeCa
 		"network_get",
 		"network_body",
 		"network_curl",
+		"record_start",
+		"record_stop",
+		"record_status",
 	]);
 	return BridgeCapabilities.filter((capability) => sensitiveAccessEnabled || !sensitiveCapabilities.has(capability));
 }
@@ -127,6 +133,9 @@ export const BridgeMethods = [
 	"perf_metrics",
 	"perf_trace_start",
 	"perf_trace_stop",
+	"record_start",
+	"record_stop",
+	"record_status",
 	"session_history",
 	"session_inject",
 	"session_new",
@@ -165,7 +174,8 @@ export type BridgeEventType =
 	| "session_changed"
 	| "session_message"
 	| "session_tool"
-	| "session_run_state";
+	| "session_run_state"
+	| "record_chunk";
 
 export interface BridgeEvent {
 	type: "event";
@@ -328,6 +338,74 @@ export interface PerfTraceStartParams {
 
 export interface PerfTraceStopParams {
 	tabId?: number;
+}
+
+export type RecordOutcome =
+	| "stopped_user"
+	| "stopped_max_duration"
+	| "stopped_max_bytes"
+	| "stopped_tab_closed"
+	| "stopped_error";
+
+export interface RecordStartParams {
+	tabId?: number;
+	maxDurationMs?: number;
+	videoBitsPerSecond?: number;
+	mimeType?: string;
+}
+
+export interface RecordStopParams {
+	tabId?: number;
+}
+
+export interface RecordStatusParams {
+	tabId?: number;
+}
+
+export interface RecordStartResult {
+	ok: true;
+	recordingId: string;
+	tabId: number;
+	startedAt: string;
+	mimeType: string;
+	videoBitsPerSecond?: number;
+	maxDurationMs: number;
+}
+
+export interface RecordStopResult {
+	ok: true;
+	recordingId: string;
+	tabId: number;
+	startedAt: string;
+	endedAt: string;
+	durationMs: number;
+	mimeType: string;
+	sizeBytes: number;
+	chunkCount: number;
+	outcome: RecordOutcome;
+}
+
+export type RecordStatusResult =
+	| { active: false }
+	| {
+			active: true;
+			recordingId: string;
+			tabId: number;
+			startedAt: string;
+			mimeType: string;
+			durationMs: number;
+			sizeBytes: number;
+			lastError?: string;
+	  };
+
+export interface RecordChunkEventData {
+	recordingId: string;
+	tabId: number;
+	seq: number;
+	mimeType: string;
+	chunkBase64: string;
+	final?: boolean;
+	summary?: RecordStopResult;
 }
 
 export interface SessionHistoryParams {
@@ -730,6 +808,10 @@ export const BridgeDefaults = {
 	WORKFLOW_TIMEOUT_MS: 600_000,
 	CAPTURE_TIMEOUT_MS: 0,
 	TRACE_TIMEOUT_MS: 120_000,
+	RECORD_DEFAULT_MAX_DURATION_MS: 30_000,
+	RECORD_HARD_MAX_DURATION_MS: 120_000,
+	RECORD_HARD_MAX_BYTES: 64 * 1024 * 1024,
+	RECORD_TIMESLICE_MS: 1000,
 	/** Grace period (ms) for a newly connected socket to send a register message. */
 	REGISTER_TIMEOUT_MS: 10_000,
 } as const;

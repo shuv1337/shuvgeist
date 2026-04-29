@@ -22,7 +22,7 @@
  */
 
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createWriteStream, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
@@ -49,6 +49,9 @@ import {
 	type BridgeScreenshotResult,
 	type BridgeServerStatus,
 	type CliConfigFile,
+	type RecordChunkEventData,
+	type RecordStartResult,
+	type RecordStopResult,
 	type RegisterResult,
 	type SessionHistoryResult,
 	type WorkflowRunResultWire,
@@ -252,6 +255,31 @@ function printSessionHistory(result: SessionHistoryResult, jsonMode: boolean): v
 			console.log(`[${message.messageIndex}] ${message.role}: ${message.text}`);
 		}
 	}
+}
+
+function printRecordStopSummary(result: RecordStopResult, jsonMode: boolean, outPath?: string): void {
+	if (jsonMode) {
+		console.log(JSON.stringify({ ...result, out: outPath }, null, 2));
+		return;
+	}
+	console.log(`Recording stopped: ${result.outcome}`);
+	console.log(`  File: ${outPath ?? "(not written by this command)"}`);
+	console.log(`  Duration: ${result.durationMs}ms`);
+	console.log(`  Size: ${result.sizeBytes} bytes`);
+	console.log(`  Chunks: ${result.chunkCount}`);
+}
+
+function isRecordChunkEvent(event: BridgeEvent): event is BridgeEvent & { data: RecordChunkEventData } {
+	const data = event.data as Partial<RecordChunkEventData> | undefined;
+	return (
+		event.event === "record_chunk" &&
+		data !== undefined &&
+		typeof data.recordingId === "string" &&
+		typeof data.tabId === "number" &&
+		typeof data.seq === "number" &&
+		typeof data.mimeType === "string" &&
+		typeof data.chunkBase64 === "string"
+	);
 }
 
 function printFollowEvent(event: BridgeEvent, jsonMode: boolean): void {
@@ -475,6 +503,175 @@ async function cmdRepl(
 		printError(err instanceof Error ? err.message : String(err), jsonMode);
 		process.exit(isNetworkOrConfigError(err) ? 3 : 1);
 	}
+}
+
+async function cmdRecord(
+	action: "start" | "stop" | "status",
+	params: Record<string, unknown>,
+	flags: {
+		url?: string;
+		host?: string;
+		port?: string;
+		token?: string;
+		json?: boolean;
+		timeout?: string;
+		out?: string;
+	},
+	defaultTimeoutMs?: number,
+): Promise<void> {
+	const jsonMode = flags.json || false;
+	if (action === "stop" || action === "status") {
+		const method: BridgeMethod = action === "stop" ? "record_stop" : "record_status";
+		try {
+			const response = await cmdOneShot(method, params, flags, defaultTimeoutMs);
+			printResult(response, jsonMode);
+			process.exit(exitCodeForResponse(response));
+		} catch (err) {
+			printError(err instanceof Error ? err.message : String(err), jsonMode);
+			process.exit(isNetworkOrConfigError(err) ? 3 : 1);
+		}
+	}
+
+	if (!flags.out) {
+		printError("record start requires --out", jsonMode);
+		process.exit(1);
+	}
+	const configFile = readConfigFile();
+	const resolved = resolveConfig(flags, process.env, configFile, getConfigPath());
+	if (!resolved.ok) {
+		printError(resolved.message, jsonMode);
+		process.exit(3);
+	}
+	const { url, token } = resolved;
+	const outPath = flags.out;
+	const output = createWriteStream(outPath);
+	const requestId = generateRequestId();
+	let recordingId: string | undefined;
+	let settled = false;
+	let started = false;
+	let timeout: ReturnType<typeof setTimeout> | undefined;
+	const telemetry = resolveCliTelemetry(configFile);
+	const span = telemetry?.startSpan("bridge.cli.record_start", {
+		kind: "client",
+		attributes: {
+			"bridge.method": "record_start",
+			"bridge.request_id": requestId,
+		},
+	});
+	const request: BridgeRequest = {
+		id: requestId,
+		method: "record_start",
+		params,
+		...(span ? span.toTraceHeaders() : {}),
+	};
+	const ws = new WebSocket(url);
+
+	const finish = (code: number): void => {
+		if (settled) return;
+		settled = true;
+		if (timeout) clearTimeout(timeout);
+		ws.close();
+		output.end(() => {
+			void telemetry?.flush().finally(() => process.exit(code));
+		});
+	};
+
+	const fail = (message: string, code: number): void => {
+		span?.recordError(new Error(message));
+		span?.end("error");
+		printError(message, jsonMode);
+		finish(code);
+	};
+
+	const stopOnSignal = (): void => {
+		if (!recordingId || ws.readyState !== WebSocket.OPEN) {
+			finish(130);
+			return;
+		}
+		const stopRequest: BridgeRequest = {
+			id: generateRequestId(),
+			method: "record_stop",
+			params: params.tabId ? { tabId: params.tabId } : {},
+		};
+		ws.send(JSON.stringify(stopRequest));
+	};
+	process.once("SIGINT", stopOnSignal);
+
+	const timeoutMs = parseTimeout(flags.timeout, BridgeDefaults.STATUS_TIMEOUT_MS);
+	if (timeoutMs && timeoutMs > 0) {
+		timeout = setTimeout(() => {
+			if (!started) fail(`Connection timeout after ${timeoutMs}ms`, 3);
+		}, timeoutMs);
+	}
+
+	ws.on("open", () => {
+		ws.send(JSON.stringify({ type: "register", role: "cli", token, name: "shuvgeist-cli-record" }));
+	});
+
+	ws.on("message", (data: Buffer | string) => {
+		const msg = JSON.parse(typeof data === "string" ? data : data.toString("utf-8"));
+		if (msg.type === "register_result") {
+			const reg = msg as RegisterResult;
+			if (!reg.ok) {
+				fail("Registration failed: " + (reg.error || "unknown"), 3);
+				return;
+			}
+			ws.send(JSON.stringify(request));
+			return;
+		}
+		if (typeof msg.id === "number" && msg.id === requestId) {
+			const response = msg as BridgeResponse;
+			if (response.error) {
+				fail(response.error.message, exitCodeForResponse(response));
+				return;
+			}
+			const result = response.result as RecordStartResult;
+			recordingId = result.recordingId;
+			started = true;
+			span?.setAttributes({
+				"record.recording_id": result.recordingId,
+				"record.tab_id": result.tabId,
+				"record.mime_type": result.mimeType,
+				"record.video_bits_per_second": result.videoBitsPerSecond,
+			});
+			if (!jsonMode) {
+				console.log(`Recording tab ${result.tabId} to ${outPath}`);
+				console.log(`Recording ID: ${result.recordingId}`);
+			}
+			return;
+		}
+		if (msg.type === "event") {
+			const event = msg as BridgeEvent;
+			if (!isRecordChunkEvent(event)) return;
+			if (recordingId && event.data.recordingId !== recordingId) return;
+			if (!recordingId) recordingId = event.data.recordingId;
+			if (event.data.chunkBase64) {
+				output.write(Buffer.from(event.data.chunkBase64, "base64"));
+			}
+			if (event.data.final && event.data.summary) {
+				span?.setAttributes({
+					"record.duration_ms": event.data.summary.durationMs,
+					"record.size_bytes": event.data.summary.sizeBytes,
+					"record.chunk_count": event.data.summary.chunkCount,
+					"record.outcome": event.data.summary.outcome,
+				});
+				span?.end(event.data.summary.outcome === "stopped_error" ? "error" : "ok");
+				printRecordStopSummary(event.data.summary, jsonMode, outPath);
+				finish(event.data.summary.outcome === "stopped_error" ? 1 : 0);
+			}
+		}
+	});
+
+	ws.on("error", (err) => {
+		fail(err instanceof Error ? err.message : String(err), 3);
+	});
+
+	ws.on("close", () => {
+		process.removeListener("SIGINT", stopOnSignal);
+		if (!settled) {
+			fail("Connection closed before recording completed", 3);
+		}
+	});
 }
 
 async function cmdSession(flags: {
@@ -942,6 +1139,10 @@ Usage:
   shuvgeist network <start|stop|list|get|body|curl|clear|stats> [...] [--json]
   shuvgeist device <emulate|reset> [...] [--json]
   shuvgeist perf <metrics|trace-start|trace-stop> [...] [--json]
+  shuvgeist record start --out file.webm [--tab-id N] [--max-duration 30s]
+                         [--video-bitrate N] [--mime-type video/webm;codecs=vp9]
+  shuvgeist record stop [--tab-id N] [--json]
+  shuvgeist record status [--tab-id N] [--json]
   shuvgeist session [--last N] [--json] [--follow]
   shuvgeist inject <text> [--role user|assistant] [--json]
   shuvgeist new-session [provider/model-id] [--json]
@@ -976,6 +1177,9 @@ Global options:
   --touch             Enable touch emulation
   --user-agent <ua>   Override user agent
   --auto-stop <ms>    Perf trace auto-stop window
+  --max-duration <v>  Recording duration (e.g. 30s, 30000ms, max 120s)
+  --video-bitrate <n> Recording videoBitsPerSecond
+  --mime-type <type>  Recording MediaRecorder mime type
   --user-data-dir <path>     Launch: explicit Chromium user-data-dir
                              (default: ~/.shuvgeist/profile/<browser>)
   --use-default-profile      Launch: share the user's existing browser profile
@@ -1079,6 +1283,9 @@ async function main(): Promise<void> {
 		else if (arg === "--dpr" && i + 1 < rest.length) globalFlags.dpr = rest[++i];
 		else if (arg === "--user-agent" && i + 1 < rest.length) globalFlags.userAgent = rest[++i];
 		else if (arg === "--auto-stop" && i + 1 < rest.length) globalFlags.autoStop = rest[++i];
+		else if (arg === "--max-duration" && i + 1 < rest.length) globalFlags.maxDuration = rest[++i];
+		else if (arg === "--video-bitrate" && i + 1 < rest.length) globalFlags.videoBitrate = rest[++i];
+		else if (arg === "--mime-type" && i + 1 < rest.length) globalFlags.mimeType = rest[++i];
 		else if (arg === "--browser" && i + 1 < rest.length) globalFlags.browser = rest[++i];
 		else if (arg === "--extension-path" && i + 1 < rest.length) globalFlags.extensionPath = rest[++i];
 		else if (arg === "--profile" && i + 1 < rest.length) globalFlags.profile = rest[++i];
@@ -1149,6 +1356,9 @@ async function main(): Promise<void> {
 			break;
 		case "workflow":
 			await cmdWorkflow(plan.action, plan.workflow, plan.args, flags, plan.defaultTimeoutMs, plan.dryRun);
+			break;
+		case "record":
+			await cmdRecord(plan.action, plan.params, flags, plan.defaultTimeoutMs);
 			break;
 		case "session":
 			await cmdSession(flags);

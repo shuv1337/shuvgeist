@@ -4,7 +4,13 @@
  */
 
 import type { BridgeConnectionState } from "./extension-client.js";
-import type { BridgeReplResult, BridgeScreenshotResult, ReplParams, ScreenshotParams } from "./protocol.js";
+import type {
+	BridgeReplResult,
+	BridgeScreenshotResult,
+	RecordOutcome,
+	ReplParams,
+	ScreenshotParams,
+} from "./protocol.js";
 
 // ---------------------------------------------------------------------------
 // Storage keys
@@ -70,7 +76,41 @@ export type SidepanelToBackgroundMessage = { type: "bridge-get-state" };
 
 export type BridgeToOffscreenMessage =
 	| { type: "bridge-repl-execute"; params: ReplParams; windowId?: number; traceparent?: string; tracestate?: string }
-	| { type: "bridge-keepalive-ping" };
+	| { type: "bridge-keepalive-ping" }
+	| {
+			type: "bridge-record-start";
+			recordingId: string;
+			streamId: string;
+			mimeType?: string;
+			videoBitsPerSecond?: number;
+			timesliceMs: number;
+	  }
+	| { type: "bridge-record-stop"; recordingId: string; outcome?: RecordOutcome };
+
+export type BridgeRecordStartResponse =
+	| { ok: true; mimeType: string; videoBitsPerSecond?: number }
+	| { ok: false; error: string };
+
+export type BridgeRecordStopResponse = { ok: true } | { ok: false; error: string };
+
+export type OffscreenToBackgroundMessage =
+	| {
+			type: "record-chunk";
+			recordingId: string;
+			seq: number;
+			mimeType: string;
+			chunkBase64: string;
+			final?: boolean;
+	  }
+	| { type: "record-error"; recordingId: string; message: string }
+	| {
+			type: "record-stopped";
+			recordingId: string;
+			outcome: RecordOutcome;
+			sizeBytes: number;
+			chunkCount: number;
+			endedAt: number;
+	  };
 
 // ---------------------------------------------------------------------------
 // Offscreen -> Background runtime proxy messages

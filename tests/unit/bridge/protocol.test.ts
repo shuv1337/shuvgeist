@@ -14,6 +14,9 @@ describe("bridge protocol", () => {
 		expect(getBridgeCapabilities(false)).not.toContain("network_get");
 		expect(getBridgeCapabilities(false)).not.toContain("network_body");
 		expect(getBridgeCapabilities(false)).not.toContain("network_curl");
+		expect(getBridgeCapabilities(false)).not.toContain("record_start");
+		expect(getBridgeCapabilities(false)).not.toContain("record_stop");
+		expect(getBridgeCapabilities(false)).not.toContain("record_status");
 		expect(getBridgeCapabilities(false)).toEqual(
 			BridgeCapabilities.filter(
 				(cap) =>
@@ -21,7 +24,10 @@ describe("bridge protocol", () => {
 					cap !== "cookies" &&
 					cap !== "network_get" &&
 					cap !== "network_body" &&
-					cap !== "network_curl",
+					cap !== "network_curl" &&
+					cap !== "record_start" &&
+					cap !== "record_stop" &&
+					cap !== "record_status",
 			),
 		);
 	});

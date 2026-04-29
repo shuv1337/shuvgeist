@@ -7,8 +7,14 @@
  */
 
 import { SandboxIframe } from "@mariozechner/pi-web-ui";
-import type { BridgeReplMessageResponse, BridgeToOffscreenMessage } from "./bridge/internal-messages.js";
+import type {
+	BridgeRecordStartResponse,
+	BridgeRecordStopResponse,
+	BridgeReplMessageResponse,
+	BridgeToOffscreenMessage,
+} from "./bridge/internal-messages.js";
 import { buildOffscreenRuntimeProviders } from "./bridge/offscreen-runtime-providers.js";
+import type { RecordOutcome } from "./bridge/protocol.js";
 import type { TtsOffscreenMessage, TtsOffscreenResponse } from "./tts/internal-messages.js";
 import { synthesizeTts } from "./tts/service.js";
 import { DEFAULT_TTS_SETTINGS } from "./tts/settings.js";
@@ -38,9 +44,202 @@ interface TtsController {
 	captionSessionId?: string;
 }
 
+interface OffscreenRecordingState {
+	recordingId: string;
+	recorder: MediaRecorder;
+	stream: MediaStream;
+	seq: number;
+	sizeBytes: number;
+	chunkCount: number;
+	mimeType: string;
+	outcome: RecordOutcome;
+	stopping: boolean;
+}
+
+export interface MediaRecorderFactory {
+	create(stream: MediaStream, options: MediaRecorderOptions): MediaRecorder;
+	isTypeSupported(mimeType: string): boolean;
+}
+
+const defaultMediaRecorderFactory: MediaRecorderFactory = {
+	create(stream, options) {
+		return new MediaRecorder(stream, options);
+	},
+	isTypeSupported(mimeType) {
+		return MediaRecorder.isTypeSupported(mimeType);
+	},
+};
+
+let mediaRecorderFactory: MediaRecorderFactory = defaultMediaRecorderFactory;
+const activeRecordings = new Map<string, OffscreenRecordingState>();
+
+export function setMediaRecorderFactoryForTests(factory: MediaRecorderFactory | undefined): void {
+	mediaRecorderFactory = factory ?? defaultMediaRecorderFactory;
+}
+
 declare global {
 	interface Window {
 		__shuvgeistTtsController?: TtsController;
+	}
+}
+
+function postRecordingRuntimeEvent(message: Record<string, unknown>): void {
+	try {
+		const response = chrome.runtime.sendMessage(message);
+		if (response && typeof (response as Promise<unknown>).catch === "function") {
+			void (response as Promise<unknown>).catch(() => undefined);
+		}
+	} catch {}
+}
+
+function blobToBase64(blob: Blob): Promise<string> {
+	return new Promise((resolve, reject) => {
+		const reader = new FileReader();
+		reader.onerror = () => reject(reader.error ?? new Error("Failed to read recording chunk"));
+		reader.onload = () => {
+			const value = typeof reader.result === "string" ? reader.result : "";
+			resolve(value.replace(/^data:[^;]+;base64,/, ""));
+		};
+		reader.readAsDataURL(blob);
+	});
+}
+
+function resolveRecordingMimeType(requested?: string): string {
+	if (requested) {
+		if (!mediaRecorderFactory.isTypeSupported(requested)) {
+			throw new Error(`Unsupported recording mime type: ${requested}`);
+		}
+		return requested;
+	}
+	for (const candidate of ["video/webm;codecs=vp9", "video/webm;codecs=vp8", "video/webm"]) {
+		if (mediaRecorderFactory.isTypeSupported(candidate)) {
+			return candidate;
+		}
+	}
+	throw new Error("No supported MediaRecorder video/webm mime type is available");
+}
+
+function releaseRecordingState(state: OffscreenRecordingState): void {
+	for (const track of state.stream.getTracks()) {
+		track.stop();
+	}
+	activeRecordings.delete(state.recordingId);
+}
+
+async function handleRecordingChunk(state: OffscreenRecordingState, blob: Blob, final = false): Promise<void> {
+	if (blob.size <= 0) return;
+	const chunkBase64 = await blobToBase64(blob);
+	state.sizeBytes += blob.size;
+	state.chunkCount += 1;
+	postRecordingRuntimeEvent({
+		type: "record-chunk",
+		recordingId: state.recordingId,
+		seq: state.seq,
+		mimeType: state.mimeType,
+		chunkBase64,
+		final,
+	});
+	state.seq += 1;
+}
+
+async function startRecording(
+	message: Extract<BridgeToOffscreenMessage, { type: "bridge-record-start" }>,
+): Promise<BridgeRecordStartResponse> {
+	if (activeRecordings.has(message.recordingId)) {
+		return { ok: false, error: `Recording ${message.recordingId} is already active` };
+	}
+	try {
+		const mimeType = resolveRecordingMimeType(message.mimeType);
+		const stream = await navigator.mediaDevices.getUserMedia({
+			video: {
+				mandatory: {
+					chromeMediaSource: "tab",
+					chromeMediaSourceId: message.streamId,
+				},
+			},
+			audio: false,
+		} as MediaStreamConstraints);
+		const options: MediaRecorderOptions = { mimeType };
+		if (typeof message.videoBitsPerSecond === "number") {
+			options.videoBitsPerSecond = message.videoBitsPerSecond;
+		}
+		const recorder = mediaRecorderFactory.create(stream, options);
+		const state: OffscreenRecordingState = {
+			recordingId: message.recordingId,
+			recorder,
+			stream,
+			seq: 0,
+			sizeBytes: 0,
+			chunkCount: 0,
+			mimeType,
+			outcome: "stopped_user",
+			stopping: false,
+		};
+		recorder.addEventListener("dataavailable", (event) => {
+			const blob = (event as BlobEvent).data;
+			void handleRecordingChunk(state, blob, state.stopping).catch((error) => {
+				postRecordingRuntimeEvent({
+					type: "record-error",
+					recordingId: state.recordingId,
+					message: error instanceof Error ? error.message : String(error),
+				});
+			});
+		});
+		recorder.addEventListener("error", (event) => {
+			const error = (event as Event & { error?: DOMException }).error;
+			postRecordingRuntimeEvent({
+				type: "record-error",
+				recordingId: state.recordingId,
+				message: error?.message || "MediaRecorder failed",
+			});
+			state.outcome = "stopped_error";
+			state.stopping = true;
+			if (recorder.state !== "inactive") {
+				recorder.stop();
+			}
+		});
+		recorder.addEventListener("stop", () => {
+			postRecordingRuntimeEvent({
+				type: "record-stopped",
+				recordingId: state.recordingId,
+				outcome: state.outcome,
+				sizeBytes: state.sizeBytes,
+				chunkCount: state.chunkCount,
+				endedAt: Date.now(),
+			});
+			releaseRecordingState(state);
+		});
+		activeRecordings.set(message.recordingId, state);
+		recorder.start(message.timesliceMs);
+		return { ok: true, mimeType, videoBitsPerSecond: message.videoBitsPerSecond };
+	} catch (error) {
+		return { ok: false, error: error instanceof Error ? error.message : String(error) };
+	}
+}
+
+function stopRecording(
+	message: Extract<BridgeToOffscreenMessage, { type: "bridge-record-stop" }>,
+): BridgeRecordStopResponse {
+	const state = activeRecordings.get(message.recordingId);
+	if (!state) {
+		return { ok: false, error: `Recording ${message.recordingId} is not active` };
+	}
+	state.outcome = message.outcome ?? "stopped_user";
+	state.stopping = true;
+	try {
+		if (state.recorder.state !== "inactive") {
+			state.recorder.requestData();
+			state.recorder.stop();
+		}
+		return { ok: true };
+	} catch (error) {
+		postRecordingRuntimeEvent({
+			type: "record-error",
+			recordingId: state.recordingId,
+			message: error instanceof Error ? error.message : String(error),
+		});
+		releaseRecordingState(state);
+		return { ok: false, error: error instanceof Error ? error.message : String(error) };
 	}
 }
 
@@ -412,6 +611,23 @@ chrome.runtime.onMessage.addListener(
 	) => {
 		if (message.type === "bridge-keepalive-ping") {
 			sendResponse({ ok: true });
+			return false;
+		}
+
+		if (message.type === "bridge-record-start") {
+			startRecording(message)
+				.then((response) => sendResponse(response))
+				.catch((error: unknown) =>
+					sendResponse({
+						ok: false,
+						error: error instanceof Error ? error.message : String(error),
+					} satisfies BridgeRecordStartResponse),
+				);
+			return true;
+		}
+
+		if (message.type === "bridge-record-stop") {
+			sendResponse(stopRecording(message));
 			return false;
 		}
 

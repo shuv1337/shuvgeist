@@ -553,6 +553,13 @@ export class BridgeServer {
 			role: "server",
 			event: event.event,
 		} as LogFields);
+		if (event.event === "record_chunk" && !this.activeExtension?.capabilities?.includes("record_start")) {
+			bridgeLog("warn", "record chunk event rejected because recording capability is disabled", {
+				role: "server",
+				outcome: "rejected",
+			});
+			return;
+		}
 		if (event.event === "session_changed") {
 			const sessionId =
 				event.data && typeof event.data.sessionId === "string" ? (event.data.sessionId as string) : undefined;
