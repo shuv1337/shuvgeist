@@ -48,6 +48,7 @@ export interface CliFlags {
 	useDefaultProfile?: boolean;
 	headless?: boolean;
 	foreground?: boolean;
+	noViewportJson?: boolean;
 }
 
 export interface CliEnvironment {
@@ -66,7 +67,7 @@ export type CliCommandPlan =
 	| { kind: "status" }
 	| { kind: "serve" }
 	| { kind: "one-shot"; method: BridgeMethod; params: Record<string, unknown>; defaultTimeoutMs?: number }
-	| { kind: "repl"; code: string; defaultTimeoutMs: number }
+	| { kind: "repl"; params: Record<string, unknown>; defaultTimeoutMs: number }
 	| { kind: "screenshot"; params: Record<string, unknown>; defaultTimeoutMs: number }
 	| { kind: "cookies"; defaultTimeoutMs: number }
 	| {
@@ -268,7 +269,9 @@ export function createCommandPlan(
 			if (!code) {
 				return { kind: "usage-error", message: "Usage: shuvgeist repl <code> or shuvgeist repl -f <file.js>" };
 			}
-			return { kind: "repl", code, defaultTimeoutMs: BridgeDefaults.SLOW_REQUEST_TIMEOUT_MS };
+			const params: Record<string, unknown> = { title: "CLI REPL", code };
+			applyTargetFlags(flags, params);
+			return { kind: "repl", params, defaultTimeoutMs: BridgeDefaults.SLOW_REQUEST_TIMEOUT_MS };
 		}
 		case "screenshot": {
 			const params: Record<string, unknown> = {};

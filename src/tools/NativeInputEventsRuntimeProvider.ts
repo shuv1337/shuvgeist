@@ -12,6 +12,8 @@ import { type DebuggerManager, getSharedDebuggerManager } from "./helpers/debugg
 export class NativeInputEventsRuntimeProvider implements SandboxRuntimeProvider {
 	private modifiers = 0; // Track currently pressed modifiers
 	private readonly windowId?: number;
+	private readonly tabId?: number;
+	private readonly frameId?: number;
 	private readonly debuggerManager: DebuggerManager;
 	private readonly telemetry?: BridgeTelemetry;
 	private readonly traceContext?: TraceContext;
@@ -24,12 +26,16 @@ export class NativeInputEventsRuntimeProvider implements SandboxRuntimeProvider 
 	constructor(
 		options: {
 			windowId?: number;
+			tabId?: number;
+			frameId?: number;
 			debuggerManager?: DebuggerManager;
 			telemetry?: BridgeTelemetry;
 			traceContext?: TraceContext;
 		} = {},
 	) {
 		this.windowId = options.windowId;
+		this.tabId = options.tabId;
+		this.frameId = options.frameId;
 		this.debuggerManager = options.debuggerManager ?? getSharedDebuggerManager();
 		this.telemetry = options.telemetry;
 		this.traceContext = options.traceContext;
@@ -40,10 +46,14 @@ export class NativeInputEventsRuntimeProvider implements SandboxRuntimeProvider 
 	}
 
 	/**
-	 * Get the currently active tab ID
+	 * Get the explicit target tab ID, or the currently active tab ID.
 	 */
-	private async getActiveTabId(): Promise<number> {
-		const { tabId } = await resolveTabTarget({ windowId: this.windowId });
+	private async getTargetTabId(): Promise<number> {
+		const { tabId } = await resolveTabTarget({
+			windowId: this.windowId,
+			tabId: this.tabId,
+			frameId: this.frameId,
+		});
 		return tabId;
 	}
 
@@ -195,8 +205,8 @@ export class NativeInputEventsRuntimeProvider implements SandboxRuntimeProvider 
 
 		console.log("[NativeInput] Received event:", message.action, message);
 
-		// Get active tab ID once at the start
-		const tabId = await this.getActiveTabId();
+		// Get target tab ID once at the start
+		const tabId = await this.getTargetTabId();
 
 		const owner = `native-input:${tabId}`;
 		const span = this.telemetry?.startSpan(`native_input.${String(message.action || "unknown")}`, {

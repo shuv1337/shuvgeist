@@ -878,6 +878,33 @@ const replRouter: ReplRouter = {
 
 const sharedDebuggerManager = getSharedDebuggerManager();
 
+function readPngDimensions(base64: string): { imageWidth: number; imageHeight: number } {
+	const binary = atob(base64);
+	if (binary.length < 24 || binary.slice(1, 4) !== "PNG") {
+		throw new Error("Screenshot data is not a valid PNG");
+	}
+	const readUint32 = (offset: number) =>
+		((binary.charCodeAt(offset) << 24) |
+			(binary.charCodeAt(offset + 1) << 16) |
+			(binary.charCodeAt(offset + 2) << 8) |
+			binary.charCodeAt(offset + 3)) >>>
+		0;
+	return { imageWidth: readUint32(16), imageHeight: readUint32(20) };
+}
+
+function normalizeScreenshotViewport(value: unknown): {
+	cssWidth: number;
+	cssHeight: number;
+	devicePixelRatio: number;
+} {
+	const candidate = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+	const cssWidth = typeof candidate.cssWidth === "number" && candidate.cssWidth > 0 ? candidate.cssWidth : 1;
+	const cssHeight = typeof candidate.cssHeight === "number" && candidate.cssHeight > 0 ? candidate.cssHeight : 1;
+	const devicePixelRatio =
+		typeof candidate.devicePixelRatio === "number" && candidate.devicePixelRatio > 0 ? candidate.devicePixelRatio : 1;
+	return { cssWidth, cssHeight, devicePixelRatio };
+}
+
 const screenshotRouter: ScreenshotRouter = {
 	async capture(_params, signal, traceContext) {
 		if (signal?.aborted) {
@@ -902,6 +929,19 @@ const screenshotRouter: ScreenshotRouter = {
 		await sharedDebuggerManager.acquireWithTrace(tabId, owner, { parent: traceContext });
 		try {
 			await sharedDebuggerManager.ensureDomainWithTrace(tabId, "Page", { parent: traceContext });
+			await sharedDebuggerManager.ensureDomainWithTrace(tabId, "Runtime", { parent: traceContext });
+			const viewportResult = await sharedDebuggerManager.sendCommandWithTrace<{
+				result?: { value?: unknown };
+			}>(
+				tabId,
+				"Runtime.evaluate",
+				{
+					expression:
+						"({ cssWidth: window.innerWidth, cssHeight: window.innerHeight, devicePixelRatio: window.devicePixelRatio || 1 })",
+					returnByValue: true,
+				},
+				{ parent: traceContext },
+			);
 			const result = await sharedDebuggerManager.sendCommandWithTrace<{ data: string }>(
 				tabId,
 				"Page.captureScreenshot",
@@ -912,7 +952,18 @@ const screenshotRouter: ScreenshotRouter = {
 				{ parent: traceContext },
 			);
 			if (!result?.data) throw new Error("CDP Page.captureScreenshot returned no data");
-			return { mimeType: "image/png", dataUrl: `data:image/png;base64,${result.data}` };
+			const { imageWidth, imageHeight } = readPngDimensions(result.data);
+			const viewport = normalizeScreenshotViewport(viewportResult.result?.value);
+			return {
+				mimeType: "image/png",
+				dataUrl: `data:image/png;base64,${result.data}`,
+				imageWidth,
+				imageHeight,
+				cssWidth: viewport.cssWidth,
+				cssHeight: viewport.cssHeight,
+				devicePixelRatio: viewport.devicePixelRatio,
+				scale: imageWidth / viewport.cssWidth,
+			};
 		} finally {
 			await sharedDebuggerManager.releaseWithTrace(tabId, owner, { parent: traceContext });
 		}
@@ -1491,7 +1542,9 @@ chrome.runtime.onMessage.addListener(
 		// sidepanel is closed. See src/bridge/offscreen-runtime-providers.ts.
 		if (message.type === "bg-runtime-exec") {
 			const runtimeType = message.runtimeType as "browser-js" | "navigate" | "native-input";
-			const payload = (message.payload as Record<string, unknown>) ?? {};
+			const payload = { ...((message.payload as Record<string, unknown>) ?? {}) };
+			if (typeof message.tabId === "number") payload.tabId = message.tabId;
+			if (typeof message.frameId === "number") payload.frameId = message.frameId;
 			const reqWindowId = typeof message.windowId === "number" ? (message.windowId as number) : currentWindowId;
 			const traceContext = parseTraceparent(
 				typeof message.traceparent === "string" ? message.traceparent : undefined,

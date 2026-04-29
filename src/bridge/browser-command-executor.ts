@@ -348,9 +348,14 @@ export class BrowserCommandExecutor {
 		if (!image?.data || !image.mimeType) {
 			throw new Error("Screenshot tool returned no image data");
 		}
+		const details = result.details as { screenshot?: Omit<BridgeScreenshotResult, "mimeType" | "dataUrl"> };
+		if (!details.screenshot) {
+			throw new Error("Screenshot tool returned no viewport metadata");
+		}
 		return {
 			mimeType: image.mimeType as BridgeScreenshotResult["mimeType"],
 			dataUrl: `data:${image.mimeType};base64,${image.data}`,
+			...details.screenshot,
 		};
 	}
 
@@ -363,15 +368,16 @@ export class BrowserCommandExecutor {
 		const debuggerTool = this.getDebuggerTool() as DebuggerTool & {
 			executeBridge?: (
 				toolCallId: string,
-				args: { action: string; code?: string },
+				args: { action: string; code?: string; tabId?: number; frameId?: number },
 				signal?: AbortSignal,
 				traceContext?: TraceContext,
 			) => Promise<{ details: unknown }>;
 		};
+		const args = { action: "eval", code: params.code, tabId: params.tabId, frameId: params.frameId };
 		const result =
 			typeof debuggerTool.executeBridge === "function"
-				? await debuggerTool.executeBridge("bridge", { action: "eval", code: params.code }, signal, traceContext)
-				: await debuggerTool.execute("bridge", { action: "eval", code: params.code }, signal);
+				? await debuggerTool.executeBridge("bridge", args, signal, traceContext)
+				: await debuggerTool.execute("bridge", args, signal);
 		return result.details;
 	}
 

@@ -35,6 +35,7 @@ export class BrowserJsRuntimeProvider implements SandboxRuntimeProvider {
 	constructor(
 		private sharedProviders: SandboxRuntimeProvider[],
 		private readonly windowId?: number,
+		private readonly target: { tabId?: number; frameId?: number } = {},
 	) {}
 
 	getData(): Record<string, any> {
@@ -121,7 +122,11 @@ export class BrowserJsRuntimeProvider implements SandboxRuntimeProvider {
 		}
 
 		// Get current tab
-		const { tab, tabId } = await resolveTabTarget({ windowId: this.windowId });
+		const { tab, tabId } = await resolveTabTarget({
+			windowId: this.windowId,
+			tabId: this.target.tabId,
+			frameId: this.target.frameId,
+		});
 
 		if (!tab?.id) {
 			respond({
@@ -240,9 +245,12 @@ export class BrowserJsRuntimeProvider implements SandboxRuntimeProvider {
 					console.warn("[BrowserJsRuntimeProvider] Failed to configure userScripts world:", e);
 				}
 
-				const injectionConfig: any = {
-					js: [{ code: wrapperCode }],
-					target: { tabId, allFrames: false },
+				const injectionTarget = (typeof this.target.frameId === "number"
+					? { tabId, frameIds: [this.target.frameId] }
+					: { tabId, allFrames: false }) as unknown as chrome.userScripts.UserScriptInjection["target"];
+				const injectionConfig: chrome.userScripts.UserScriptInjection & { executionId?: string } = {
+					js: [{ code: wrapperCode }] as unknown as chrome.userScripts.UserScriptInjection["js"],
+					target: injectionTarget,
 					world: "USER_SCRIPT",
 					worldId: FIXED_WORLD_ID,
 					injectImmediately: true,

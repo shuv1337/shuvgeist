@@ -101,7 +101,16 @@ describe("BrowserCommandExecutor", () => {
 		navigateExecute.mockResolvedValue({ details: { finalUrl: "https://example.com" } });
 		extractExecute.mockResolvedValue({
 			content: [{ type: "image", data: "YWJj", mimeType: "image/webp" }],
-			details: {},
+			details: {
+				screenshot: {
+					imageWidth: 500,
+					imageHeight: 250,
+					cssWidth: 1000,
+					cssHeight: 500,
+					devicePixelRatio: 2,
+					scale: 0.5,
+				},
+			},
 		});
 		selectExecute.mockResolvedValue({ details: { selector: "#login" } });
 		const replRouter = {
@@ -121,15 +130,25 @@ describe("BrowserCommandExecutor", () => {
 		});
 		expect(navigateExecute).toHaveBeenCalledWith("bridge", { url: "https://example.com" }, undefined);
 
-		await expect(executor.dispatch("repl", { title: "CLI", code: "return 1" })).resolves.toEqual({
+		await expect(executor.dispatch("repl", { title: "CLI", code: "return 1", tabId: 42, frameId: 7 })).resolves.toEqual({
 			output: "done",
 			files: [{ fileName: "out.txt", mimeType: "text/plain", size: 3, contentBase64: "YWJj" }],
 		});
-		expect(replRouter.execute).toHaveBeenCalledWith({ title: "CLI", code: "return 1" }, undefined, undefined);
+		expect(replRouter.execute).toHaveBeenCalledWith(
+			{ title: "CLI", code: "return 1", tabId: 42, frameId: 7 },
+			undefined,
+			undefined,
+		);
 
 		await expect(executor.dispatch("screenshot", { maxWidth: 500 })).resolves.toEqual({
 			mimeType: "image/webp",
 			dataUrl: "data:image/webp;base64,YWJj",
+			imageWidth: 500,
+			imageHeight: 250,
+			cssWidth: 1000,
+			cssHeight: 500,
+			devicePixelRatio: 2,
+			scale: 0.5,
 		});
 		expect(extractExecute).toHaveBeenCalledWith("bridge", { mode: "screenshot", maxWidth: 500 }, undefined);
 
@@ -146,10 +165,10 @@ describe("BrowserCommandExecutor", () => {
 			details: { value: [{ name: "auth_token", value: "secret" }] },
 		});
 		const enabled = new BrowserCommandExecutor({ windowId: 1, sensitiveAccessEnabled: true });
-		await expect(enabled.evalCode({ code: "document.title" })).resolves.toEqual({ value: "Example" });
+		await expect(enabled.evalCode({ code: "document.title", tabId: 42, frameId: 7 })).resolves.toEqual({ value: "Example" });
 		expect(debuggerExecute).toHaveBeenCalledWith(
 			"bridge",
-			{ action: "eval", code: "document.title" },
+			{ action: "eval", code: "document.title", tabId: 42, frameId: 7 },
 			undefined,
 			undefined,
 		);

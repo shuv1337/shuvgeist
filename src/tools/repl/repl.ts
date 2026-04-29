@@ -13,6 +13,7 @@ export async function executeJavaScript(
 	sandboxUrlProvider?: () => string,
 	taskName?: string,
 	overlayWindowId?: number,
+	target?: { tabId?: number; frameId?: number },
 ): Promise<{ output: string; files?: SandboxFile[] }> {
 	if (!code) {
 		throw new Error("Code parameter is required");
@@ -48,7 +49,11 @@ export async function executeJavaScript(
 	let overlayTabId: number | undefined;
 	if (usesBrowserjs) {
 		try {
-			overlayTabId = await injectOverlayForActiveTab(taskName || "Executing JavaScript", overlayWindowId);
+			overlayTabId = await injectOverlayForActiveTab(
+				taskName || "Executing JavaScript",
+				overlayWindowId,
+				target?.tabId,
+			);
 		} catch (error) {
 			console.warn("[REPL] Failed to inject overlay:", error);
 			// Continue execution even if overlay fails
@@ -116,7 +121,7 @@ export async function executeJavaScript(
 
 		// Remove overlay on success (if it was injected)
 		if (usesBrowserjs) {
-			await removeOverlayForActiveTab(overlayWindowId);
+			await removeOverlayForActiveTab(overlayWindowId, overlayTabId ?? target?.tabId);
 		}
 
 		return {
@@ -127,7 +132,7 @@ export async function executeJavaScript(
 		// Clean up on error
 		sandbox.remove();
 		if (usesBrowserjs) {
-			await removeOverlayForActiveTab(overlayWindowId);
+			await removeOverlayForActiveTab(overlayWindowId, overlayTabId ?? target?.tabId);
 		}
 		throw new Error((error as Error).message || "Execution failed");
 	}

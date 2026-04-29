@@ -215,7 +215,7 @@ export interface NavigateParams {
 	switchToTab?: number;
 }
 
-export interface ReplParams {
+export interface ReplParams extends TargetedBridgeParams {
 	title: string;
 	code: string;
 }
@@ -224,7 +224,7 @@ export interface ScreenshotParams {
 	maxWidth?: number;
 }
 
-export interface EvalParams {
+export interface EvalParams extends TargetedBridgeParams {
 	code: string;
 }
 
@@ -440,6 +440,12 @@ export interface BridgeStatusResult {
 export interface BridgeScreenshotResult {
 	mimeType: "image/webp" | "image/png";
 	dataUrl: string;
+	imageWidth: number;
+	imageHeight: number;
+	cssWidth: number;
+	cssHeight: number;
+	devicePixelRatio: number;
+	scale: number;
 }
 
 export interface BridgeReplFile {

@@ -24,7 +24,7 @@
 import { spawn } from "node:child_process";
 import { createWriteStream, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { parseArgs } from "node:util";
 import { WebSocket } from "ws";
 import {
@@ -420,6 +420,23 @@ async function runOneShot(
 	}
 }
 
+function screenshotViewportPayload(
+	result: BridgeScreenshotResult,
+): Omit<BridgeScreenshotResult, "mimeType" | "dataUrl"> {
+	return {
+		cssWidth: result.cssWidth,
+		cssHeight: result.cssHeight,
+		imageWidth: result.imageWidth,
+		imageHeight: result.imageHeight,
+		devicePixelRatio: result.devicePixelRatio,
+		scale: result.scale,
+	};
+}
+
+function formatScreenshotMetadata(result: BridgeScreenshotResult): string {
+	return `Image ${result.imageWidth}x${result.imageHeight} (CSS ${result.cssWidth}x${result.cssHeight}, DPR ${result.devicePixelRatio}, scale ${result.scale})`;
+}
+
 async function cmdScreenshot(flags: {
 	url?: string;
 	host?: string;
@@ -429,6 +446,7 @@ async function cmdScreenshot(flags: {
 	out?: string;
 	maxWidth?: string;
 	timeout?: string;
+	noViewportJson?: boolean;
 }): Promise<void> {
 	const jsonMode = flags.json || false;
 	const params: Record<string, unknown> = {};
@@ -446,8 +464,19 @@ async function cmdScreenshot(flags: {
 			}
 			const base64 = result.dataUrl.replace(/^data:image\/[^;]+;base64,/, "");
 			writeFileSync(flags.out, Buffer.from(base64, "base64"));
-			if (!jsonMode) console.log("Screenshot saved to " + flags.out);
+			if (!flags.noViewportJson) {
+				const sidecarPath = join(dirname(flags.out), "viewport.json");
+				writeFileSync(sidecarPath, JSON.stringify(screenshotViewportPayload(result), null, 2) + "\n");
+			}
+			if (jsonMode) {
+				printResult(response, true);
+			} else {
+				console.log("Screenshot saved to " + flags.out);
+				if (!flags.noViewportJson)
+					console.log("Viewport metadata saved to " + join(dirname(flags.out), "viewport.json"));
+			}
 		} else {
+			if (!jsonMode && result?.dataUrl) console.error(formatScreenshotMetadata(result));
 			printResult(response, jsonMode);
 		}
 		process.exit(0);
@@ -458,7 +487,7 @@ async function cmdScreenshot(flags: {
 }
 
 async function cmdRepl(
-	code: string,
+	params: Record<string, unknown>,
 	flags: {
 		url?: string;
 		host?: string;
@@ -471,12 +500,7 @@ async function cmdRepl(
 ): Promise<void> {
 	const jsonMode = flags.json || false;
 	try {
-		const response = await cmdOneShot(
-			"repl",
-			{ title: "CLI REPL", code },
-			flags,
-			BridgeDefaults.SLOW_REQUEST_TIMEOUT_MS,
-		);
+		const response = await cmdOneShot("repl", params, flags, BridgeDefaults.SLOW_REQUEST_TIMEOUT_MS);
 		if (response.error) {
 			printResult(response, jsonMode);
 			process.exit(exitCodeForResponse(response));
@@ -1125,14 +1149,15 @@ Usage:
   shuvgeist navigate <url> [--new-tab] [--json] [--timeout 60s]
   shuvgeist tabs [--json] [--timeout 60s]
   shuvgeist switch <tabId> [--json] [--timeout 60s]
-  shuvgeist repl <code> [--json] [--write-files <dir>] [--timeout 120s]
-  shuvgeist repl -f <file.js> [--json] [--write-files <dir>] [--timeout 120s]
-  shuvgeist screenshot [--out file.png] [--max-width N] [--json] [--timeout 120s]
-  shuvgeist eval <code> [--json] [--timeout 120s]
+  shuvgeist repl <code> [--tab-id N] [--frame-id N] [--json] [--write-files <dir>] [--timeout 120s]
+  shuvgeist repl -f <file.js> [--tab-id N] [--frame-id N] [--json] [--write-files <dir>] [--timeout 120s]
+  shuvgeist screenshot [--out file.png] [--max-width N] [--no-viewport-json] [--json] [--timeout 120s]
+  shuvgeist eval <code> [--tab-id N] [--frame-id N] [--json] [--timeout 120s]
   shuvgeist cookies [--json] [--timeout 120s]
   shuvgeist select <message> [--json] [--timeout none]
   shuvgeist workflow <run|validate> (--file workflow.json | --inline '{...}') [--arg key=value]
   shuvgeist snapshot [--tab-id N] [--frame-id N] [--max-entries N] [--json]
+                    (snapshotIds are usable as refIds)
   shuvgeist locate <role|text|label> <query> [--tab-id N] [--frame-id N] [--json]
   shuvgeist ref <click|fill> <refId> [--value text] [--tab-id N] [--frame-id N] [--json]
   shuvgeist frame <list|tree> [--tab-id N] [--json]
@@ -1184,7 +1209,13 @@ Global options:
                              (default: ~/.shuvgeist/profile/<browser>)
   --use-default-profile      Launch: share the user's existing browser profile
                              instead of an isolated Shuvgeist-managed one
+  --no-viewport-json Suppress screenshot viewport.json sidecar when using --out
   --json              Machine-readable JSON output
+
+Notes:
+  Ref handles: refId (from locate) and snapshotId (from snapshot) are the same identifier.
+  screenshot --out writes a sibling viewport.json with css/image size, DPR, and scale;
+  screenshot --json includes those same metadata fields in the response.
 
 Config file: ~/.shuvgeist/bridge.json
 Environment: SHUVGEIST_BRIDGE_URL, SHUVGEIST_BRIDGE_HOST,
@@ -1251,6 +1282,7 @@ async function main(): Promise<void> {
 		else if (arg === "--follow") globalFlags.follow = true;
 		else if (arg === "--include-hidden") globalFlags.includeHidden = true;
 		else if (arg === "--include-sensitive") globalFlags.includeSensitive = true;
+		else if (arg === "--no-viewport-json") globalFlags.noViewportJson = true;
 		else if (arg === "--mobile") globalFlags.mobile = true;
 		else if (arg === "--touch") globalFlags.touch = true;
 		else if (arg === "--url" && i + 1 < rest.length) globalFlags.url = rest[++i];
@@ -1346,7 +1378,7 @@ async function main(): Promise<void> {
 			await runOneShot(plan.method, plan.params, flags, plan.defaultTimeoutMs);
 			break;
 		case "repl":
-			await cmdRepl(plan.code, flags);
+			await cmdRepl(plan.params, flags);
 			break;
 		case "screenshot":
 			await cmdScreenshot(flags);

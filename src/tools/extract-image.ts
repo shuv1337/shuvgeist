@@ -23,9 +23,19 @@ const extractImageSchema = Type.Object({
 
 export type ExtractImageParams = Static<typeof extractImageSchema>;
 
+export interface ExtractImageScreenshotMetadata {
+	imageWidth: number;
+	imageHeight: number;
+	cssWidth: number;
+	cssHeight: number;
+	devicePixelRatio: number;
+	scale: number;
+}
+
 export interface ExtractImageDetails {
 	mode: string;
 	selector?: string;
+	screenshot?: ExtractImageScreenshotMetadata;
 }
 
 /**
@@ -120,7 +130,16 @@ function dataUrlToBlob(dataUrl: string): Blob {
  * Uses WebP encoding at quality 80 for ~95% size reduction vs PNG,
  * significantly reducing token usage when images are sent to LLMs.
  */
-async function fetchAndResizeImage(src: string, maxWidth: number): Promise<ImageContent> {
+async function fetchAndResizeImage(
+	src: string,
+	maxWidth: number,
+): Promise<{
+	image: ImageContent;
+	imageWidth: number;
+	imageHeight: number;
+	sourceWidth: number;
+	sourceHeight: number;
+}> {
 	let blob: Blob;
 
 	if (src.startsWith("data:")) {
@@ -132,6 +151,8 @@ async function fetchAndResizeImage(src: string, maxWidth: number): Promise<Image
 	}
 
 	const img = await createImageBitmap(blob);
+	const sourceWidth = img.width;
+	const sourceHeight = img.height;
 	let w = img.width;
 	let h = img.height;
 
@@ -151,12 +172,77 @@ async function fetchAndResizeImage(src: string, maxWidth: number): Promise<Image
 		reader.readAsDataURL(outBlob);
 	});
 
-	return { type: "image", data: base64, mimeType: "image/webp" };
+	return {
+		image: { type: "image", data: base64, mimeType: "image/webp" },
+		imageWidth: w,
+		imageHeight: h,
+		sourceWidth,
+		sourceHeight,
+	};
 }
 
-async function captureScreenshot(maxWidth: number, windowId: number): Promise<ImageContent> {
+async function getViewportMetadata(
+	tabId: number,
+	fallbackWidth: number,
+	fallbackHeight: number,
+): Promise<{ cssWidth: number; cssHeight: number; devicePixelRatio: number }> {
+	const fallback = { cssWidth: fallbackWidth, cssHeight: fallbackHeight, devicePixelRatio: 1 };
+	try {
+		try {
+			await chrome.userScripts.configureWorld({
+				worldId: "shuvgeist-extract-image",
+				messaging: true,
+			});
+		} catch {
+			// Already configured.
+		}
+		const results = await chrome.userScripts.execute({
+			js: [
+				{
+					code: "({ cssWidth: window.innerWidth, cssHeight: window.innerHeight, devicePixelRatio: window.devicePixelRatio || 1 })",
+				},
+			] as unknown as chrome.userScripts.UserScriptInjection["js"],
+			target: { tabId, allFrames: false },
+			world: "USER_SCRIPT",
+			worldId: "shuvgeist-extract-image",
+			injectImmediately: true,
+		} as chrome.userScripts.UserScriptInjection);
+		const value = results[0]?.result;
+		if (!value || typeof value !== "object") return fallback;
+		const candidate = value as Record<string, unknown>;
+		const cssWidth =
+			typeof candidate.cssWidth === "number" && candidate.cssWidth > 0 ? candidate.cssWidth : fallbackWidth;
+		const cssHeight =
+			typeof candidate.cssHeight === "number" && candidate.cssHeight > 0 ? candidate.cssHeight : fallbackHeight;
+		const devicePixelRatio =
+			typeof candidate.devicePixelRatio === "number" && candidate.devicePixelRatio > 0
+				? candidate.devicePixelRatio
+				: 1;
+		return { cssWidth, cssHeight, devicePixelRatio };
+	} catch {
+		return fallback;
+	}
+}
+
+async function captureScreenshot(
+	maxWidth: number,
+	windowId: number,
+): Promise<{ image: ImageContent; metadata: ExtractImageScreenshotMetadata }> {
+	const { tabId } = await resolveTabTarget({ windowId });
 	const dataUrl = await chrome.tabs.captureVisibleTab(windowId, { format: "png" });
-	return fetchAndResizeImage(dataUrl, maxWidth);
+	const resized = await fetchAndResizeImage(dataUrl, maxWidth);
+	const viewport = await getViewportMetadata(tabId, resized.sourceWidth, resized.sourceHeight);
+	return {
+		image: resized.image,
+		metadata: {
+			imageWidth: resized.imageWidth,
+			imageHeight: resized.imageHeight,
+			cssWidth: viewport.cssWidth,
+			cssHeight: viewport.cssHeight,
+			devicePixelRatio: viewport.devicePixelRatio,
+			scale: resized.imageWidth / viewport.cssWidth,
+		},
+	};
 }
 
 export class ExtractImageTool implements AgentTool<typeof extractImageSchema, ExtractImageDetails> {
@@ -177,8 +263,9 @@ export class ExtractImageTool implements AgentTool<typeof extractImageSchema, Ex
 
 		if (args.mode === "screenshot") {
 			if (!this.windowId) throw new Error("windowId not set on ExtractImageTool");
-			const image = await captureScreenshot(maxWidth, this.windowId);
-			content.push(image);
+			const screenshot = await captureScreenshot(maxWidth, this.windowId);
+			details.screenshot = screenshot.metadata;
+			content.push(screenshot.image);
 			content.push({ type: "text", text: `Screenshot captured (max ${maxWidth}px width)` });
 		} else if (args.mode === "selector") {
 			if (!args.selector) throw new Error("selector is required for 'selector' mode");
@@ -188,7 +275,7 @@ export class ExtractImageTool implements AgentTool<typeof extractImageSchema, Ex
 			if (typeof info === "string") throw new Error(info);
 
 			const image = await fetchAndResizeImage(info.src, maxWidth);
-			content.push(image);
+			content.push(image.image);
 			content.push({
 				type: "text",
 				text: `Image extracted from "${args.selector}" (${info.width}x${info.height}, resized to max ${maxWidth}px)`,

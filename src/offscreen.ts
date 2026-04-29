@@ -633,6 +633,8 @@ chrome.runtime.onMessage.addListener(
 
 		if (message.type === "bridge-repl-execute") {
 			executeRepl(message.params.code, message.params.title, message.windowId, {
+				tabId: message.params.tabId,
+				frameId: message.params.frameId,
 				traceparent: message.traceparent,
 				tracestate: message.tracestate,
 			})
@@ -665,7 +667,7 @@ export async function executeRepl(
 	code: string,
 	_title: string,
 	windowId?: number,
-	traceHeaders: { traceparent?: string; tracestate?: string } = {},
+	options: { tabId?: number; frameId?: number; traceparent?: string; tracestate?: string } = {},
 ): Promise<{
 	output: string;
 	files: Array<{ fileName: string; mimeType: string; size: number; contentBase64: string }>;
@@ -679,7 +681,7 @@ export async function executeRepl(
 
 	try {
 		const sandboxId = `offscreen-repl-${Date.now()}-${Math.random().toString(36).substring(7)}`;
-		const providers = buildOffscreenRuntimeProviders(windowId, traceHeaders);
+		const providers = buildOffscreenRuntimeProviders(windowId, options);
 		const result = await sandbox.execute(sandboxId, code, providers, []);
 
 		let output = "";

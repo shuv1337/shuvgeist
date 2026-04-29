@@ -8,9 +8,9 @@ const OVERLAY_WORLD_ID = "shuvgeist-repl-overlay";
  * @returns Tab ID of the active tab in the current window
  * @throws Error if no active tab is found
  */
-async function getActiveTabId(windowId?: number): Promise<number> {
-	const { tabId } = await resolveTabTarget({ windowId });
-	return tabId;
+async function getTargetTabId(windowId?: number, tabId?: number): Promise<number> {
+	const resolved = await resolveTabTarget({ windowId, tabId });
+	return resolved.tabId;
 }
 
 /**
@@ -94,20 +94,20 @@ export async function removeOverlay(tabId: number): Promise<void> {
  * @param taskName - Name of the task being executed
  * @returns Tab ID where overlay was injected
  */
-export async function injectOverlayForActiveTab(taskName: string, windowId?: number): Promise<number> {
-	const tabId = await getActiveTabId(windowId);
-	await injectOverlay(tabId, taskName);
-	return tabId;
+export async function injectOverlayForActiveTab(taskName: string, windowId?: number, tabId?: number): Promise<number> {
+	const targetTabId = await getTargetTabId(windowId, tabId);
+	await injectOverlay(targetTabId, taskName);
+	return targetTabId;
 }
 
 /**
  * Remove overlay from the currently active tab.
  * Automatically determines the active tab.
  */
-export async function removeOverlayForActiveTab(windowId?: number): Promise<void> {
+export async function removeOverlayForActiveTab(windowId?: number, tabId?: number): Promise<void> {
 	try {
-		const tabId = await getActiveTabId(windowId);
-		await removeOverlay(tabId);
+		const targetTabId = await getTargetTabId(windowId, tabId);
+		await removeOverlay(targetTabId);
 	} catch (error) {
 		// Tab might have been closed
 		console.warn("[Overlay] Failed to remove overlay from active tab:", error);

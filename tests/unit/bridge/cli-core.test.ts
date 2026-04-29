@@ -98,7 +98,7 @@ describe("cli-core", () => {
 		});
 		expect(createCommandPlan("repl", [], { file: "script.js" }, readFileText)).toEqual({
 			kind: "repl",
-			code: "return 1",
+			params: { title: "CLI REPL", code: "return 1" },
 			defaultTimeoutMs: 120_000,
 		});
 		expect(createCommandPlan("cookies", [], {}, readFileText)).toEqual({
@@ -106,6 +106,23 @@ describe("cli-core", () => {
 			defaultTimeoutMs: 120_000,
 		});
 		expect(readFileText).toHaveBeenCalledWith("script.js");
+	});
+
+	it("forwards target flags for repl and eval", () => {
+		const readFileText = vi.fn(() => "return 1");
+
+		expect(createCommandPlan("repl", ["return 1"], { tabId: "42", frameId: "7" }, readFileText)).toEqual({
+			kind: "repl",
+			params: { title: "CLI REPL", code: "return 1", tabId: 42, frameId: 7 },
+			defaultTimeoutMs: 120_000,
+		});
+
+		expect(createCommandPlan("eval", ["return 1"], { tabId: "42", frameId: "7" }, readFileText)).toEqual({
+			kind: "one-shot",
+			method: "eval",
+			params: { code: "return 1", tabId: 42, frameId: 7 },
+			defaultTimeoutMs: 120_000,
+		});
 	});
 
 	it("reads the launch URL from --url or a positional, never confusing it with the bridge URL", () => {

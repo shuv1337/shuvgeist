@@ -186,8 +186,10 @@ export async function handleBgBrowserJs(
 
 	let tab: chrome.tabs.Tab;
 	let tabId: number;
+	const targetTabId = typeof payload.tabId === "number" ? payload.tabId : undefined;
+	const targetFrameId = typeof payload.frameId === "number" ? payload.frameId : undefined;
 	try {
-		const resolved = await resolveTabTarget({ windowId });
+		const resolved = await resolveTabTarget({ windowId, tabId: targetTabId, frameId: targetFrameId });
 		tab = resolved.tab;
 		tabId = resolved.tabId;
 	} catch (err) {
@@ -239,6 +241,8 @@ export async function handleBgBrowserJs(
 	activeExecutions.set(execSandboxId, {
 		nativeInput: new NativeInputEventsRuntimeProvider({
 			windowId,
+			tabId,
+			frameId: targetFrameId,
 			debuggerManager: getSharedDebuggerManager(),
 			telemetry,
 			traceContext,
@@ -263,9 +267,12 @@ export async function handleBgBrowserJs(
 			console.warn("[BgRuntime] Failed to configure userScripts world:", e);
 		}
 
+		const target = (typeof targetFrameId === "number"
+			? { tabId, frameIds: [targetFrameId] }
+			: { tabId, allFrames: false }) as unknown as chrome.userScripts.UserScriptInjection["target"];
 		const injectionConfig: chrome.userScripts.UserScriptInjection = {
 			js: [{ code: wrapperCode }] as unknown as chrome.userScripts.UserScriptInjection["js"],
-			target: { tabId, allFrames: false },
+			target,
 			world: "USER_SCRIPT",
 			worldId: FIXED_WORLD_ID,
 			injectImmediately: true,
@@ -353,6 +360,8 @@ export async function handleBgNativeInput(
 ): Promise<BgRuntimeExecResponse> {
 	const provider = new NativeInputEventsRuntimeProvider({
 		windowId,
+		tabId: typeof payload.tabId === "number" ? payload.tabId : undefined,
+		frameId: typeof payload.frameId === "number" ? payload.frameId : undefined,
 		debuggerManager: getSharedDebuggerManager(),
 		telemetry,
 		traceContext,

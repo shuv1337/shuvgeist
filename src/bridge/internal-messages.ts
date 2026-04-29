@@ -129,6 +129,8 @@ export interface BgRuntimeExecMessage {
 	runtimeType: BgRuntimeType;
 	payload: Record<string, unknown>;
 	windowId?: number;
+	tabId?: number;
+	frameId?: number;
 	traceparent?: string;
 	tracestate?: string;
 	/** Sandbox id from the offscreen REPL; used to route user-script messages

@@ -142,6 +142,8 @@ shuvgeist switch <tabId>
 
 Use `tabs --json` to capture stable `tabId` values for later `--tab-id` targeting.
 
+Ref handles: `refId` from `locate` and `snapshotId` from `snapshot` are the same identifier. Use `refId` as the canonical name.
+
 ### Screenshots
 
 ```bash
@@ -151,6 +153,10 @@ shuvgeist screenshot --out /tmp/page.webp --max-width 800
 ```
 
 Prefer `--json` when another tool needs inline image data. Prefer `--out` when you want a file artifact.
+
+#### Annotated screenshots
+
+`screenshot --out file.png` also writes a sibling `viewport.json` unless `--no-viewport-json` is set. The sidecar contains `cssWidth`, `cssHeight`, `imageWidth`, `imageHeight`, `devicePixelRatio`, and `scale`. Use `scale = imageWidth / cssWidth` to convert CSS-pixel coordinates from `snapshot`, `locate`, or DOM APIs into screenshot image pixels. `screenshot --json` includes the same metadata fields directly in the response.
 
 ### REPL and page-context JavaScript
 
@@ -249,7 +255,7 @@ shuvgeist snapshot --json
 shuvgeist snapshot --tab-id 123 --frame-id 7 --max-entries 80 --json
 ```
 
-Snapshots return semantic entries, candidate selectors, page metadata, and stable `snapshotId` values.
+Snapshots return semantic entries, candidate selectors, page metadata, and stable `snapshotId` values. Each entry's `snapshotId` is the same value as the `refId` returned by `locate` — pass it directly to `shuvgeist ref click|fill <id>`.
 
 ### Semantic locate
 
@@ -261,11 +267,11 @@ shuvgeist locate text "Add to cart" --json
 shuvgeist locate label "Email address" --json
 ```
 
-Locator results include ranked matches, scores, reasons, and `refId` values.
+Locator results include ranked matches, scores, reasons, and `refId` values. `refId` is the canonical ref-handle name; `snapshot` calls the same value `snapshotId` for legacy compatibility.
 
 ### Ref actions
 
-Operate on prior semantic matches without repeating the search:
+Operate on prior semantic matches without repeating the search. `<refId>` may be a `refId` from `locate` or a `snapshotId` from `snapshot`.
 
 ```bash
 shuvgeist ref click <refId>

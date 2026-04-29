@@ -12,11 +12,19 @@
 
 ### Changed
 
+- `shuvgeist screenshot` now returns `cssWidth`, `cssHeight`, `imageWidth`, `imageHeight`, `devicePixelRatio`, and `scale` in `--json` mode, and writes a sibling `viewport.json` next to the image when `--out` is supplied so HiDPI annotation tools can convert CSS-pixel coordinates to image pixels. Add `--no-viewport-json` to suppress. (#4)
+
+- Documented that `locate`'s `refId` and `snapshot`'s `snapshotId` are the same identifier; `refId` is the canonical name. SKILL and CLI `--help` updated. (`screenshot` remains active-tab only and is not part of the current `--tab-id` target matrix.) (#5)
+
 - **TTS overlay now uses Shadow DOM** for style isolation and connects via a persistent `chrome.runtime.Port` for bidirectional state sync and playhead updates.
 
 - **Kokoro-first UX in settings**: The TTS settings tab now surfaces Kokoro as the primary local-first option, with cloud providers (OpenAI/ElevenLabs) grouped as fallback options. A "Compatibility Mode" banner appears when using cloud providers, and the new "Enable word-level read-along" toggle controls read-along behavior.
 
 - **Kokoro health status**: Added connection health probe with "Test connection" button that checks Kokoro reachability and `/dev/captioned_speech` endpoint availability. Status indicators show: "Online with caption support", "Online - captions unavailable", "Unreachable", or "Authentication required".
+
+### Fixed
+
+- `shuvgeist repl` and `shuvgeist eval` now honor `--tab-id` and `--frame-id` and execute against the targeted tab without changing the active tab. Previously these flags were silently ignored or dropped before reaching the runtime. (#3)
 
 ### Technical
 

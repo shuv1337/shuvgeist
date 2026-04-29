@@ -33,7 +33,9 @@ import {
 import { bridgeLog } from "./bridge/logging.js";
 import type { BridgeMethod } from "./bridge/protocol.js";
 import {
+	type BridgeScreenshotResult,
 	ErrorCodes,
+	type ReplParams,
 	type ScreenshotParams,
 	type SessionArtifactsResult,
 	type SessionInjectParams,
@@ -818,7 +820,7 @@ chrome.runtime.onMessage.addListener(
 		}
 
 		if (message.type === "bridge-repl-execute") {
-			const msg = message as { params: { title: string; code: string } };
+			const msg = message as { params: ReplParams };
 			handleBridgeReplExecute(msg.params)
 				.then((result) => {
 					sendResponse({ ok: true, result } as BridgeReplMessageResponse);
@@ -856,11 +858,12 @@ function getBridgeExecutor(): BrowserCommandExecutor {
 			sessionBridge: sessionBridgeAdapter,
 			replRouter: {
 				execute: async (params, signal) => {
+					const target = { tabId: params.tabId, frameId: params.frameId };
 					const navigateTool = new NavigateTool();
-					const pageProviders = [new NativeInputEventsRuntimeProvider({ windowId: currentWindowId })];
+					const pageProviders = [new NativeInputEventsRuntimeProvider({ windowId: currentWindowId, ...target })];
 					const runtimeProviders = [
 						...pageProviders,
-						new BrowserJsRuntimeProvider(pageProviders, currentWindowId),
+						new BrowserJsRuntimeProvider(pageProviders, currentWindowId, target),
 						new NavigateRuntimeProvider(navigateTool),
 					];
 					const result = await executeJavaScript(
@@ -870,6 +873,7 @@ function getBridgeExecutor(): BrowserCommandExecutor {
 						() => chrome.runtime.getURL("sandbox.html"),
 						params.title,
 						currentWindowId,
+						target,
 					);
 					return {
 						output: result.output,
@@ -909,15 +913,16 @@ async function handleBridgeSessionCommand(method: string, params: Record<string,
 	}
 }
 
-async function handleBridgeReplExecute(params: { title: string; code: string }): Promise<{
+async function handleBridgeReplExecute(params: ReplParams): Promise<{
 	output: string;
 	files: Array<{ fileName: string; mimeType: string; size: number; contentBase64: string }>;
 }> {
+	const target = { tabId: params.tabId, frameId: params.frameId };
 	const navigateTool = new NavigateTool();
-	const pageProviders = [new NativeInputEventsRuntimeProvider({ windowId: currentWindowId })];
+	const pageProviders = [new NativeInputEventsRuntimeProvider({ windowId: currentWindowId, ...target })];
 	const runtimeProviders = [
 		...pageProviders,
-		new BrowserJsRuntimeProvider(pageProviders, currentWindowId),
+		new BrowserJsRuntimeProvider(pageProviders, currentWindowId, target),
 		new NavigateRuntimeProvider(navigateTool),
 	];
 	const result = await executeJavaScript(
@@ -927,6 +932,7 @@ async function handleBridgeReplExecute(params: { title: string; code: string }):
 		() => chrome.runtime.getURL("sandbox.html"),
 		params.title,
 		currentWindowId,
+		target,
 	);
 	return {
 		output: result.output,
@@ -939,10 +945,7 @@ async function handleBridgeReplExecute(params: { title: string; code: string }):
 	};
 }
 
-async function handleBridgeScreenshot(params: ScreenshotParams): Promise<{
-	mimeType: "image/webp" | "image/png";
-	dataUrl: string;
-}> {
+async function handleBridgeScreenshot(params: ScreenshotParams): Promise<BridgeScreenshotResult> {
 	const tool = new ExtractImageTool();
 	tool.windowId = currentWindowId;
 	const result = await tool.execute("bridge", {
@@ -955,9 +958,14 @@ async function handleBridgeScreenshot(params: ScreenshotParams): Promise<{
 	if (!image?.data || !image.mimeType) {
 		throw new Error("Screenshot tool returned no image data");
 	}
+	const details = result.details as { screenshot?: Omit<BridgeScreenshotResult, "mimeType" | "dataUrl"> };
+	if (!details.screenshot) {
+		throw new Error("Screenshot tool returned no viewport metadata");
+	}
 	return {
 		mimeType: image.mimeType as "image/webp" | "image/png",
 		dataUrl: `data:${image.mimeType};base64,${image.data}`,
+		...details.screenshot,
 	};
 }
 
