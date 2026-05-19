@@ -1,6 +1,7 @@
 import type { LaunchOptions } from "./launcher.js";
 import type { BridgeMethod, BridgeResponse, CliConfigFile } from "./protocol.js";
 import { BridgeDefaults, ErrorCodes } from "./protocol.js";
+import { type BridgeTarget, parseTargetSpec } from "./target.js";
 
 export interface CliFlags {
 	url?: string;
@@ -23,6 +24,13 @@ export interface CliFlags {
 	dryRun?: boolean;
 	tabId?: string;
 	frameId?: string;
+	target?: string;
+	pid?: string;
+	inspectMain?: boolean;
+	inspectPort?: string;
+	channel?: string;
+	sourcePath?: string;
+	extractTo?: string;
 	maxEntries?: string;
 	includeHidden?: boolean;
 	limit?: string;
@@ -69,10 +77,16 @@ export type ResolveConfigResult = { ok: true; url: string; token: string } | { o
 export type CliCommandPlan =
 	| { kind: "status" }
 	| { kind: "serve" }
-	| { kind: "one-shot"; method: BridgeMethod; params: Record<string, unknown>; defaultTimeoutMs?: number }
-	| { kind: "repl"; params: Record<string, unknown>; defaultTimeoutMs: number }
-	| { kind: "screenshot"; params: Record<string, unknown>; defaultTimeoutMs: number }
-	| { kind: "cookies"; defaultTimeoutMs: number }
+	| {
+			kind: "one-shot";
+			method: BridgeMethod;
+			params: Record<string, unknown>;
+			defaultTimeoutMs?: number;
+			target?: BridgeTarget;
+	  }
+	| { kind: "repl"; params: Record<string, unknown>; defaultTimeoutMs: number; target?: BridgeTarget }
+	| { kind: "screenshot"; params: Record<string, unknown>; defaultTimeoutMs: number; target?: BridgeTarget }
+	| { kind: "cookies"; defaultTimeoutMs: number; target?: BridgeTarget }
 	| {
 			kind: "workflow";
 			action: "run" | "validate";
@@ -87,6 +101,7 @@ export type CliCommandPlan =
 			action: "start" | "stop" | "status";
 			params: Record<string, unknown>;
 			defaultTimeoutMs: number | undefined;
+			target?: BridgeTarget;
 	  }
 	| { kind: "inject"; text: string; role: "user" | "assistant" }
 	| { kind: "launch"; options: LaunchOptions }
@@ -116,6 +131,30 @@ function applyTargetFlags(flags: CliFlags, params: Record<string, unknown>): voi
 	const frameId = parseNumberFlag(flags.frameId);
 	if (typeof tabId === "number") params.tabId = tabId;
 	if (typeof frameId === "number") params.frameId = frameId;
+}
+
+function targetFromFlags(flags: CliFlags): { ok: true; target?: BridgeTarget } | { ok: false; message: string } {
+	if (flags.target) {
+		try {
+			return { ok: true, target: parseTargetSpec(flags.target) };
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			return { ok: false, message: `Invalid --target: ${message}` };
+		}
+	}
+	const tabId = parseNumberFlag(flags.tabId);
+	const frameId = parseNumberFlag(flags.frameId);
+	if (typeof tabId === "number" || typeof frameId === "number") {
+		return {
+			ok: true,
+			target: {
+				kind: "chrome-tab",
+				...(typeof tabId === "number" ? { tabId } : {}),
+				...(typeof frameId === "number" ? { frameId } : {}),
+			},
+		};
+	}
+	return { ok: true };
 }
 
 function parseWorkflowArgs(values: string[] | undefined): Record<string, unknown> {
@@ -246,6 +285,9 @@ export function createCommandPlan(
 	flags: CliFlags,
 	readFileText: (path: string) => string,
 ): CliCommandPlan {
+	const parsedTarget = targetFromFlags(flags);
+	if (!parsedTarget.ok) return { kind: "usage-error", message: parsedTarget.message };
+	const target = parsedTarget.target;
 	switch (command) {
 		case "serve":
 			return { kind: "serve" };
@@ -259,6 +301,7 @@ export function createCommandPlan(
 				method: "navigate",
 				params: flags.newTab ? { url, newTab: true } : { url },
 				defaultTimeoutMs: BridgeDefaults.REQUEST_TIMEOUT_MS,
+				target,
 			};
 		}
 		case "tabs":
@@ -267,6 +310,7 @@ export function createCommandPlan(
 				method: "navigate",
 				params: { listTabs: true },
 				defaultTimeoutMs: BridgeDefaults.REQUEST_TIMEOUT_MS,
+				target,
 			};
 		case "switch": {
 			const tabId = positionals[0];
@@ -276,6 +320,7 @@ export function createCommandPlan(
 				method: "navigate",
 				params: { switchToTab: Number.parseInt(tabId, 10) },
 				defaultTimeoutMs: BridgeDefaults.REQUEST_TIMEOUT_MS,
+				target,
 			};
 		}
 		case "repl": {
@@ -286,12 +331,12 @@ export function createCommandPlan(
 			}
 			const params: Record<string, unknown> = { title: "CLI REPL", code };
 			applyTargetFlags(flags, params);
-			return { kind: "repl", params, defaultTimeoutMs: BridgeDefaults.SLOW_REQUEST_TIMEOUT_MS };
+			return { kind: "repl", params, defaultTimeoutMs: BridgeDefaults.SLOW_REQUEST_TIMEOUT_MS, target };
 		}
 		case "screenshot": {
 			const params: Record<string, unknown> = {};
 			if (flags.maxWidth) params.maxWidth = Number.parseInt(flags.maxWidth, 10);
-			return { kind: "screenshot", params, defaultTimeoutMs: BridgeDefaults.SLOW_REQUEST_TIMEOUT_MS };
+			return { kind: "screenshot", params, defaultTimeoutMs: BridgeDefaults.SLOW_REQUEST_TIMEOUT_MS, target };
 		}
 		case "eval": {
 			const code = positionals.join(" ");
@@ -303,12 +348,14 @@ export function createCommandPlan(
 				method: "eval",
 				params,
 				defaultTimeoutMs: BridgeDefaults.SLOW_REQUEST_TIMEOUT_MS,
+				target,
 			};
 		}
 		case "cookies":
 			return {
 				kind: "cookies",
 				defaultTimeoutMs: BridgeDefaults.SLOW_REQUEST_TIMEOUT_MS,
+				target,
 			};
 		case "select": {
 			const message = positionals.join(" ");
@@ -318,6 +365,7 @@ export function createCommandPlan(
 				method: "select_element",
 				params: { message },
 				defaultTimeoutMs: undefined,
+				target,
 			};
 		}
 		case "session": {
@@ -405,6 +453,7 @@ export function createCommandPlan(
 				method: "page_snapshot",
 				params,
 				defaultTimeoutMs: BridgeDefaults.SLOW_REQUEST_TIMEOUT_MS,
+				target,
 			};
 		}
 		case "locate": {
@@ -428,6 +477,7 @@ export function createCommandPlan(
 					method: "locate_by_role",
 					params,
 					defaultTimeoutMs: BridgeDefaults.REQUEST_TIMEOUT_MS,
+					target,
 				};
 			}
 			if (mode === "text") {
@@ -437,6 +487,7 @@ export function createCommandPlan(
 					method: "locate_by_text",
 					params,
 					defaultTimeoutMs: BridgeDefaults.REQUEST_TIMEOUT_MS,
+					target,
 				};
 			}
 			if (mode === "label") {
@@ -446,6 +497,7 @@ export function createCommandPlan(
 					method: "locate_by_label",
 					params,
 					defaultTimeoutMs: BridgeDefaults.REQUEST_TIMEOUT_MS,
+					target,
 				};
 			}
 			return { kind: "usage-error", message: "Usage: shuvgeist locate <role|text|label> <query>" };
@@ -464,6 +516,7 @@ export function createCommandPlan(
 					method: "ref_click",
 					params,
 					defaultTimeoutMs: BridgeDefaults.REQUEST_TIMEOUT_MS,
+					target,
 				};
 			}
 			if (action === "fill") {
@@ -476,6 +529,7 @@ export function createCommandPlan(
 					method: "ref_fill",
 					params,
 					defaultTimeoutMs: BridgeDefaults.REQUEST_TIMEOUT_MS,
+					target,
 				};
 			}
 			return { kind: "usage-error", message: "Usage: shuvgeist ref <click|fill> <refId>" };
@@ -490,6 +544,7 @@ export function createCommandPlan(
 					method: "frame_list",
 					params,
 					defaultTimeoutMs: BridgeDefaults.REQUEST_TIMEOUT_MS,
+					target,
 				};
 			}
 			if (action === "tree") {
@@ -498,6 +553,7 @@ export function createCommandPlan(
 					method: "frame_tree",
 					params,
 					defaultTimeoutMs: BridgeDefaults.REQUEST_TIMEOUT_MS,
+					target,
 				};
 			}
 			return { kind: "usage-error", message: "Usage: shuvgeist frame <list|tree> [--tab-id N]" };
@@ -516,6 +572,7 @@ export function createCommandPlan(
 						method: "network_start",
 						params,
 						defaultTimeoutMs: BridgeDefaults.REQUEST_TIMEOUT_MS,
+						target,
 					};
 				case "stop":
 					return {
@@ -523,6 +580,7 @@ export function createCommandPlan(
 						method: "network_stop",
 						params,
 						defaultTimeoutMs: BridgeDefaults.REQUEST_TIMEOUT_MS,
+						target,
 					};
 				case "list":
 					return {
@@ -530,6 +588,7 @@ export function createCommandPlan(
 						method: "network_list",
 						params,
 						defaultTimeoutMs: BridgeDefaults.REQUEST_TIMEOUT_MS,
+						target,
 					};
 				case "clear":
 					return {
@@ -537,6 +596,7 @@ export function createCommandPlan(
 						method: "network_clear",
 						params,
 						defaultTimeoutMs: BridgeDefaults.REQUEST_TIMEOUT_MS,
+						target,
 					};
 				case "stats":
 					return {
@@ -544,6 +604,7 @@ export function createCommandPlan(
 						method: "network_stats",
 						params,
 						defaultTimeoutMs: BridgeDefaults.REQUEST_TIMEOUT_MS,
+						target,
 					};
 				case "get":
 					if (!requestId) return { kind: "usage-error", message: "Usage: shuvgeist network get <requestId>" };
@@ -552,6 +613,7 @@ export function createCommandPlan(
 						method: "network_get",
 						params: { ...params, requestId },
 						defaultTimeoutMs: BridgeDefaults.REQUEST_TIMEOUT_MS,
+						target,
 					};
 				case "body":
 					if (!requestId) return { kind: "usage-error", message: "Usage: shuvgeist network body <requestId>" };
@@ -560,6 +622,7 @@ export function createCommandPlan(
 						method: "network_body",
 						params: { ...params, requestId },
 						defaultTimeoutMs: BridgeDefaults.REQUEST_TIMEOUT_MS,
+						target,
 					};
 				case "curl":
 					if (!requestId)
@@ -573,6 +636,7 @@ export function createCommandPlan(
 						method: "network_curl",
 						params: { ...params, requestId },
 						defaultTimeoutMs: BridgeDefaults.REQUEST_TIMEOUT_MS,
+						target,
 					};
 				default:
 					return {
@@ -591,6 +655,7 @@ export function createCommandPlan(
 					method: "device_reset",
 					params,
 					defaultTimeoutMs: BridgeDefaults.REQUEST_TIMEOUT_MS,
+					target,
 				};
 			}
 			if (action !== "emulate") {
@@ -615,6 +680,7 @@ export function createCommandPlan(
 				method: "device_emulate",
 				params,
 				defaultTimeoutMs: BridgeDefaults.REQUEST_TIMEOUT_MS,
+				target,
 			};
 		}
 		case "record": {
@@ -686,6 +752,7 @@ export function createCommandPlan(
 					action,
 					params,
 					defaultTimeoutMs: undefined,
+					target,
 				};
 			}
 			if (action === "stop") {
@@ -694,6 +761,7 @@ export function createCommandPlan(
 					action,
 					params,
 					defaultTimeoutMs: BridgeDefaults.REQUEST_TIMEOUT_MS,
+					target,
 				};
 			}
 			if (action === "status") {
@@ -702,6 +770,7 @@ export function createCommandPlan(
 					action,
 					params,
 					defaultTimeoutMs: BridgeDefaults.REQUEST_TIMEOUT_MS,
+					target,
 				};
 			}
 			return { kind: "usage-error", message: "Usage: shuvgeist record <start|stop|status> ..." };
@@ -716,6 +785,7 @@ export function createCommandPlan(
 					method: "perf_metrics",
 					params,
 					defaultTimeoutMs: BridgeDefaults.REQUEST_TIMEOUT_MS,
+					target,
 				};
 			}
 			if (action === "trace-start") {
@@ -725,6 +795,7 @@ export function createCommandPlan(
 					method: "perf_trace_start",
 					params,
 					defaultTimeoutMs: BridgeDefaults.TRACE_TIMEOUT_MS,
+					target,
 				};
 			}
 			if (action === "trace-stop") {
@@ -733,9 +804,243 @@ export function createCommandPlan(
 					method: "perf_trace_stop",
 					params,
 					defaultTimeoutMs: BridgeDefaults.TRACE_TIMEOUT_MS,
+					target,
 				};
 			}
 			return { kind: "usage-error", message: "Usage: shuvgeist perf <metrics|trace-start|trace-stop>" };
+		}
+		case "electron": {
+			const action = positionals[0] ?? "list";
+			if (action === "list") {
+				return {
+					kind: "one-shot",
+					method: "electron_list",
+					params: {},
+					defaultTimeoutMs: BridgeDefaults.REQUEST_TIMEOUT_MS,
+				};
+			}
+			if (action === "allow") {
+				const appRef = positionals[1];
+				if (!appRef) return { kind: "usage-error", message: "Usage: shuvgeist electron allow <app-id-or-alias>" };
+				return {
+					kind: "one-shot",
+					method: "electron_allow",
+					params: { appRef },
+					defaultTimeoutMs: BridgeDefaults.REQUEST_TIMEOUT_MS,
+				};
+			}
+			if (action === "launch") {
+				const appRef = positionals[1];
+				if (!appRef) return { kind: "usage-error", message: "Usage: shuvgeist electron launch <app-id-or-alias>" };
+				return {
+					kind: "one-shot",
+					method: "electron_launch",
+					params: { appRef, ...(flags.inspectMain ? { inspectMain: true } : {}) },
+					defaultTimeoutMs: BridgeDefaults.SLOW_REQUEST_TIMEOUT_MS,
+				};
+			}
+			if (action === "attach") {
+				const appRef = positionals[1];
+				const params: Record<string, unknown> = {};
+				if (appRef) params.appRef = appRef;
+				if (flags.port) params.port = Number.parseInt(flags.port, 10);
+				if (flags.pid) params.pid = Number.parseInt(flags.pid, 10);
+				if (flags.inspectPort) params.inspectPort = Number.parseInt(flags.inspectPort, 10);
+				return {
+					kind: "one-shot",
+					method: "electron_attach",
+					params,
+					defaultTimeoutMs: BridgeDefaults.REQUEST_TIMEOUT_MS,
+				};
+			}
+			if (action === "detach") {
+				const sessionId = positionals[1];
+				return {
+					kind: "one-shot",
+					method: "electron_detach",
+					params: sessionId ? { sessionId } : {},
+					defaultTimeoutMs: BridgeDefaults.REQUEST_TIMEOUT_MS,
+				};
+			}
+			if (action === "windows") {
+				const appRef = positionals[1];
+				return {
+					kind: "one-shot",
+					method: "electron_windows",
+					params: appRef ? { appRef } : {},
+					defaultTimeoutMs: BridgeDefaults.REQUEST_TIMEOUT_MS,
+				};
+			}
+			if (action === "label") {
+				const sessionId = positionals[1];
+				const windowRef = positionals[2];
+				const label = positionals.slice(3).join(" ");
+				if (!sessionId || !windowRef || !label) {
+					return {
+						kind: "usage-error",
+						message: "Usage: shuvgeist electron label <session-id> <window-ref> <label>",
+					};
+				}
+				return {
+					kind: "one-shot",
+					method: "electron_label",
+					params: { sessionId, windowRef, label },
+					defaultTimeoutMs: BridgeDefaults.REQUEST_TIMEOUT_MS,
+				};
+			}
+			if (action === "main") {
+				const sessionId = positionals[1];
+				if (!sessionId) return { kind: "usage-error", message: "Usage: shuvgeist electron main <session-id>" };
+				return {
+					kind: "one-shot",
+					method: "electron_main_info",
+					params: { sessionId },
+					defaultTimeoutMs: BridgeDefaults.REQUEST_TIMEOUT_MS,
+				};
+			}
+			if (action === "ipc") {
+				const ipcAction = positionals[1];
+				const sessionId = positionals[2];
+				if (ipcAction === "tap") {
+					if (!sessionId) {
+						return {
+							kind: "usage-error",
+							message: "Usage: shuvgeist electron ipc tap <session-id> [--channel <filter>]",
+						};
+					}
+					return {
+						kind: "one-shot",
+						method: "electron_ipc_tap_start",
+						params: { sessionId, ...(flags.channel ? { channel: flags.channel } : {}) },
+						defaultTimeoutMs: BridgeDefaults.REQUEST_TIMEOUT_MS,
+					};
+				}
+				if (ipcAction === "untap" || ipcAction === "stop") {
+					if (!sessionId)
+						return { kind: "usage-error", message: "Usage: shuvgeist electron ipc untap <session-id>" };
+					return {
+						kind: "one-shot",
+						method: "electron_ipc_tap_stop",
+						params: { sessionId },
+						defaultTimeoutMs: BridgeDefaults.REQUEST_TIMEOUT_MS,
+					};
+				}
+				return { kind: "usage-error", message: "Usage: shuvgeist electron ipc <tap|untap> <session-id>" };
+			}
+			if (action === "network-main") {
+				const networkAction = positionals[1];
+				const sessionId = positionals[2];
+				if (networkAction === "start") {
+					if (!sessionId)
+						return { kind: "usage-error", message: "Usage: shuvgeist electron network-main start <session-id>" };
+					return {
+						kind: "one-shot",
+						method: "electron_main_network_start",
+						params: { sessionId },
+						defaultTimeoutMs: BridgeDefaults.REQUEST_TIMEOUT_MS,
+					};
+				}
+				if (networkAction === "stop") {
+					if (!sessionId)
+						return { kind: "usage-error", message: "Usage: shuvgeist electron network-main stop <session-id>" };
+					return {
+						kind: "one-shot",
+						method: "electron_main_network_stop",
+						params: { sessionId },
+						defaultTimeoutMs: BridgeDefaults.REQUEST_TIMEOUT_MS,
+					};
+				}
+				return { kind: "usage-error", message: "Usage: shuvgeist electron network-main <start|stop> <session-id>" };
+			}
+			if (action === "source") {
+				const sourceAction = positionals[1];
+				const sourceParams: Record<string, unknown> = {};
+				if (flags.sourcePath) sourceParams.sourcePath = flags.sourcePath;
+				if (positionals[2] && sourceAction !== "read" && sourceAction !== "extract")
+					sourceParams.appRef = positionals[2];
+				if (sourceAction === "layout") {
+					return {
+						kind: "one-shot",
+						method: "electron_source_layout",
+						params: sourceParams,
+						defaultTimeoutMs: BridgeDefaults.REQUEST_TIMEOUT_MS,
+					};
+				}
+				if (sourceAction === "list") {
+					return {
+						kind: "one-shot",
+						method: "electron_source_list",
+						params: sourceParams,
+						defaultTimeoutMs: BridgeDefaults.REQUEST_TIMEOUT_MS,
+					};
+				}
+				if (sourceAction === "read") {
+					const filePath = positionals[2];
+					if (!flags.sourcePath && positionals[3]) sourceParams.appRef = positionals[3];
+					if (!filePath) {
+						return {
+							kind: "usage-error",
+							message: "Usage: shuvgeist electron source read <file> --source-path <path>",
+						};
+					}
+					return {
+						kind: "one-shot",
+						method: "electron_source_read",
+						params: { ...sourceParams, filePath },
+						defaultTimeoutMs: BridgeDefaults.REQUEST_TIMEOUT_MS,
+					};
+				}
+				if (sourceAction === "extract") {
+					const destinationPath = flags.extractTo ?? positionals[2];
+					if (!flags.sourcePath && positionals[3]) sourceParams.appRef = positionals[3];
+					if (!destinationPath) {
+						return {
+							kind: "usage-error",
+							message: "Usage: shuvgeist electron source extract <destination> --source-path <path>",
+						};
+					}
+					return {
+						kind: "one-shot",
+						method: "electron_source_extract",
+						params: { ...sourceParams, destinationPath },
+						defaultTimeoutMs: BridgeDefaults.SLOW_REQUEST_TIMEOUT_MS,
+					};
+				}
+				return {
+					kind: "usage-error",
+					message: "Usage: shuvgeist electron source <layout|list|read|extract> ...",
+				};
+			}
+			if (action === "doctor") {
+				const appRef = positionals[1];
+				return {
+					kind: "one-shot",
+					method: "electron_doctor",
+					params: appRef ? { appRef } : {},
+					defaultTimeoutMs: BridgeDefaults.SLOW_REQUEST_TIMEOUT_MS,
+				};
+			}
+			if (action === "auto-attach") {
+				const autoAttachAction = positionals[1];
+				const appRef = positionals[2];
+				if (!autoAttachAction || !appRef) {
+					return {
+						kind: "usage-error",
+						message: "Usage: shuvgeist electron auto-attach <status|install|uninstall> <app>",
+					};
+				}
+				return {
+					kind: "one-shot",
+					method: "electron_auto_attach",
+					params: { action: autoAttachAction, appRef },
+					defaultTimeoutMs: BridgeDefaults.REQUEST_TIMEOUT_MS,
+				};
+			}
+			return {
+				kind: "usage-error",
+				message:
+					"Usage: shuvgeist electron <list|allow|launch|attach|detach|windows|label|main|source|doctor|auto-attach> ...",
+			};
 		}
 		case "launch":
 			return {

@@ -5,6 +5,7 @@ function makeSkill(name: string, domainPatterns: string[]): Skill {
 	return {
 		name,
 		domainPatterns,
+		appPatterns: [],
 		shortDescription: `${name} short`,
 		description: `${name} description`,
 		createdAt: "2026-03-20T00:00:00.000Z",
@@ -41,5 +42,19 @@ describe("SkillsStore", () => {
 
 		const allSkills = await store.list();
 		expect(allSkills.map((skill) => skill.name).sort()).toEqual(["example", "github", "google"]);
+	});
+
+	it("lists matching skills for electron app patterns", async () => {
+		const backend = new FakeStorageBackend();
+		backend.seed("skills", "code", { ...makeSkill("code", []), appPatterns: ["vscode", "code"] });
+		backend.seed("skills", "slack", { ...makeSkill("slack", []), appPatterns: ["slack"] });
+
+		const store = new SkillsStore();
+		store.setBackend(backend);
+
+		await expect(store.getSkillsForApp("com.microsoft.VSCode")).resolves.toEqual([
+			expect.objectContaining({ name: "code" }),
+		]);
+		expect(store.matchesAnyAppPattern("slack-desktop", ["slack"])).toBe(true);
 	});
 });

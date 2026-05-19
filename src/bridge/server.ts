@@ -13,6 +13,18 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { networkInterfaces } from "node:os";
 import { WebSocket, WebSocketServer } from "ws";
+import { listElectronRegistryEntries, resolveElectronApp } from "./electron/app-registry.js";
+import { manageElectronAutoAttach } from "./electron/auto-attach.js";
+import { allowElectronApp, normalizeElectronConfig, readBridgeConfig } from "./electron/config.js";
+import { runElectronDoctor } from "./electron/doctor.js";
+import { ElectronSessionManager } from "./electron/session-manager.js";
+import { readSkillSnapshot, writeSkillSnapshot } from "./electron/skill-snapshot-store.js";
+import {
+	extractElectronSource,
+	inspectElectronSourceLayout,
+	listElectronSource,
+	readElectronSourceFile,
+} from "./electron/source-inspector.js";
 import { bridgeLog, generateConnectionId, type LogFields } from "./logging.js";
 import {
 	type AbortMessage,
@@ -29,10 +41,14 @@ import {
 	ErrorCodes,
 	formatBridgeProtocolMismatch,
 	isBridgeProtocolCompatible,
+	isServerLocalMethod,
+	isTargetDispatchedMethod,
 	isWriteMethod,
 	type RegistrationMessage,
 } from "./protocol.js";
-import { BridgeTelemetry, type BridgeTelemetrySpan, parseTraceparent } from "./telemetry.js";
+import { parseBridgeSkillSnapshot } from "./skill-snapshot.js";
+import { isChromeTarget, isElectronTarget, requestTarget, targetTeachingLabel } from "./target.js";
+import { BridgeTelemetry, type BridgeTelemetrySpan, parseTraceparent, type TelemetryAttributes } from "./telemetry.js";
 
 // ---------------------------------------------------------------------------
 // Client tracking
@@ -75,6 +91,51 @@ interface ActiveRecordingLease {
 	startedAt: number;
 }
 
+function electronTargetTelemetryAttributes(target: ReturnType<typeof requestTarget>): TelemetryAttributes {
+	if (!isElectronTarget(target)) return {};
+	return {
+		"bridge.target.kind": target.kind,
+		"electron.app_ref": target.appRef,
+		"electron.session_id": target.sessionId,
+		"electron.window_ref": target.windowRef,
+		"electron.target_id": target.targetId,
+	};
+}
+
+function electronServerLocalTelemetryAttributes(req: BridgeRequest): TelemetryAttributes {
+	return {
+		"bridge.target.kind": "electron-local",
+		"electron.app_ref": typeof req.params?.appRef === "string" ? req.params.appRef : undefined,
+		"electron.session_id": typeof req.params?.sessionId === "string" ? req.params.sessionId : undefined,
+		"electron.window_ref": typeof req.params?.windowRef === "string" ? req.params.windowRef : undefined,
+		"electron.port": typeof req.params?.port === "number" ? req.params.port : undefined,
+		"electron.pid": typeof req.params?.pid === "number" ? req.params.pid : undefined,
+	};
+}
+
+function electronResultTelemetryAttributes(result: unknown): TelemetryAttributes {
+	const value = result && typeof result === "object" ? (result as Record<string, unknown>) : undefined;
+	const directWindow =
+		value?.window && typeof value.window === "object" ? (value.window as Record<string, unknown>) : undefined;
+	const windows =
+		Array.isArray(value?.windows) && value.windows[0] && typeof value.windows[0] === "object"
+			? (value.windows[0] as Record<string, unknown>)
+			: undefined;
+	return {
+		"electron.app_id": typeof value?.appId === "string" ? value.appId : undefined,
+		"electron.app_ref": typeof value?.appRef === "string" ? value.appRef : undefined,
+		"electron.session_id": typeof value?.id === "string" ? value.id : undefined,
+		"electron.window_ref":
+			typeof directWindow?.ref === "string"
+				? directWindow.ref
+				: typeof windows?.ref === "string"
+					? windows.ref
+					: undefined,
+		"electron.launched": typeof value?.launched === "boolean" ? value.launched : undefined,
+		"electron.recording_id": typeof value?.recordingId === "string" ? value.recordingId : undefined,
+	};
+}
+
 // ---------------------------------------------------------------------------
 // Server
 // ---------------------------------------------------------------------------
@@ -89,6 +150,7 @@ export class BridgeServer {
 	private nextRelayRequestId = 1;
 	private writerCliConnectionId?: string;
 	private writerSessionId?: string;
+	private readonly electronSessions = new ElectronSessionManager();
 	private readonly activeRecordingLeases = new Map<string, ActiveRecordingLease>();
 	private httpServer?: ReturnType<typeof createServer>;
 	private wss?: WebSocketServer;
@@ -115,6 +177,12 @@ export class BridgeServer {
 				this.handleStatusRequest(res);
 			} else if (req.method === "GET" && pathname === "/bootstrap") {
 				this.handleBootstrapRequest(req, res);
+			} else if (req.method === "POST" && pathname === "/skills/snapshot") {
+				void this.handleSkillSnapshotWrite(req, res);
+			} else if (req.method === "POST" && pathname === "/electron/detach") {
+				void this.handleElectronDetachHttp(req, res);
+			} else if (req.method === "POST" && pathname === "/electron/thumbnail") {
+				void this.handleElectronThumbnailHttp(req, res);
 			} else {
 				res.writeHead(404, { "Content-Type": "application/json" });
 				res.end(JSON.stringify({ error: "Not found" }));
@@ -450,6 +518,28 @@ export class BridgeServer {
 			return;
 		}
 
+		const target = requestTarget(req);
+		if (isServerLocalMethod(req.method)) {
+			this.handleServerLocalRequest(client, req, span);
+			return;
+		}
+
+		if (isTargetDispatchedMethod(req.method) && isElectronTarget(target)) {
+			void this.handleElectronTargetRequest(client, req, target, span, fields);
+			return;
+		}
+
+		if (!isChromeTarget(target)) {
+			this.sendJson(client.ws, {
+				id: req.id,
+				error: {
+					code: ErrorCodes.INVALID_TARGET,
+					message: `Method '${req.method}' cannot be routed to target '${targetTeachingLabel(target)}'`,
+				},
+			});
+			return;
+		}
+
 		// Check extension target
 		if (!this.activeExtension || this.activeExtension.ws.readyState !== WebSocket.OPEN) {
 			bridgeLog("warn", "no extension target", { ...fields, outcome: "error" });
@@ -535,8 +625,306 @@ export class BridgeServer {
 		this.sendJson(this.activeExtension.ws, {
 			...req,
 			id: relayRequestId,
+			target,
 			...(span ? span.toTraceHeaders() : {}),
 		});
+	}
+
+	private handleServerLocalRequest(client: ClientInfo, req: BridgeRequest, span?: BridgeTelemetrySpan): void {
+		void this.handleServerLocalRequestAsync(client, req, span);
+	}
+
+	private async handleElectronTargetRequest(
+		client: ClientInfo,
+		req: BridgeRequest,
+		target: ReturnType<typeof requestTarget>,
+		span: BridgeTelemetrySpan | undefined,
+		fields: LogFields,
+	): Promise<void> {
+		const startedAt = Date.now();
+		span?.setAttributes(electronTargetTelemetryAttributes(target));
+		try {
+			let result: unknown;
+			if (req.method === "eval") {
+				const code = typeof req.params?.code === "string" ? req.params.code : "";
+				if (!code) throw new Error("Electron eval requires code.");
+				result = await this.electronSessions.evaluate(target, code);
+			} else if (req.method === "screenshot") {
+				const maxWidth = typeof req.params?.maxWidth === "number" ? req.params.maxWidth : undefined;
+				result = await this.electronSessions.screenshot(target, maxWidth);
+			} else if (req.method === "page_snapshot") {
+				result = await this.electronSessions.snapshot(target, {
+					maxEntries: typeof req.params?.maxEntries === "number" ? req.params.maxEntries : undefined,
+					includeHidden: req.params?.includeHidden === true,
+				});
+			} else if (req.method === "locate_by_role") {
+				result = await this.electronSessions.locateByRole(target, req.params as never);
+			} else if (req.method === "locate_by_text") {
+				result = await this.electronSessions.locateByText(target, req.params as never);
+			} else if (req.method === "locate_by_label") {
+				result = await this.electronSessions.locateByLabel(target, req.params as never);
+			} else if (req.method === "ref_click") {
+				result = await this.electronSessions.refClick(target, req.params as never);
+			} else if (req.method === "ref_fill") {
+				result = await this.electronSessions.refFill(target, req.params as never);
+			} else if (req.method === "record_start") {
+				result = await this.electronSessions.recordStart(target, req.params as never, (data) => {
+					if (client.ws.readyState === WebSocket.OPEN) {
+						this.sendJson(client.ws, { type: "event", event: "record_frame", data });
+					}
+				});
+			} else if (req.method === "record_stop") {
+				result = await this.electronSessions.recordStop(req.params as { recordingId?: string });
+			} else if (req.method === "record_status") {
+				result = this.electronSessions.recordStatus();
+			} else {
+				throw new Error(`Electron target dispatch for '${req.method}' is not implemented yet.`);
+			}
+			const durationMs = Date.now() - startedAt;
+			const resultAttributes = electronResultTelemetryAttributes(result);
+			span?.setAttributes({
+				...resultAttributes,
+				"electron.duration_ms": durationMs,
+			});
+			bridgeLog("info", "electron target request completed", {
+				...fields,
+				target: targetTeachingLabel(target),
+				outcome: "success",
+				durationMs,
+				...resultAttributes,
+			});
+			span?.setAttribute("bridge.outcome", "success");
+			span?.end("ok");
+			void this.telemetry?.flush();
+			this.sendJson(client.ws, { id: req.id, result });
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			const durationMs = Date.now() - startedAt;
+			bridgeLog("warn", "electron target request failed", {
+				...fields,
+				target: targetTeachingLabel(target),
+				outcome: "error",
+				durationMs,
+				errorType: error instanceof Error ? error.name : "Error",
+				error: message,
+			});
+			span?.recordError(new Error(message));
+			span?.setAttributes({
+				"bridge.outcome": "error",
+				"electron.duration_ms": durationMs,
+			});
+			span?.end("error");
+			void this.telemetry?.flush();
+			const isMissingSession = message.startsWith("No Electron session attached");
+			this.sendJson(client.ws, {
+				id: req.id,
+				error: { code: isMissingSession ? ErrorCodes.NO_ELECTRON_SESSION : ErrorCodes.EXECUTION_ERROR, message },
+			});
+		}
+	}
+
+	private async handleServerLocalRequestAsync(
+		client: ClientInfo,
+		req: BridgeRequest,
+		span?: BridgeTelemetrySpan,
+	): Promise<void> {
+		const startedAt = Date.now();
+		if (req.method.startsWith("electron_")) {
+			span?.setAttributes(electronServerLocalTelemetryAttributes(req));
+		}
+		try {
+			let result: unknown;
+			switch (req.method) {
+				case "electron_list": {
+					const config = normalizeElectronConfig(readBridgeConfig());
+					result = {
+						apps: listElectronRegistryEntries(new Set(config.allowlist)),
+						sessions: this.electronSessions.list(),
+					};
+					break;
+				}
+				case "electron_allow": {
+					const appRef = typeof req.params?.appRef === "string" ? req.params.appRef : undefined;
+					if (!appRef) throw new Error("Usage: shuvgeist electron allow <app-id-or-alias>");
+					const app = resolveElectronApp(appRef);
+					if (!app)
+						throw new Error(`Unknown Electron app '${appRef}'. Run 'shuvgeist electron list' to see known apps.`);
+					allowElectronApp(app.id);
+					result = { ok: true, appId: app.id };
+					break;
+				}
+				case "electron_launch": {
+					const appRef = typeof req.params?.appRef === "string" ? req.params.appRef : undefined;
+					if (!appRef) throw new Error("Usage: shuvgeist electron launch <app-id-or-alias>");
+					result = await this.electronSessions.launch(appRef, { inspectMain: req.params?.inspectMain === true });
+					this.broadcastElectronSessionsChanged("attach");
+					break;
+				}
+				case "electron_attach": {
+					result = await this.electronSessions.attach({
+						appRef: typeof req.params?.appRef === "string" ? req.params.appRef : undefined,
+						pid: typeof req.params?.pid === "number" ? req.params.pid : undefined,
+						port: typeof req.params?.port === "number" ? req.params.port : undefined,
+						inspectPort: typeof req.params?.inspectPort === "number" ? req.params.inspectPort : undefined,
+					});
+					this.broadcastElectronSessionsChanged("attach");
+					break;
+				}
+				case "electron_detach": {
+					const sessionId = typeof req.params?.sessionId === "string" ? req.params.sessionId : undefined;
+					if (!sessionId) throw new Error("Usage: shuvgeist electron detach <session-id>");
+					result = { ok: this.electronSessions.detach(sessionId), sessionId };
+					this.broadcastElectronSessionsChanged("detach");
+					break;
+				}
+				case "electron_windows":
+					result = { sessions: await this.electronSessions.windows(requestTarget(req)) };
+					this.broadcastElectronSessionsChanged("windows");
+					break;
+				case "electron_label": {
+					const sessionId = typeof req.params?.sessionId === "string" ? req.params.sessionId : undefined;
+					const windowRef = typeof req.params?.windowRef === "string" ? req.params.windowRef : undefined;
+					const label = typeof req.params?.label === "string" ? req.params.label : undefined;
+					if (!sessionId || !windowRef || !label) {
+						throw new Error("Usage: shuvgeist electron label <session-id> <window-ref> <label>");
+					}
+					result = { ok: true, window: await this.electronSessions.labelWindow(sessionId, windowRef, label) };
+					this.broadcastElectronSessionsChanged("label");
+					break;
+				}
+				case "electron_main_info": {
+					const sessionId = typeof req.params?.sessionId === "string" ? req.params.sessionId : undefined;
+					if (!sessionId) throw new Error("Usage: shuvgeist electron main <session-id>");
+					result = await this.electronSessions.mainInfo(sessionId);
+					break;
+				}
+				case "electron_ipc_tap_start": {
+					const sessionId = typeof req.params?.sessionId === "string" ? req.params.sessionId : undefined;
+					if (!sessionId) throw new Error("Usage: shuvgeist electron ipc tap <session-id> [--channel <filter>]");
+					result = await this.electronSessions.startIpcTap(sessionId, {
+						channel: typeof req.params?.channel === "string" ? req.params.channel : undefined,
+					});
+					break;
+				}
+				case "electron_ipc_tap_stop": {
+					const sessionId = typeof req.params?.sessionId === "string" ? req.params.sessionId : undefined;
+					if (!sessionId) throw new Error("Usage: shuvgeist electron ipc untap <session-id>");
+					result = await this.electronSessions.stopIpcTap(sessionId);
+					break;
+				}
+				case "electron_main_network_start": {
+					const sessionId = typeof req.params?.sessionId === "string" ? req.params.sessionId : undefined;
+					if (!sessionId) throw new Error("Usage: shuvgeist electron network-main start <session-id>");
+					result = await this.electronSessions.startMainNetworkTap(sessionId);
+					break;
+				}
+				case "electron_main_network_stop": {
+					const sessionId = typeof req.params?.sessionId === "string" ? req.params.sessionId : undefined;
+					if (!sessionId) throw new Error("Usage: shuvgeist electron network-main stop <session-id>");
+					result = await this.electronSessions.stopMainNetworkTap(sessionId);
+					break;
+				}
+				case "electron_source_layout":
+					result = await inspectElectronSourceLayout({
+						sourcePath: typeof req.params?.sourcePath === "string" ? req.params.sourcePath : undefined,
+						appRef: typeof req.params?.appRef === "string" ? req.params.appRef : undefined,
+					});
+					break;
+				case "electron_source_list":
+					result = await listElectronSource({
+						sourcePath: typeof req.params?.sourcePath === "string" ? req.params.sourcePath : undefined,
+						appRef: typeof req.params?.appRef === "string" ? req.params.appRef : undefined,
+					});
+					break;
+				case "electron_source_read": {
+					const filePath = typeof req.params?.filePath === "string" ? req.params.filePath : undefined;
+					if (!filePath) throw new Error("Usage: shuvgeist electron source read <file> --source-path <path>");
+					result = await readElectronSourceFile({
+						sourcePath: typeof req.params?.sourcePath === "string" ? req.params.sourcePath : undefined,
+						appRef: typeof req.params?.appRef === "string" ? req.params.appRef : undefined,
+						filePath,
+					});
+					break;
+				}
+				case "electron_source_extract": {
+					const destinationPath =
+						typeof req.params?.destinationPath === "string" ? req.params.destinationPath : undefined;
+					if (!destinationPath) {
+						throw new Error("Usage: shuvgeist electron source extract <destination> --source-path <path>");
+					}
+					result = await extractElectronSource({
+						sourcePath: typeof req.params?.sourcePath === "string" ? req.params.sourcePath : undefined,
+						appRef: typeof req.params?.appRef === "string" ? req.params.appRef : undefined,
+						destinationPath,
+					});
+					break;
+				}
+				case "electron_doctor":
+					result = await runElectronDoctor({
+						appRef: typeof req.params?.appRef === "string" ? req.params.appRef : undefined,
+					});
+					break;
+				case "electron_auto_attach": {
+					const action = typeof req.params?.action === "string" ? req.params.action : undefined;
+					const appRef = typeof req.params?.appRef === "string" ? req.params.appRef : undefined;
+					if (action !== "status" && action !== "install" && action !== "uninstall") {
+						throw new Error("Usage: shuvgeist electron auto-attach <status|install|uninstall> <app>");
+					}
+					if (!appRef) throw new Error("Usage: shuvgeist electron auto-attach <status|install|uninstall> <app>");
+					result = await manageElectronAutoAttach(action, appRef);
+					break;
+				}
+				case "skills_snapshot_status":
+					result = readSkillSnapshot().status;
+					break;
+				default:
+					this.sendJson(client.ws, {
+						id: req.id,
+						error: { code: ErrorCodes.INVALID_METHOD, message: "Unknown server-local method: " + req.method },
+					});
+					return;
+			}
+			if (req.method.startsWith("electron_")) {
+				const durationMs = Date.now() - startedAt;
+				const resultAttributes = electronResultTelemetryAttributes(result);
+				span?.setAttributes({
+					...resultAttributes,
+					"electron.duration_ms": durationMs,
+				});
+				bridgeLog("info", "electron local request completed", {
+					role: "server",
+					requestId: req.id,
+					method: req.method,
+					outcome: "success",
+					durationMs,
+					...resultAttributes,
+				});
+			}
+			span?.setAttribute("bridge.outcome", "success");
+			span?.end("ok");
+			void this.telemetry?.flush();
+			this.sendJson(client.ws, { id: req.id, result });
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			if (req.method.startsWith("electron_")) {
+				const durationMs = Date.now() - startedAt;
+				bridgeLog("warn", "electron local request failed", {
+					role: "server",
+					requestId: req.id,
+					method: req.method,
+					outcome: "error",
+					durationMs,
+					errorType: error instanceof Error ? error.name : "Error",
+					error: message,
+				});
+				span?.setAttribute("electron.duration_ms", durationMs);
+			}
+			span?.recordError(new Error(message));
+			span?.setAttribute("bridge.outcome", "error");
+			span?.end("error");
+			void this.telemetry?.flush();
+			this.sendJson(client.ws, { id: req.id, error: { code: ErrorCodes.EXECUTION_ERROR, message } });
+		}
 	}
 
 	// -----------------------------------------------------------------------
@@ -779,6 +1167,61 @@ export class BridgeServer {
 		});
 	}
 
+	private async handleSkillSnapshotWrite(req: IncomingMessage, res: ServerResponse): Promise<void> {
+		if (!this.isAuthorizedHttpRequest(req)) {
+			this.writeJson(res, 403, { error: "Invalid bridge token" });
+			return;
+		}
+		try {
+			const snapshot = parseBridgeSkillSnapshot(JSON.parse(await this.readRequestBody(req)) as unknown);
+			const status = writeSkillSnapshot(snapshot);
+			this.writeJson(res, 200, { ok: true, status });
+		} catch (error) {
+			this.writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) });
+		}
+	}
+
+	private async handleElectronDetachHttp(req: IncomingMessage, res: ServerResponse): Promise<void> {
+		if (!this.isAuthorizedHttpRequest(req)) {
+			this.writeJson(res, 403, { error: "Invalid bridge token" });
+			return;
+		}
+		try {
+			const body = JSON.parse(await this.readRequestBody(req)) as { sessionId?: unknown };
+			if (typeof body.sessionId !== "string" || !body.sessionId) {
+				throw new Error("sessionId is required");
+			}
+			const result = { ok: this.electronSessions.detach(body.sessionId), sessionId: body.sessionId };
+			this.broadcastElectronSessionsChanged("detach");
+			this.writeJson(res, 200, result);
+		} catch (error) {
+			this.writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) });
+		}
+	}
+
+	private async handleElectronThumbnailHttp(req: IncomingMessage, res: ServerResponse): Promise<void> {
+		if (!this.isAuthorizedHttpRequest(req)) {
+			this.writeJson(res, 403, { error: "Invalid bridge token" });
+			return;
+		}
+		try {
+			const body = JSON.parse(await this.readRequestBody(req)) as {
+				sessionId?: unknown;
+				windowRef?: unknown;
+				maxWidth?: unknown;
+			};
+			if (typeof body.sessionId !== "string" || !body.sessionId) throw new Error("sessionId is required");
+			if (typeof body.windowRef !== "string" || !body.windowRef) throw new Error("windowRef is required");
+			const result = await this.electronSessions.screenshot(
+				{ kind: "electron-window", sessionId: body.sessionId, windowRef: body.windowRef },
+				typeof body.maxWidth === "number" ? body.maxWidth : 320,
+			);
+			this.writeJson(res, 200, result);
+		} catch (error) {
+			this.writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) });
+		}
+	}
+
 	private handleStatusRequest(res: ServerResponse): void {
 		const ext = this.activeExtension;
 		const status: BridgeServerStatus = {
@@ -802,6 +1245,10 @@ export class BridgeServer {
 				cli: this.countByRole("cli"),
 				extension: this.countByRole("extension"),
 			},
+			electron: {
+				sessions: this.electronSessions.list(),
+			},
+			skillsSnapshot: readSkillSnapshot().status,
 			pendingRequests: this.pendingRequests.size,
 		};
 
@@ -811,6 +1258,16 @@ export class BridgeServer {
 	// -----------------------------------------------------------------------
 	// Helpers
 	// -----------------------------------------------------------------------
+
+	private isAuthorizedHttpRequest(req: IncomingMessage): boolean {
+		return req.headers.authorization === `Bearer ${this.config.token}`;
+	}
+
+	private async readRequestBody(req: IncomingMessage): Promise<string> {
+		const chunks: Buffer[] = [];
+		for await (const chunk of req) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+		return Buffer.concat(chunks).toString("utf-8");
+	}
 
 	private getRequestPathname(req: IncomingMessage): string {
 		return new URL(req.url || "/", "http://127.0.0.1").pathname;
@@ -888,6 +1345,18 @@ export class BridgeServer {
 				this.sendJson(client.ws, data);
 			}
 		}
+	}
+
+	private broadcastElectronSessionsChanged(reason: string): void {
+		const event = {
+			type: "event",
+			event: "electron_sessions_changed",
+			data: {
+				reason,
+				sessions: this.electronSessions.list(),
+			},
+		};
+		this.broadcastToRole("extension", event);
 	}
 
 	private countByRole(role: "cli" | "extension"): number {

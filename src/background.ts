@@ -29,9 +29,11 @@ import {
 } from "./bridge/browser-command-executor.js";
 import { BridgeClient } from "./bridge/extension-client.js";
 import {
+	BRIDGE_ELECTRON_STATE_KEY,
 	BRIDGE_OTEL_STATE_KEY,
 	BRIDGE_SETTINGS_KEY,
 	BRIDGE_STATE_KEY,
+	type BridgeElectronStateData,
 	type BridgeOtelStateData,
 	type BridgeReplMessageResponse,
 	type BridgeSessionCommandMessageResponse,
@@ -1254,6 +1256,15 @@ async function ensureBridgeConnection(): Promise<void> {
 		capabilitiesProvider: getCurrentCapabilities,
 		onStateChange: (state, detail) => {
 			void setBridgeState(state, detail);
+		},
+		onEvent: (event, data) => {
+			if (event === "electron_sessions_changed" && data?.sessions && Array.isArray(data.sessions)) {
+				const state: BridgeElectronStateData = {
+					sessions: data.sessions as BridgeElectronStateData["sessions"],
+					updatedAt: new Date().toISOString(),
+				};
+				void chrome.storage.session.set({ [BRIDGE_ELECTRON_STATE_KEY]: state });
+			}
 		},
 	});
 	lastConnectedWindowId = windowId;

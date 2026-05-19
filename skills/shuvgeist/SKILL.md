@@ -1,6 +1,6 @@
 ---
 name: shuvgeist
-description: "Control Chrome/Edge through the Shuvgeist extension and CLI bridge. Use whenever the user needs real browser automation, authenticated page access, page-context JavaScript, semantic element targeting, workflows, screenshots, network inspection, device emulation, performance tracing, or sidepanel session/artifact control from the terminal. Prefer this as the default browser skill."
+description: "Control Chrome/Edge through the Shuvgeist extension and CLI bridge, or allowed local Electron apps through bridge-local CDP targets. Use whenever the user needs real browser automation, authenticated page access, Electron app inspection, page-context JavaScript, semantic element targeting, workflows, screenshots, network inspection, device emulation, performance tracing, recording, or sidepanel session/artifact control from the terminal. Prefer this as the default browser skill."
 ---
 
 # Shuvgeist
@@ -18,6 +18,7 @@ Use Shuvgeist for browser tasks such as:
 
 - navigating real pages in Chrome/Edge
 - working inside the user's already-authenticated browser state
+- inspecting allowed local Electron app renderer windows
 - opening or launching a browser when no suitable session exists yet
 - taking screenshots or inspecting the visible page
 - running JavaScript in page context with `browserjs()`
@@ -28,6 +29,7 @@ Use Shuvgeist for browser tasks such as:
 - capturing network requests and exporting curl reproductions
 - emulating mobile devices or custom viewport/user-agent settings
 - collecting performance metrics or traces
+- recording browser or Electron target video repros
 - interacting with the live sidepanel chat session from the terminal
 - listing or retrieving Shuvgeist-generated artifacts
 
@@ -39,6 +41,7 @@ Shuvgeist has two layers:
 
 - **Extension layer:** the browser sidepanel assistant, local skills, artifacts, provider/model selection, session history, inspect-element UI, and other browser-native features
 - **CLI bridge layer:** terminal commands that talk to the extension background worker and active tab
+- **Electron target layer:** bridge-local CDP commands for explicitly allowed local Electron apps, routed without a Chrome/Edge extension target
 
 Important operational facts:
 
@@ -47,6 +50,7 @@ Important operational facts:
 - REPL execution can run with the sidepanel closed through the offscreen runtime.
 - **Session commands** such as `session`, `inject`, `new-session`, `set-model`, and `artifacts` depend on the sidepanel session surface.
 - Sensitive commands are gated by Bridge settings.
+- Chrome/Edge is the default target. Electron commands require `--target electron:...` unless they are `shuvgeist electron ...` management commands.
 
 ## First command
 
@@ -130,6 +134,61 @@ Use `launch` when the user does not already have a suitable browser session open
 Use the existing browser session when the user specifically wants their current authenticated tabs, extensions, or state.
 
 Profile isolation: by default, `launch` opens the browser against an isolated, persistent user-data-dir under `~/.shuvgeist/profile/<browser-name>`. This avoids fighting an already-open instance of the same browser using its default profile (which would otherwise cause `--load-extension` to be silently ignored and `launch` to time out). Logins inside the Shuvgeist-managed profile persist across runs. Pass `--use-default-profile` to share the user's normal profile instead, or `--user-data-dir <path>` to point at a specific directory.
+
+### Electron targets
+
+Use Electron targets when the task is about a local desktop app renderer rather than a Chrome/Edge tab. Electron targets are bridge-local CDP connections and do not require the browser extension to be connected.
+
+Start by listing and allowlisting the app:
+
+```bash
+shuvgeist electron list --json
+shuvgeist electron allow vscode
+```
+
+Attach to an already running CDP-enabled app, or launch a known app with a debugging port:
+
+```bash
+shuvgeist electron attach vscode --json
+shuvgeist electron attach --pid 12345 --json
+shuvgeist electron attach --port 9229 --json
+shuvgeist electron launch vscode --json
+```
+
+Inspect windows and label the intended renderer when there are multiple candidates:
+
+```bash
+shuvgeist electron windows --json
+shuvgeist electron label e1 w1 main
+```
+
+Target syntax:
+
+```bash
+--target electron:e1:w1
+--target electron:e1:main
+--target electron:vscode:w1
+--target electron:e1/w1
+```
+
+Supported target-scoped commands include:
+
+```bash
+shuvgeist eval "document.title" --target electron:e1:main --json
+shuvgeist screenshot --target electron:e1:w1 --out /tmp/electron.png
+shuvgeist snapshot --target electron:e1:w1 --json
+shuvgeist locate role button --name "Run" --target electron:e1:w1 --json
+shuvgeist ref click <refId> --target electron:e1:w1
+shuvgeist record start --target electron:e1:w1 --out /tmp/electron.webm --max-duration 5s
+```
+
+Troubleshooting:
+
+- Unknown app: run `shuvgeist electron list --json` and use a listed ID or alias.
+- Not allowlisted: run `shuvgeist electron allow <app-id-or-alias>`.
+- No CDP port: restart the app with `--remote-debugging-port=<port>` and pass `--port <port>`.
+- Wrong window: run `shuvgeist electron windows --json`, label the window, then target the label.
+- Extension disconnected errors: add an Electron `--target`; Chrome/Edge is the default route.
 
 ### Navigation and tab control
 

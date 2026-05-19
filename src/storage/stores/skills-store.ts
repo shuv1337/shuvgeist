@@ -5,6 +5,7 @@ import { minimatch } from "minimatch";
 export interface Skill {
 	name: string;
 	domainPatterns: string[];
+	appPatterns?: string[];
 	shortDescription: string;
 	description: string;
 	createdAt: string;
@@ -28,7 +29,7 @@ export class SkillsStore extends Store {
 	}
 
 	async save(skill: Skill): Promise<void> {
-		await this.getBackend().set("skills", skill.name, skill);
+		await this.getBackend().set("skills", skill.name, this.normalizeSkill(skill));
 	}
 
 	async delete(name: string): Promise<void> {
@@ -38,7 +39,7 @@ export class SkillsStore extends Store {
 	async list(currentUrl?: string): Promise<Skill[]> {
 		const keys = await this.getBackend().keys("skills");
 		const skills = await Promise.all(keys.map((key) => this.getBackend().get<Skill>("skills", key)));
-		const validSkills = skills.filter((s): s is Skill => s !== null);
+		const validSkills = skills.filter((s): s is Skill => s !== null).map((skill) => this.normalizeSkill(skill));
 
 		if (currentUrl) {
 			return validSkills.filter((skill) => this.matchesAnyPattern(currentUrl, skill.domainPatterns));
@@ -51,9 +52,18 @@ export class SkillsStore extends Store {
 		return this.list(url);
 	}
 
+	async getForApp(appRef: string): Promise<Skill[]> {
+		const skills = await this.list();
+		return skills.filter((skill) => this.matchesAnyAppPattern(appRef, skill.appPatterns ?? []));
+	}
+
 	// Alias methods for backward compatibility
 	async getSkillsForUrl(url: string): Promise<Skill[]> {
 		return this.getForUrl(url);
+	}
+
+	async getSkillsForApp(appRef: string): Promise<Skill[]> {
+		return this.getForApp(appRef);
 	}
 
 	async getSkill(name: string): Promise<Skill | null> {
@@ -70,6 +80,26 @@ export class SkillsStore extends Store {
 
 	async listSkills(currentUrl?: string): Promise<Skill[]> {
 		return this.list(currentUrl);
+	}
+
+	matchesAnyAppPattern(appRef: string, patterns: string[]): boolean {
+		const normalizedApp = appRef.toLowerCase().trim();
+		if (!normalizedApp) return false;
+		return patterns.some((pattern) => {
+			const normalizedPattern = pattern.toLowerCase().trim();
+			return (
+				Boolean(normalizedPattern) &&
+				(normalizedApp === normalizedPattern || normalizedApp.includes(normalizedPattern))
+			);
+		});
+	}
+
+	private normalizeSkill(skill: Skill): Skill {
+		return {
+			...skill,
+			domainPatterns: skill.domainPatterns ?? [],
+			appPatterns: skill.appPatterns ?? [],
+		};
 	}
 
 	/**

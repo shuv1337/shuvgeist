@@ -27,6 +27,7 @@ export interface BridgeClientOptions {
 	/** Command dispatcher for handling bridge requests. */
 	executor: CommandDispatcher;
 	onStateChange?: (state: BridgeConnectionState, detail?: string) => void;
+	onEvent?: (event: string, data?: Record<string, unknown>) => void;
 	/** Optional callback to compute capabilities dynamically (e.g. based on sidepanel state). */
 	capabilitiesProvider?: () => BridgeCapability[];
 	telemetry?: BridgeTelemetry;
@@ -277,6 +278,14 @@ export class BridgeClient {
 			return;
 		}
 
+		if (msg.type === "event" && typeof msg.event === "string") {
+			this.options?.onEvent?.(
+				msg.event,
+				msg.data && typeof msg.data === "object" ? (msg.data as Record<string, unknown>) : undefined,
+			);
+			return;
+		}
+
 		if (typeof msg.id === "number" && typeof msg.method === "string") {
 			const req = msg as unknown as BridgeRequest;
 			void this.handleRequest(req);
@@ -308,7 +317,9 @@ export class BridgeClient {
 		});
 
 		try {
-			const result = await this.executor.dispatch(req.method, req.params, controller.signal, span?.context);
+			const result = req.target
+				? await this.executor.dispatch(req.method, req.params, controller.signal, span?.context, req.target)
+				: await this.executor.dispatch(req.method, req.params, controller.signal, span?.context);
 			bridgeLog("info", "command completed", {
 				role: "extension",
 				requestId: req.id,

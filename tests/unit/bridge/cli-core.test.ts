@@ -115,6 +115,7 @@ describe("cli-core", () => {
 			kind: "repl",
 			params: { title: "CLI REPL", code: "return 1", tabId: 42, frameId: 7 },
 			defaultTimeoutMs: 120_000,
+			target: { kind: "chrome-tab", tabId: 42, frameId: 7 },
 		});
 
 		expect(createCommandPlan("eval", ["return 1"], { tabId: "42", frameId: "7" }, readFileText)).toEqual({
@@ -122,6 +123,127 @@ describe("cli-core", () => {
 			method: "eval",
 			params: { code: "return 1", tabId: 42, frameId: 7 },
 			defaultTimeoutMs: 120_000,
+			target: { kind: "chrome-tab", tabId: 42, frameId: 7 },
+		});
+	});
+
+	it("places --target on command plans instead of per-method params", () => {
+		const readFileText = vi.fn();
+
+		expect(createCommandPlan("screenshot", [], { target: "electron:vscode:w2" }, readFileText)).toEqual({
+			kind: "screenshot",
+			params: {},
+			defaultTimeoutMs: 120_000,
+			target: { kind: "electron-window", appRef: "vscode", windowRef: "w2" },
+		});
+
+		expect(createCommandPlan("tabs", [], { target: "bogus" }, readFileText)).toEqual({
+			kind: "usage-error",
+			message: "Invalid --target: target must start with chrome:, electron:, or electron-session:",
+		});
+	});
+
+	it("maps electron namespace commands to bridge-local methods", () => {
+		const readFileText = vi.fn();
+
+		expect(createCommandPlan("electron", ["allow", "vscode"], {}, readFileText)).toEqual({
+			kind: "one-shot",
+			method: "electron_allow",
+			params: { appRef: "vscode" },
+			defaultTimeoutMs: 60_000,
+		});
+		expect(createCommandPlan("electron", ["launch", "vscode"], { inspectMain: true }, readFileText)).toEqual({
+			kind: "one-shot",
+			method: "electron_launch",
+			params: { appRef: "vscode", inspectMain: true },
+			defaultTimeoutMs: 120_000,
+		});
+		expect(
+			createCommandPlan(
+				"electron",
+				["attach", "vscode"],
+				{ port: "9333", pid: "123", inspectPort: "9444" },
+				readFileText,
+			),
+		).toEqual({
+				kind: "one-shot",
+				method: "electron_attach",
+				params: { appRef: "vscode", port: 9333, pid: 123, inspectPort: 9444 },
+				defaultTimeoutMs: 60_000,
+			});
+		expect(createCommandPlan("electron", ["label", "e1", "w2", "chat", "pane"], {}, readFileText)).toEqual({
+			kind: "one-shot",
+			method: "electron_label",
+			params: { sessionId: "e1", windowRef: "w2", label: "chat pane" },
+			defaultTimeoutMs: 60_000,
+		});
+		expect(createCommandPlan("electron", ["main", "e1"], {}, readFileText)).toEqual({
+			kind: "one-shot",
+			method: "electron_main_info",
+			params: { sessionId: "e1" },
+			defaultTimeoutMs: 60_000,
+		});
+		expect(createCommandPlan("electron", ["ipc", "tap", "e1"], { channel: "workbench" }, readFileText)).toEqual({
+			kind: "one-shot",
+			method: "electron_ipc_tap_start",
+			params: { sessionId: "e1", channel: "workbench" },
+			defaultTimeoutMs: 60_000,
+		});
+		expect(createCommandPlan("electron", ["ipc", "untap", "e1"], {}, readFileText)).toEqual({
+			kind: "one-shot",
+			method: "electron_ipc_tap_stop",
+			params: { sessionId: "e1" },
+			defaultTimeoutMs: 60_000,
+		});
+		expect(createCommandPlan("electron", ["network-main", "start", "e1"], {}, readFileText)).toEqual({
+			kind: "one-shot",
+			method: "electron_main_network_start",
+			params: { sessionId: "e1" },
+			defaultTimeoutMs: 60_000,
+		});
+		expect(createCommandPlan("electron", ["network-main", "stop", "e1"], {}, readFileText)).toEqual({
+			kind: "one-shot",
+			method: "electron_main_network_stop",
+			params: { sessionId: "e1" },
+			defaultTimeoutMs: 60_000,
+		});
+		expect(createCommandPlan("electron", ["source", "layout"], { sourcePath: "/tmp/app" }, readFileText)).toEqual({
+			kind: "one-shot",
+			method: "electron_source_layout",
+			params: { sourcePath: "/tmp/app" },
+			defaultTimeoutMs: 60_000,
+		});
+		expect(createCommandPlan("electron", ["source", "list", "vscode"], {}, readFileText)).toEqual({
+			kind: "one-shot",
+			method: "electron_source_list",
+			params: { appRef: "vscode" },
+			defaultTimeoutMs: 60_000,
+		});
+		expect(createCommandPlan("electron", ["source", "read", "src/main.js"], { sourcePath: "/tmp/app" }, readFileText)).toEqual({
+			kind: "one-shot",
+			method: "electron_source_read",
+			params: { sourcePath: "/tmp/app", filePath: "src/main.js" },
+			defaultTimeoutMs: 60_000,
+		});
+		expect(
+			createCommandPlan("electron", ["source", "extract", "/tmp/out", "vscode"], {}, readFileText),
+		).toEqual({
+			kind: "one-shot",
+			method: "electron_source_extract",
+			params: { appRef: "vscode", destinationPath: "/tmp/out" },
+			defaultTimeoutMs: 120_000,
+		});
+		expect(createCommandPlan("electron", ["doctor", "vscode"], {}, readFileText)).toEqual({
+			kind: "one-shot",
+			method: "electron_doctor",
+			params: { appRef: "vscode" },
+			defaultTimeoutMs: 120_000,
+		});
+		expect(createCommandPlan("electron", ["auto-attach", "status", "vscode"], {}, readFileText)).toEqual({
+			kind: "one-shot",
+			method: "electron_auto_attach",
+			params: { action: "status", appRef: "vscode" },
+			defaultTimeoutMs: 60_000,
 		});
 	});
 

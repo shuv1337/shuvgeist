@@ -7,6 +7,7 @@
  */
 
 import type { BridgeMethod } from "./protocol.js";
+import type { BridgeTarget } from "./target.js";
 import type { TraceContext } from "./telemetry.js";
 
 export interface CommandDispatcher {
@@ -15,5 +16,6 @@ export interface CommandDispatcher {
 		params: Record<string, unknown> | undefined,
 		signal?: AbortSignal,
 		traceContext?: TraceContext,
+		target?: BridgeTarget,
 	): Promise<unknown>;
 }

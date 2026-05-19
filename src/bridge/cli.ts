@@ -62,6 +62,7 @@ import {
 } from "./protocol.js";
 import { assertFfmpegAvailable, FfmpegWebmEncoder } from "./recording/ffmpeg-encoder.js";
 import { BridgeServer } from "./server.js";
+import type { BridgeTarget } from "./target.js";
 import { BridgeTelemetry } from "./telemetry.js";
 import { formatWorkflowValidationErrors, validateWorkflowDefinition } from "./workflow-schema.js";
 
@@ -417,6 +418,7 @@ async function cmdOneShot(
 	params: Record<string, unknown>,
 	flags: { url?: string; host?: string; port?: string; token?: string; json?: boolean; timeout?: string },
 	defaultTimeoutMs?: number,
+	target?: BridgeTarget,
 ): Promise<BridgeResponse> {
 	const configFile = readConfigFile();
 	const resolved = resolveConfig(flags, process.env, configFile, getConfigPath());
@@ -429,6 +431,7 @@ async function cmdOneShot(
 		id: generateRequestId(),
 		method,
 		params,
+		target,
 	};
 	return sendRequest(url, token, request, timeoutMs, resolveCliTelemetry(configFile));
 }
@@ -438,10 +441,11 @@ async function runOneShot(
 	params: Record<string, unknown>,
 	flags: { url?: string; host?: string; port?: string; token?: string; json?: boolean; timeout?: string },
 	defaultTimeoutMs?: number,
+	target?: BridgeTarget,
 ): Promise<void> {
 	const jsonMode = flags.json || false;
 	try {
-		const response = await cmdOneShot(method, params, flags, defaultTimeoutMs);
+		const response = await cmdOneShot(method, params, flags, defaultTimeoutMs, target);
 		printResult(response, jsonMode);
 		process.exit(exitCodeForResponse(response));
 	} catch (err) {
@@ -479,6 +483,7 @@ async function cmdScreenshot(flags: {
 	frameId?: string;
 	timeout?: string;
 	noViewportJson?: boolean;
+	target?: BridgeTarget;
 }): Promise<void> {
 	const jsonMode = flags.json || false;
 	const params: Record<string, unknown> = {};
@@ -486,7 +491,13 @@ async function cmdScreenshot(flags: {
 	if (flags.tabId) params.tabId = Number.parseInt(flags.tabId, 10);
 	if (flags.frameId) params.frameId = Number.parseInt(flags.frameId, 10);
 	try {
-		const response = await cmdOneShot("screenshot", params, flags, BridgeDefaults.SLOW_REQUEST_TIMEOUT_MS);
+		const response = await cmdOneShot(
+			"screenshot",
+			params,
+			flags,
+			BridgeDefaults.SLOW_REQUEST_TIMEOUT_MS,
+			flags.target,
+		);
 		if (response.error) {
 			printResult(response, jsonMode);
 			process.exit(exitCodeForResponse(response));
@@ -530,11 +541,12 @@ async function cmdRepl(
 		json?: boolean;
 		writeFiles?: string;
 		timeout?: string;
+		target?: BridgeTarget;
 	},
 ): Promise<void> {
 	const jsonMode = flags.json || false;
 	try {
-		const response = await cmdOneShot("repl", params, flags, BridgeDefaults.SLOW_REQUEST_TIMEOUT_MS);
+		const response = await cmdOneShot("repl", params, flags, BridgeDefaults.SLOW_REQUEST_TIMEOUT_MS, flags.target);
 		if (response.error) {
 			printResult(response, jsonMode);
 			process.exit(exitCodeForResponse(response));
@@ -574,6 +586,7 @@ async function cmdRecord(
 		json?: boolean;
 		timeout?: string;
 		out?: string;
+		target?: BridgeTarget;
 	},
 	defaultTimeoutMs?: number,
 ): Promise<void> {
@@ -581,7 +594,7 @@ async function cmdRecord(
 	if (action === "stop" || action === "status") {
 		const method: BridgeMethod = action === "stop" ? "record_stop" : "record_status";
 		try {
-			const response = await cmdOneShot(method, params, flags, defaultTimeoutMs);
+			const response = await cmdOneShot(method, params, flags, defaultTimeoutMs, flags.target);
 			printResult(response, jsonMode);
 			process.exit(exitCodeForResponse(response));
 		} catch (err) {
@@ -630,6 +643,7 @@ async function cmdRecord(
 		id: requestId,
 		method: "record_start",
 		params,
+		target: flags.target,
 		...(span ? span.toTraceHeaders() : {}),
 	};
 	const ws = new WebSocket(url);
@@ -657,6 +671,7 @@ async function cmdRecord(
 			id: generateRequestId(),
 			method: "record_stop",
 			params: params.tabId ? { tabId: params.tabId } : {},
+			target: flags.target,
 		};
 		ws.send(JSON.stringify(stopRequest));
 	};
@@ -1293,6 +1308,21 @@ Usage:
                          [--video-bitrate N] [--mime-type video/webm;codecs=vp9]
   shuvgeist record stop [--tab-id N] [--json]
   shuvgeist record status [--tab-id N] [--json]
+  shuvgeist electron list [--json]
+  shuvgeist electron allow <app-id-or-alias> [--json]
+  shuvgeist electron launch <app-id-or-alias> [--inspect-main] [--json]
+  shuvgeist electron attach [app-id-or-alias] [--pid PID] [--port PORT] [--inspect-port PORT] [--json]
+  shuvgeist electron ipc <tap|untap> <session-id> [--channel FILTER] [--json]
+  shuvgeist electron network-main <start|stop> <session-id> [--json]
+  shuvgeist electron source <layout|list> [app-id-or-alias] [--source-path PATH] [--json]
+  shuvgeist electron source read <file> [app-id-or-alias] [--source-path PATH] [--json]
+  shuvgeist electron source extract <destination> [app-id-or-alias] [--source-path PATH] [--json]
+  shuvgeist electron doctor [app-id-or-alias] [--json]
+  shuvgeist electron auto-attach <status|install|uninstall> <app-id-or-alias> [--json]
+  shuvgeist electron detach [session-id] [--json]
+  shuvgeist electron windows [app-id-or-alias] [--json]
+  shuvgeist electron label <session-id> <window-ref> <label> [--json]
+  shuvgeist electron main <session-id> [--json]
   shuvgeist session [--last N] [--json] [--follow]
   shuvgeist inject <text> [--role user|assistant] [--json]
   shuvgeist new-session [provider/model-id] [--json]
@@ -1311,6 +1341,17 @@ Global options:
   --dry-run           Validate workflow locally without bridge execution
   --tab-id <id>       Explicit tab target
   --frame-id <id>     Explicit frame target
+  --target <spec>     Explicit bridge target; chrome is the default.
+                      Electron: electron:<session>[:<window-or-label>],
+                      electron:<app-ref>[:<window-or-label>], or
+                      electron:<session>/<window-or-label>
+  --pid <pid>         Electron attach: process id to inspect for CDP port
+  --port <port>       Electron attach: explicit CDP remote debugging port
+  --inspect-main      Electron launch: also request a main-process inspector
+  --inspect-port <p>  Electron attach: explicit main-process inspector port
+  --channel <filter>  Electron IPC tap channel substring filter
+  --source-path <p>   Electron source root, resources dir, or app.asar path
+  --extract-to <p>    Electron source extract destination
   --max-entries <N>   Snapshot entry cap
   --include-hidden    Include hidden snapshot entries
   --limit <N>         Limit locator/network results
@@ -1341,6 +1382,8 @@ Global options:
 
 Notes:
   Ref handles: refId (from locate) and snapshotId (from snapshot) are the same identifier.
+  Electron targets route bridge-local through CDP and do not require a connected browser extension.
+  Example: shuvgeist screenshot --target electron:e1:w1 --out app.png
   screenshot --out writes a sibling viewport.json with css/image size, DPR, and scale;
   screenshot --json includes those same metadata fields in the response.
 
@@ -1431,6 +1474,13 @@ async function main(): Promise<void> {
 			globalFlags.arg.push(rest[++i]);
 		} else if (arg === "--tab-id" && i + 1 < rest.length) globalFlags.tabId = rest[++i];
 		else if (arg === "--frame-id" && i + 1 < rest.length) globalFlags.frameId = rest[++i];
+		else if (arg === "--target" && i + 1 < rest.length) globalFlags.target = rest[++i];
+		else if (arg === "--pid" && i + 1 < rest.length) globalFlags.pid = rest[++i];
+		else if (arg === "--inspect-main") globalFlags.inspectMain = true;
+		else if (arg === "--inspect-port" && i + 1 < rest.length) globalFlags.inspectPort = rest[++i];
+		else if (arg === "--channel" && i + 1 < rest.length) globalFlags.channel = rest[++i];
+		else if (arg === "--source-path" && i + 1 < rest.length) globalFlags.sourcePath = rest[++i];
+		else if (arg === "--extract-to" && i + 1 < rest.length) globalFlags.extractTo = rest[++i];
 		else if (arg === "--max-entries" && i + 1 < rest.length) globalFlags.maxEntries = rest[++i];
 		else if (arg === "--limit" && i + 1 < rest.length) globalFlags.limit = rest[++i];
 		else if (arg === "--min-score" && i + 1 < rest.length) globalFlags.minScore = rest[++i];
@@ -1482,7 +1532,12 @@ async function main(): Promise<void> {
 		const bridgeFlags = plan.kind === "launch" ? { host: flags.host, port: flags.port, token: flags.token } : flags;
 		await ensureBridgeServer(bridgeFlags);
 
-		if (plan.kind !== "launch" && plan.kind !== "close") {
+		const skipsExtensionWait =
+			plan.kind === "launch" ||
+			plan.kind === "close" ||
+			(plan.kind === "one-shot" && plan.method.startsWith("electron_")) ||
+			("target" in plan && plan.target?.kind === "electron-window");
+		if (!skipsExtensionWait) {
 			const wsUrl = resolveBridgeUrl(bridgeFlags, process.env, readConfigFile());
 			const statusUrl = bridgeStatusUrl(wsUrl);
 			await waitForExtensionConnection(statusUrl, EXTENSION_CONNECT_WAIT_MS, {
@@ -1507,22 +1562,28 @@ async function main(): Promise<void> {
 			await fetchBridgeStatus(flags);
 			break;
 		case "one-shot":
-			await runOneShot(plan.method, plan.params, flags, plan.defaultTimeoutMs);
+			await runOneShot(
+				plan.method,
+				plan.params,
+				plan.method.startsWith("electron_") ? { ...flags, port: undefined } : flags,
+				plan.defaultTimeoutMs,
+				plan.target,
+			);
 			break;
 		case "repl":
-			await cmdRepl(plan.params, flags);
+			await cmdRepl(plan.params, { ...flags, target: plan.target });
 			break;
 		case "screenshot":
-			await cmdScreenshot(flags);
+			await cmdScreenshot({ ...flags, target: plan.target });
 			break;
 		case "cookies":
-			await runOneShot("cookies", {}, flags, BridgeDefaults.SLOW_REQUEST_TIMEOUT_MS);
+			await runOneShot("cookies", {}, flags, BridgeDefaults.SLOW_REQUEST_TIMEOUT_MS, plan.target);
 			break;
 		case "workflow":
 			await cmdWorkflow(plan.action, plan.workflow, plan.args, flags, plan.defaultTimeoutMs, plan.dryRun);
 			break;
 		case "record":
-			await cmdRecord(plan.action, plan.params, flags, plan.defaultTimeoutMs);
+			await cmdRecord(plan.action, plan.params, { ...flags, target: plan.target }, plan.defaultTimeoutMs);
 			break;
 		case "session":
 			await cmdSession(flags);

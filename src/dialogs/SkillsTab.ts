@@ -2,6 +2,9 @@ import { Button } from "@mariozechner/mini-lit/dist/Button.js";
 import { Input } from "@mariozechner/mini-lit/dist/Input.js";
 import { SettingsTab } from "@mariozechner/pi-web-ui";
 import { html } from "lit";
+import { BRIDGE_SETTINGS_KEY, type BridgeSettings } from "../bridge/internal-messages.js";
+import { getDefaultBridgeSettings, normalizeBridgeSettings } from "../bridge/settings.js";
+import { type BridgeSkillSnapshotStatus, createBridgeSkillSnapshot } from "../bridge/skill-snapshot.js";
 import { Toast } from "../components/Toast.js";
 import { getShuvgeistStorage } from "../storage/app-storage.js";
 import type { Skill } from "../storage/stores/skills-store.js";
@@ -15,6 +18,7 @@ export class SkillsTab extends SettingsTab {
 	private editingSkill: Skill | null = null;
 	private importConflicts: { skill: Skill; selected: boolean }[] = [];
 	private importedSkills: Skill[] = [];
+	private skillSnapshotStatus: BridgeSkillSnapshotStatus | null = null;
 
 	getTabName(): string {
 		return this.label;
@@ -23,6 +27,7 @@ export class SkillsTab extends SettingsTab {
 	async connectedCallback() {
 		super.connectedCallback();
 		await this.loadSkills();
+		await this.loadSkillSnapshotStatus();
 	}
 
 	async loadSkills() {
@@ -43,6 +48,7 @@ export class SkillsTab extends SettingsTab {
 			(s) =>
 				s.name.toLowerCase().includes(query) ||
 				s.domainPatterns.some((p: string) => p.toLowerCase().includes(query)) ||
+				(s.appPatterns ?? []).some((p: string) => p.toLowerCase().includes(query)) ||
 				s.shortDescription.toLowerCase().includes(query),
 		);
 		this.requestUpdate();
@@ -173,6 +179,58 @@ export class SkillsTab extends SettingsTab {
 		Toast.success(`Imported ${imported} skill(s)`);
 	}
 
+	async loadSkillSnapshotStatus() {
+		try {
+			const settings = await this.loadBridgeSettings();
+			const response = await fetch(this.bridgeHttpUrl(settings.url, "/status"));
+			if (!response.ok) return;
+			const status = (await response.json()) as { skillsSnapshot?: BridgeSkillSnapshotStatus };
+			this.skillSnapshotStatus = status.skillsSnapshot ?? null;
+			this.requestUpdate();
+		} catch {
+			this.skillSnapshotStatus = null;
+		}
+	}
+
+	async syncBridgeSkillSnapshot() {
+		try {
+			const storage = getShuvgeistStorage();
+			const skills = await storage.skills.list();
+			const settings = await this.loadBridgeSettings();
+			const response = await fetch(this.bridgeHttpUrl(settings.url, "/skills/snapshot"), {
+				method: "POST",
+				headers: {
+					authorization: `Bearer ${settings.token}`,
+					"content-type": "application/json",
+				},
+				body: JSON.stringify(createBridgeSkillSnapshot(skills)),
+			});
+			const body = (await response.json()) as { status?: BridgeSkillSnapshotStatus; error?: string };
+			if (!response.ok) throw new Error(body.error ?? `HTTP ${response.status}`);
+			this.skillSnapshotStatus = body.status ?? null;
+			Toast.success("Synced bridge skill snapshot");
+			this.requestUpdate();
+		} catch (error) {
+			Toast.error(`Failed to sync bridge skill snapshot: ${(error as Error).message}`);
+		}
+	}
+
+	private async loadBridgeSettings(): Promise<BridgeSettings> {
+		const result = await chrome.storage.local.get(BRIDGE_SETTINGS_KEY);
+		return normalizeBridgeSettings(
+			(result[BRIDGE_SETTINGS_KEY] as BridgeSettings | undefined) ?? getDefaultBridgeSettings(),
+		);
+	}
+
+	private bridgeHttpUrl(wsUrl: string, path: string): string {
+		const url = new URL(wsUrl);
+		url.protocol = url.protocol === "wss:" ? "https:" : "http:";
+		url.pathname = path;
+		url.search = "";
+		url.hash = "";
+		return url.toString();
+	}
+
 	toggleConflictSelection(index: number) {
 		this.importConflicts[index].selected = !this.importConflicts[index].selected;
 		this.requestUpdate();
@@ -192,7 +250,8 @@ export class SkillsTab extends SettingsTab {
 					<div class="flex-1 space-y-2">
 						<h3 class="font-semibold text-foreground">${skill.name}</h3>
 						<div class="text-xs text-muted-foreground font-mono">
-							${skill.domainPatterns.join(", ")}
+							URL: ${skill.domainPatterns.join(", ") || "none"}
+							${(skill.appPatterns ?? []).length ? html`<br />App: ${(skill.appPatterns ?? []).join(", ")}` : ""}
 						</div>
 						<p class="text-sm text-muted-foreground">${skill.shortDescription}</p>
 						<div class="flex gap-2 pt-2">
@@ -238,6 +297,20 @@ export class SkillsTab extends SettingsTab {
 							.map((p) => p.trim())
 							.filter((p) => p.length > 0);
 						this.updateEditField("domainPatterns", patterns);
+					},
+				})}
+
+				${Input({
+					label: "App Patterns (comma-separated)",
+					type: "text",
+					value: (skill.appPatterns ?? []).join(", "),
+					onInput: (e) => {
+						const value = (e.target as HTMLInputElement).value;
+						const patterns = value
+							.split(",")
+							.map((p) => p.trim())
+							.filter((p) => p.length > 0);
+						this.updateEditField("appPatterns", patterns);
 					},
 				})}
 
@@ -348,10 +421,10 @@ export class SkillsTab extends SettingsTab {
 		return html`
 			<div class="flex flex-col gap-6">
 				<p class="text-sm text-muted-foreground">
-					Manage site skills - reusable JavaScript libraries for domain-specific automation.
+					Manage skills - reusable JavaScript libraries for URL and Electron app automation.
 				</p>
 
-				<div class="flex gap-2">
+				<div class="flex flex-wrap gap-2">
 					${Button({
 						variant: "outline",
 						onClick: () => this.exportSkills(),
@@ -362,7 +435,20 @@ export class SkillsTab extends SettingsTab {
 						onClick: () => this.importSkills(),
 						children: "Import Skills",
 					})}
+					${Button({
+						variant: "outline",
+						onClick: () => this.syncBridgeSkillSnapshot(),
+						children: "Sync Bridge Snapshot",
+					})}
 				</div>
+				<p class="text-xs text-muted-foreground">
+					Bridge snapshot:
+					${
+						this.skillSnapshotStatus
+							? `${this.skillSnapshotStatus.state}${this.skillSnapshotStatus.skillCount !== undefined ? ` (${this.skillSnapshotStatus.skillCount} skills)` : ""}`
+							: "unknown"
+					}
+				</p>
 
 				${Input({
 					type: "text",

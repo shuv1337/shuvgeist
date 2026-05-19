@@ -75,6 +75,7 @@ import type {
 } from "./protocol.js";
 import { ErrorCodes, getBridgeCapabilities } from "./protocol.js";
 import { buildSessionHistoryResult, type SessionBridgeAdapter } from "./session-bridge.js";
+import { type BridgeTarget, isChromeTarget, targetTeachingLabel } from "./target.js";
 import type { BridgeTelemetry, TraceContext } from "./telemetry.js";
 
 /**
@@ -154,7 +155,15 @@ export class BrowserCommandExecutor {
 		params: Record<string, unknown> | undefined,
 		signal?: AbortSignal,
 		traceContext?: TraceContext,
+		target?: BridgeTarget,
 	): Promise<unknown> {
+		if (target && !isChromeTarget(target)) {
+			throw new Error(
+				`Chrome executor cannot handle target '${targetTeachingLabel(
+					target,
+				)}'. Use an Electron bridge-local dispatcher for Electron targets.`,
+			);
+		}
 		const span = this.telemetry?.startSpan(`bridge.executor.${method}`, {
 			parent: traceContext,
 			attributes: {

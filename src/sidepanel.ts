@@ -58,6 +58,7 @@ import { ApiKeyOrOAuthDialog } from "./dialogs/ApiKeyOrOAuthDialog.js";
 import { ApiKeysOAuthTab } from "./dialogs/ApiKeysOAuthTab.js";
 import { BridgeTab } from "./dialogs/BridgeTab.js";
 import { CostsTab } from "./dialogs/CostsTab.js";
+import { ElectronTargetsTab } from "./dialogs/ElectronTargetsTab.js";
 import { SessionCostDialog } from "./dialogs/SessionCostDialog.js";
 import { ShuvgeistSessionListDialog } from "./dialogs/SessionListDialog.js";
 import { ShuvgeistProvidersTab } from "./dialogs/ShuvgeistProvidersTab.js";
@@ -389,6 +390,7 @@ function openApiKeysDialog(): Promise<void> {
 				new CostsTab(),
 				new SkillsTab(),
 				new BridgeTab(),
+				new ElectronTargetsTab(),
 				new AboutTab(),
 			],
 			resolve,
@@ -1284,18 +1286,18 @@ const createAgent = async (initialState?: Partial<AgentState>, shouldSave = true
 			extractImageTool.windowId = currentWindowId;
 
 			const tools: AgentTool<any, any>[] = [
-				navigateTool,
-				selectElementTool,
+				navigateTool as unknown as AgentTool<any, any>,
+				selectElementTool as unknown as AgentTool<any, any>,
 				replTool,
 				skillTool,
 				extractDocumentTool,
-				extractImageTool,
+				extractImageTool as unknown as AgentTool<any, any>,
 			];
 
 			// Conditionally add debugger tool if enabled
 			if (debuggerModeEnabled) {
 				const debuggerTool = new DebuggerTool();
-				tools.push(debuggerTool);
+				tools.push(debuggerTool as unknown as AgentTool<any, any>);
 			}
 
 			return tools;
@@ -1393,6 +1395,7 @@ const openSettingsDialog = () =>
 		new CostsTab(),
 		new SkillsTab(),
 		new BridgeTab(),
+		new ElectronTargetsTab(),
 		new AboutTab(),
 	]);
 

@@ -81,6 +81,7 @@ Current CLI surface:
 - semantic page inspection: `snapshot`, `locate`, `ref`, `frame`
 - debugger-backed diagnostics: `network`, `device`, `perf`
 - video repro capture: `record start`, `record stop`, `record status` using CDP screencast plus CLI-side ffmpeg encoding
+- Electron desktop targets: `electron list`, `electron allow`, `electron attach`, `electron launch`, `electron windows`, and `--target electron:...`
 - session control: `session`, `inject`, `new-session`, `set-model`, `artifacts`
 
 Run `shuvgeist --help` for the full command reference.
@@ -99,6 +100,12 @@ High-level flow:
 CLI flow:
 
 `shuvgeist CLI -> Bridge server -> Extension background worker -> tab/session tools`
+
+Electron CLI flow:
+
+`shuvgeist CLI -> Bridge server -> Electron CDP endpoint`
+
+Electron requests are handled bridge-local and do not require a connected Chrome/Edge extension target. Chrome remains the default target when `--target` is omitted.
 
 Important entry points:
 
@@ -195,6 +202,60 @@ shuvgeist repl 'return await browserjs(() => document.title)'
 shuvgeist snapshot --json
 shuvgeist locate text "Sign in" --json
 ```
+
+### Electron targets
+
+Electron support is explicit because it attaches to a local app's Chrome DevTools Protocol endpoint. Allow an app before launching or attaching:
+
+```bash
+shuvgeist electron list --json
+shuvgeist electron allow vscode
+```
+
+Use `launch` when Shuvgeist should start a known Electron app with a remote debugging port:
+
+```bash
+shuvgeist electron launch vscode --json
+```
+
+Use `attach` when the app is already running with `--remote-debugging-port=<port>` or when Shuvgeist can discover that port from the app or process:
+
+```bash
+shuvgeist electron attach vscode --json
+shuvgeist electron attach --pid 12345 --json
+shuvgeist electron attach --port 9229 --json
+```
+
+List windows and assign labels when multiple renderers are present:
+
+```bash
+shuvgeist electron windows --json
+shuvgeist electron label e1 w1 main
+```
+
+Target Electron windows with `--target`. Supported forms include `electron:e1:w1`, `electron:e1:main`, `electron:vscode:w1`, and `electron:e1/w1`.
+
+```bash
+shuvgeist screenshot --target electron:e1:w1 --out /tmp/electron.png
+shuvgeist eval "document.title" --target electron:e1:main --json
+shuvgeist snapshot --target electron:e1:w1 --json
+shuvgeist locate role button --name "Run" --target electron:e1:w1 --json
+shuvgeist record start --target electron:e1:w1 --out /tmp/electron.webm --max-duration 5s
+```
+
+Security notes:
+
+- Only allow apps you intend to inspect. The allowlist is stored in `~/.shuvgeist/bridge.json`.
+- Electron commands operate over local CDP and can read renderer DOM, screenshots, page state, and recording frames.
+- `record start` still requires `ffmpeg` on PATH because the CLI encodes received CDP frames into WebM.
+
+Troubleshooting:
+
+- Unknown app: run `shuvgeist electron list --json` and use one of the listed IDs or aliases.
+- App is not allowlisted: run `shuvgeist electron allow <app-id-or-alias>`.
+- No CDP port found: restart the app with `--remote-debugging-port=<port>` and pass `--port <port>`.
+- Wrong window: run `shuvgeist electron windows --json`, label the intended window, then target the label.
+- Extension disconnected errors on Electron commands usually mean the command was not given an Electron `--target`; Chrome is the default target.
 
 The CLI auto-starts the local bridge when needed. Bridge config is resolved from:
 

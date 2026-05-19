@@ -42,22 +42,25 @@ describe("cli-core coverage cases", () => {
 			params: {
 				tabId: 9,
 				maxDurationMs: 5000,
-				videoBitsPerSecond: 2500000,
-				mimeType: "video/webm;codecs=vp9",
-			},
-			defaultTimeoutMs: undefined,
-		});
+			videoBitsPerSecond: 2500000,
+			mimeType: "video/webm;codecs=vp9",
+		},
+		defaultTimeoutMs: undefined,
+		target: { kind: "chrome-tab", tabId: 9 },
+	});
 		expect(createCommandPlan("record", ["stop"], { tabId: "9" }, readFileText)).toEqual({
 			kind: "record",
 			action: "stop",
 			params: { tabId: 9 },
 			defaultTimeoutMs: 60_000,
+			target: { kind: "chrome-tab", tabId: 9 },
 		});
 		expect(createCommandPlan("record", ["status"], { tabId: "9", json: true }, readFileText)).toEqual({
 			kind: "record",
 			action: "status",
 			params: { tabId: 9 },
 			defaultTimeoutMs: 60_000,
+			target: { kind: "chrome-tab", tabId: 9 },
 		});
 		expect(createCommandPlan("record", ["start"], {}, readFileText)).toEqual({
 			kind: "usage-error",

@@ -118,6 +118,11 @@ const skillParamsSchema = Type.Object({
 				description:
 					"Array of glob patterns (e.g., ['youtube.com', 'youtu.be'] or ['github.com', 'github.com/*/issues']). Include short URLs and domain variations!",
 			}),
+			appPatterns: Type.Optional(
+				Type.Array(Type.String(), {
+					description: "Optional Electron app IDs or aliases this skill should match (e.g., ['vscode', 'slack']).",
+				}),
+			),
 			shortDescription: Type.String({
 				description: "Brief one-line plain text description",
 			}),
@@ -152,6 +157,14 @@ const skillParamsSchema = Type.Object({
 				Type.Object({
 					old_string: Type.String({
 						description: "String to find in domain patterns (searches across all patterns)",
+					}),
+					new_string: Type.String({ description: "String to replace it with" }),
+				}),
+			),
+			appPatterns: Type.Optional(
+				Type.Object({
+					old_string: Type.String({
+						description: "String to find in app patterns (searches across all patterns)",
 					}),
 					new_string: Type.String({ description: "String to replace it with" }),
 				}),
@@ -264,6 +277,7 @@ export const skillTool: AgentTool<typeof skillParamsSchema, SkillResultDetails> 
 				const newSkill: Skill = {
 					name: args.data.name,
 					domainPatterns: args.data.domainPatterns,
+					appPatterns: args.data.appPatterns ?? [],
 					shortDescription: args.data.shortDescription,
 					description: args.data.description,
 					createdAt: now,
@@ -377,6 +391,13 @@ export const skillTool: AgentTool<typeof skillParamsSchema, SkillResultDetails> 
 				if (args.updates.domainPatterns) {
 					const { old_string, new_string } = args.updates.domainPatterns;
 					updated.domainPatterns = updated.domainPatterns.map((pattern) =>
+						pattern.replace(old_string, new_string),
+					);
+				}
+
+				if (args.updates.appPatterns) {
+					const { old_string, new_string } = args.updates.appPatterns;
+					updated.appPatterns = (updated.appPatterns ?? []).map((pattern) =>
 						pattern.replace(old_string, new_string),
 					);
 				}

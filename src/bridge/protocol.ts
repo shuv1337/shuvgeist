@@ -9,7 +9,9 @@
 // Protocol versioning
 // ---------------------------------------------------------------------------
 
-export const BRIDGE_PROTOCOL_VERSION = 2;
+import type { BridgeTarget } from "./target.js";
+
+export const BRIDGE_PROTOCOL_VERSION = 3;
 export const BRIDGE_PROTOCOL_MIN_VERSION = 2;
 
 export function isBridgeProtocolCompatible(protocolVersion?: number, minProtocolVersion?: number): boolean {
@@ -76,6 +78,25 @@ export const BridgeCapabilities = [
 	"session_new",
 	"session_set_model",
 	"session_artifacts",
+	"electron_list",
+	"electron_allow",
+	"electron_launch",
+	"electron_attach",
+	"electron_detach",
+	"electron_windows",
+	"electron_label",
+	"electron_main_info",
+	"electron_ipc_tap_start",
+	"electron_ipc_tap_stop",
+	"electron_main_network_start",
+	"electron_main_network_stop",
+	"electron_source_layout",
+	"electron_source_list",
+	"electron_source_read",
+	"electron_source_extract",
+	"electron_doctor",
+	"electron_auto_attach",
+	"skills_snapshot_status",
 ] as const;
 export type BridgeCapability = (typeof BridgeCapabilities)[number];
 
@@ -172,6 +193,25 @@ export const BridgeMethods = [
 	"session_new",
 	"session_set_model",
 	"session_artifacts",
+	"electron_list",
+	"electron_allow",
+	"electron_launch",
+	"electron_attach",
+	"electron_detach",
+	"electron_windows",
+	"electron_label",
+	"electron_main_info",
+	"electron_ipc_tap_start",
+	"electron_ipc_tap_stop",
+	"electron_main_network_start",
+	"electron_main_network_stop",
+	"electron_source_layout",
+	"electron_source_list",
+	"electron_source_read",
+	"electron_source_extract",
+	"electron_doctor",
+	"electron_auto_attach",
+	"skills_snapshot_status",
 ] as const;
 export type BridgeMethod = (typeof BridgeMethods)[number];
 
@@ -179,8 +219,43 @@ export interface BridgeRequest {
 	id: number;
 	method: BridgeMethod;
 	params?: Record<string, unknown>;
+	target?: BridgeTarget;
 	traceparent?: string;
 	tracestate?: string;
+}
+
+const ServerLocalMethods = new Set<BridgeMethod>([
+	"electron_list",
+	"electron_allow",
+	"electron_launch",
+	"electron_attach",
+	"electron_detach",
+	"electron_windows",
+	"electron_label",
+	"electron_main_info",
+	"electron_ipc_tap_start",
+	"electron_ipc_tap_stop",
+	"electron_main_network_start",
+	"electron_main_network_stop",
+	"electron_source_layout",
+	"electron_source_list",
+	"electron_source_read",
+	"electron_source_extract",
+	"electron_doctor",
+	"electron_auto_attach",
+	"skills_snapshot_status",
+]);
+
+export function isServerLocalMethod(method: BridgeMethod): boolean {
+	return ServerLocalMethods.has(method);
+}
+
+export function isTargetDispatchedMethod(method: BridgeMethod): boolean {
+	return !method.startsWith("session_");
+}
+
+export function isExtensionRelayedMethod(method: BridgeMethod): boolean {
+	return !isServerLocalMethod(method);
 }
 
 export interface BridgeError {
@@ -698,6 +773,40 @@ export interface BridgeServerStatus {
 		cli: number;
 		extension: number;
 	};
+	electron: {
+		sessions: Array<{
+			id: string;
+			appId?: string;
+			appRef?: string;
+			pid?: number;
+			port: number;
+			browser?: string;
+			mainInspector?: {
+				port: number;
+				webSocketDebuggerUrl?: string;
+				available: boolean;
+				browser?: string;
+			};
+			launched: boolean;
+			startedAt: string;
+			windows: Array<{
+				ref: string;
+				label?: string;
+				type: string;
+				title?: string;
+				url?: string;
+				isPrimary: boolean;
+				closed?: boolean;
+			}>;
+		}>;
+	};
+	skillsSnapshot?: {
+		state: "missing" | "fresh" | "stale" | "invalid";
+		generatedAt?: string;
+		ageMs?: number;
+		skillCount?: number;
+		message?: string;
+	};
 	pendingRequests: number;
 }
 
@@ -829,6 +938,15 @@ export interface BridgeClientConfig {
 export interface CliConfigFile {
 	url?: string;
 	token?: string;
+	electron?: {
+		allowlist?: string[];
+		portRange?: [number, number];
+		defaultFlags?: Record<string, string[]>;
+		capabilities?: Record<
+			string,
+			Partial<Record<"eval" | "cookies" | "main_inspect" | "ipc_tap" | "main_network_tap", boolean>>
+		>;
+	};
 	otel?: {
 		enabled?: boolean;
 		ingestUrl?: string;
@@ -867,6 +985,12 @@ export const ErrorCodes = {
 	NO_ACTIVE_SESSION: -32011,
 	/** Another CLI currently holds the write lease for session injection. */
 	WRITE_LOCKED: -32012,
+	/** Request targeted a bridge-local Electron session that is not attached. */
+	NO_ELECTRON_SESSION: -32013,
+	/** Request cannot be handled by this target kind. */
+	INVALID_TARGET: -32014,
+	/** Client/server protocol version cannot support the requested target. */
+	PROTOCOL_MISMATCH: -32015,
 } as const;
 
 // ---------------------------------------------------------------------------

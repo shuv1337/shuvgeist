@@ -5,6 +5,7 @@ function makeSkill(name: string): Skill {
 	return {
 		name,
 		domainPatterns: ["example.com/*"],
+		appPatterns: [],
 		shortDescription: `${name} short`,
 		description: `${name} description`,
 		createdAt: "2026-03-20T00:00:00.000Z",

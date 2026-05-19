@@ -4,6 +4,34 @@
 
 ### Added
 
+- Bridge protocol v3 adds top-level target routing, `--target` CLI parsing, and bridge-local Electron namespace stubs so Electron-targeted requests no longer wait for a connected browser extension before returning a target-specific result. (#6)
+
+- Electron bridge app registry, explicit allowlisting, and launch/attach/detach session management for CDP-enabled desktop apps. (#7)
+
+- Raw CDP-backed Electron `eval` and `screenshot` dispatch for attached renderer sessions. (#8)
+
+- Stable Electron window refs, window labels, and target resolution for attached Electron sessions. (#9)
+
+- Target-scoped Electron snapshots, semantic locators, and ref click/fill actions over raw CDP. (#10)
+
+- Electron-targeted recording start/stop/status now uses CDP screencast frames and the shared bridge recording event contract without a Chrome extension target. (#11)
+
+- Electron target help, README guidance, architecture notes, and the mirrored Shuvgeist skill now document allowlisting, attach/launch, target syntax, security caveats, and troubleshooting. (#12)
+
+- Electron bridge-local paths now emit structured lifecycle logs and OTEL span attributes for local management commands, target-dispatched commands, outcomes, latency, target identity, and failure causes. (#13)
+
+- Skills now support Electron `appPatterns`, extension-side bridge snapshot sync, bridge snapshot status, and app-matched skill library injection for Electron eval targets. (#14)
+
+- The sidepanel now has an Electron Targets tab backed by bridge Electron session-change events, session storage state, authenticated detach, and visible-tab thumbnail refresh. (#16)
+
+- Electron sessions can now record optional main-process inspector availability and expose safe read-only main-process metadata, paths, windows, versions, and crash dump locations. (#17)
+
+- Electron main-process IPC and network taps are now guarded by per-app capability config, surface monkey-patch warnings, and provide best-effort cleanup commands. (#18)
+
+- Electron source inspection commands now explicitly detect ASAR and unpacked app layouts, list/read files, and extract source while preserving unpacked ASAR files and symlinks. (#19)
+
+- Electron doctor probes now report allowlist, token, skill snapshot, port range, app path, CDP, Chromium version, and extensionless-command readiness, with reversible Linux auto-attach shim install/status/uninstall commands. (#20)
+
 - **Kokoro-first TTS read-along with word-level highlighting**: When using the local Kokoro provider, TTS now supports full read-along with current-word highlighting on the page and center-band auto-scroll. The implementation uses the `/dev/captioned_speech` endpoint for timing data and synchronizes audio playback with CSS Custom Highlight API (with fallback to positioned divs).
 
 - `shuvgeist launch` now defaults to an isolated, persistent, per-browser user-data-dir under `~/.shuvgeist/profile/<browser-name>` so a spawned browser does not collide with an already-open instance of the same browser using its default profile (the most common reason `launch` previously appeared to do nothing or to time out waiting for extension registration). Two new flags expose the policy: `--user-data-dir <path>` overrides the default with an explicit directory, and `--use-default-profile` skips `--user-data-dir` entirely so the launched browser shares the user's existing profile, logins, and extensions. The default's persistence means logins inside Shuvgeist's managed profile survive across runs, so `launch` does not re-prompt every time.

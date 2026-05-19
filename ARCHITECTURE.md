@@ -203,6 +203,24 @@ Bridge-mode browser execution now uses shared helper modules under `src/tools/he
 - `ref-map.ts` stores in-memory ref locator bundles keyed by `tabId` + `frameId`, with explicit stale-ref failure reasons.
 - `waits.ts` provides reusable navigation / DOM / network quiet waits for deterministic workflows.
 
+### Bridge Target Routing
+
+Bridge requests carry an optional top-level target. Chrome/Edge through the extension is the default target when the field is absent. Electron targets are explicit and use strings such as `electron:e1:w1`, `electron:e1:main`, `electron:vscode:w1`, or `electron:e1/w1` from the CLI.
+
+Routing has two paths:
+
+- Extension-relayed Chrome requests: `BridgeServer -> ExtensionClient -> CommandDispatcher -> Chrome APIs`.
+- Bridge-local Electron requests: `BridgeServer -> ElectronSessionManager -> ElectronCdpClient -> Electron CDP endpoint`.
+
+Server-local Electron management commands (`electron list`, `electron allow`, `electron launch`, `electron attach`, `electron detach`, `electron windows`, and `electron label`) do not wait for an extension connection. Target-dispatched commands (`eval`, `screenshot`, `snapshot`, `locate`, `ref`, and `record`) use the Electron path only when an Electron target is present.
+
+Electron support lives under `src/bridge/electron/`:
+
+- `app-registry.ts`: known app IDs, aliases, and executable resolution.
+- `config.ts`: `~/.shuvgeist/bridge.json` Electron allowlist, port range, and default flags.
+- `session-manager.ts`: launch/attach/detach state, stable window refs, labels, snapshots, refs, CDP eval/screenshot, and recording.
+- `cdp-client.ts`: minimal WebSocket CDP client for renderer commands and screencast events.
+
 ### Bridge Runtime Ownership
 
 Bridge connection ownership now lives entirely in `src/background.ts`:

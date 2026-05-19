@@ -19,6 +19,9 @@ export const BRIDGE_STATE_KEY = "bridge_state";
 /** chrome.storage.session key for bridge OTEL export state (shared with UI). */
 export const BRIDGE_OTEL_STATE_KEY = "bridge_otel_state";
 
+/** chrome.storage.session key for bridge-observed Electron target state. */
+export const BRIDGE_ELECTRON_STATE_KEY = "bridge_electron_state";
+
 // ---------------------------------------------------------------------------
 // Bridge settings (canonical chrome.storage.local shape)
 // ---------------------------------------------------------------------------
@@ -51,6 +54,29 @@ export interface BridgeOtelStateData {
 	lastExportedAt?: string;
 	lastErrorAt?: string;
 	lastError?: string;
+}
+
+export interface BridgeElectronStateData {
+	sessions: Array<{
+		id: string;
+		appId?: string;
+		appRef?: string;
+		pid?: number;
+		port: number;
+		browser?: string;
+		launched: boolean;
+		startedAt: string;
+		windows: Array<{
+			ref: string;
+			label?: string;
+			type: string;
+			title?: string;
+			url?: string;
+			isPrimary: boolean;
+			closed?: boolean;
+		}>;
+	}>;
+	updatedAt: string;
 }
 
 // ---------------------------------------------------------------------------
