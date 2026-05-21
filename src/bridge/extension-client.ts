@@ -258,7 +258,11 @@ export class BridgeClient {
 					error: reg.error,
 				});
 				this.setState("error", reg.error || "Registration rejected");
-				this.enabled = false;
+				if (reg.error === "Another extension target is already connected") {
+					this.scheduleReconnect();
+				} else {
+					this.enabled = false;
+				}
 			}
 			return;
 		}

@@ -53,6 +53,8 @@
 
 ### Fixed
 
+- Bridge extension registration now treats transient "another extension target is already connected" rejections as retryable, so moving focus between multiple browser windows no longer leaves the sidebar bridge permanently errored.
+
 - `shuvgeist record start` no longer depends on Chrome's activeTab invocation state for tabCapture, fixing CLI-started recordings on already-authenticated tabs. Recording now requires `ffmpeg` on PATH for WebM encoding.
 
 - `shuvgeist repl` and `shuvgeist eval` now honor `--tab-id` and `--frame-id` and execute against the targeted tab without changing the active tab. Previously these flags were silently ignored or dropped before reaching the runtime. (#3)

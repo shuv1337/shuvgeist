@@ -240,6 +240,43 @@ describe("BridgeClient", () => {
 		expect(onStateChange).toHaveBeenCalledWith("disabled", undefined);
 	});
 
+	it("retries transient extension target conflicts instead of disabling bridge", async () => {
+		vi.useFakeTimers();
+		const onStateChange = vi.fn();
+		const client = new BridgeClient();
+		client.connect({
+			url: "ws://127.0.0.1:19285/ws",
+			token: "secret",
+			windowId: 12,
+			sensitiveAccessEnabled: false,
+			executor: mockExecutor,
+			onStateChange,
+		});
+		const socket = FakeWebSocket.instances.at(-1)!;
+		socket.emitOpen();
+		socket.emitMessage({ type: "register_result", ok: false, error: "Another extension target is already connected" });
+
+		expect(client.connectionState).toBe("error");
+		expect(client.connectionDetail).toBe("Another extension target is already connected");
+		expect(onStateChange).toHaveBeenCalledWith("error", "Another extension target is already connected");
+
+		await vi.advanceTimersByTimeAsync(1000);
+		expect(FakeWebSocket.instances).toHaveLength(2);
+		const retrySocket = FakeWebSocket.instances.at(-1)!;
+		expect(retrySocket).not.toBe(socket);
+		expect(client.connectionState).toBe("connecting");
+		retrySocket.emitOpen();
+		expect(JSON.parse(retrySocket.sent[0])).toMatchObject({
+			type: "register",
+			windowId: 12,
+		});
+		retrySocket.emitMessage({ type: "register_result", ok: true });
+		expect(client.connectionState).toBe("connected");
+
+		client.disconnect();
+		vi.useRealTimers();
+	});
+
 	it("falls back to currentWindow query when registered windowId is 0", async () => {
 		chrome.tabs.query.mockResolvedValue([{ id: 21, url: "https://fallback.test", title: "Fallback" }]);
 		const client = new BridgeClient();
