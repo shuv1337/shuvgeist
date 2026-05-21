@@ -1,6 +1,6 @@
 {
 	"name": "shuvgeist-site",
-	"version": "1.1.13",
+	"version": "1.1.14",
 	"description": "Shuvgeist landing page",
 	"type": "module",
 	"scripts": {

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.1.14] - 2026-05-21
+
 ### Added
 
 - Bridge protocol v3 adds top-level target routing, `--target` CLI parsing, and bridge-local Electron namespace stubs so Electron-targeted requests no longer wait for a connected browser extension before returning a target-specific result. (#6)
