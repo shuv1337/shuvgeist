@@ -1292,13 +1292,14 @@ Usage:
   shuvgeist repl -f <file.js> [--tab-id N] [--frame-id N] [--json] [--write-files <dir>] [--timeout 120s]
   shuvgeist screenshot [--out file.png] [--tab-id N] [--max-width N] [--no-viewport-json] [--json] [--timeout 120s]
   shuvgeist eval <code> [--tab-id N] [--frame-id N] [--json] [--timeout 120s]
+  shuvgeist assert <expr|text|selector|role|label|url> <query> [--tab-id N] [--frame-id N] [--json]
   shuvgeist cookies [--json] [--timeout 120s]
   shuvgeist select <message> [--json] [--timeout none]
   shuvgeist workflow <run|validate> (--file workflow.json | --inline '{...}') [--arg key=value]
   shuvgeist snapshot [--tab-id N] [--frame-id N] [--max-entries N] [--json]
                     (snapshotIds are usable as refIds)
   shuvgeist locate <role|text|label> <query> [--tab-id N] [--frame-id N] [--json]
-  shuvgeist ref <click|fill> <refId> [--value text] [--tab-id N] [--frame-id N] [--json]
+  shuvgeist ref <click|fill> <refId> [--value text] [--native] [--tab-id N] [--frame-id N] [--json]
   shuvgeist frame <list|tree> [--tab-id N] [--json]
   shuvgeist network <start|stop|list|get|body|curl|clear|stats> [...] [--json]
   shuvgeist device <emulate|reset> [...] [--json]
@@ -1335,6 +1336,7 @@ Global options:
   --port <port>       Bridge server port (for constructing URL)
   --token <token>     Bridge auth token
   --timeout <value>   Timeout (e.g. 30s, 2m, 1500ms, none)
+  --interval <value>  Assertion retry interval
   --file <path>       Read REPL or workflow source from file
   --inline <json>     Inline workflow JSON
   --arg key=value     Workflow argument (repeatable)
@@ -1358,6 +1360,15 @@ Global options:
   --min-score <n>     Locator minimum score
   --name <text>       Accessible name filter for role locators
   --value <text>      Ref fill value
+  --world <user|main> Assertion expression world
+  --exact             Exact text/url assertion matching
+  --visible           Require visible assertion target
+  --enabled           Require enabled assertion target
+  --native            Use trusted native ref input
+  --count <N>         Assertion exact match count
+  --min-count <N>     Assertion minimum match count
+  --max-count <N>     Assertion maximum match count
+  --url-pattern <re>  URL assertion regex
   --search <text>     Network list filter
   --include-sensitive Include sensitive data in network curl export
   --preset <name>     Device preset
@@ -1453,6 +1464,10 @@ async function main(): Promise<void> {
 		else if (arg === "--include-hidden") globalFlags.includeHidden = true;
 		else if (arg === "--include-sensitive") globalFlags.includeSensitive = true;
 		else if (arg === "--no-viewport-json") globalFlags.noViewportJson = true;
+		else if (arg === "--exact") globalFlags.exact = true;
+		else if (arg === "--visible") globalFlags.visible = true;
+		else if (arg === "--enabled") globalFlags.enabled = true;
+		else if (arg === "--native") globalFlags.native = true;
 		else if (arg === "--mobile") globalFlags.mobile = true;
 		else if (arg === "--touch") globalFlags.touch = true;
 		else if (arg === "--url" && i + 1 < rest.length) globalFlags.url = rest[++i];
@@ -1460,6 +1475,7 @@ async function main(): Promise<void> {
 		else if (arg === "--port" && i + 1 < rest.length) globalFlags.port = rest[++i];
 		else if (arg === "--token" && i + 1 < rest.length) globalFlags.token = rest[++i];
 		else if (arg === "--timeout" && i + 1 < rest.length) globalFlags.timeout = rest[++i];
+		else if (arg === "--interval" && i + 1 < rest.length) globalFlags.interval = rest[++i];
 		else if (arg === "--out" && i + 1 < rest.length) globalFlags.out = rest[++i];
 		else if (arg === "--max-width" && i + 1 < rest.length) globalFlags.maxWidth = rest[++i];
 		else if (arg === "--max-height" && i + 1 < rest.length) globalFlags.maxHeight = rest[++i];
@@ -1486,6 +1502,11 @@ async function main(): Promise<void> {
 		else if (arg === "--min-score" && i + 1 < rest.length) globalFlags.minScore = rest[++i];
 		else if (arg === "--name" && i + 1 < rest.length) globalFlags.name = rest[++i];
 		else if (arg === "--value" && i + 1 < rest.length) globalFlags.value = rest[++i];
+		else if (arg === "--world" && i + 1 < rest.length) globalFlags.world = rest[++i];
+		else if (arg === "--count" && i + 1 < rest.length) globalFlags.count = rest[++i];
+		else if (arg === "--min-count" && i + 1 < rest.length) globalFlags.minCount = rest[++i];
+		else if (arg === "--max-count" && i + 1 < rest.length) globalFlags.maxCount = rest[++i];
+		else if (arg === "--url-pattern" && i + 1 < rest.length) globalFlags.urlPattern = rest[++i];
 		else if (arg === "--search" && i + 1 < rest.length) globalFlags.search = rest[++i];
 		else if (arg === "--preset" && i + 1 < rest.length) globalFlags.preset = rest[++i];
 		else if (arg === "--width" && i + 1 < rest.length) globalFlags.width = rest[++i];
@@ -1566,6 +1587,15 @@ async function main(): Promise<void> {
 				plan.method,
 				plan.params,
 				plan.method.startsWith("electron_") ? { ...flags, port: undefined } : flags,
+				plan.defaultTimeoutMs,
+				plan.target,
+			);
+			break;
+		case "assert":
+			await runOneShot(
+				"page_assert",
+				plan.params,
+				{ ...flags, timeout: undefined },
 				plan.defaultTimeoutMs,
 				plan.target,
 			);

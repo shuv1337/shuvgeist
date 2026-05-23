@@ -97,6 +97,39 @@ describe("cli-core coverage cases", () => {
 			kind: "cookies",
 			defaultTimeoutMs: 120_000,
 		});
+		expect(createCommandPlan("assert", ["url"], { urlPattern: "^https://example" }, readFileText)).toEqual({
+			kind: "assert",
+			params: {
+				timeoutMs: 5000,
+				urlPattern: "^https://example",
+				kind: "url",
+			},
+			defaultTimeoutMs: 10_000,
+		});
+		expect(createCommandPlan("assert", ["selector", "#ready"], { count: "1", enabled: true }, readFileText)).toEqual({
+			kind: "assert",
+			params: {
+				timeoutMs: 5000,
+				enabled: true,
+				count: 1,
+				kind: "selector",
+				selector: "#ready",
+			},
+			defaultTimeoutMs: 10_000,
+		});
+		expect(createCommandPlan("ref", ["click", "login-input"], { native: true, tabId: "42" }, readFileText)).toEqual({
+			kind: "one-shot",
+			method: "ref_click",
+			params: { refId: "login-input", tabId: 42, native: true },
+			defaultTimeoutMs: 60_000,
+			target: { kind: "chrome-tab", tabId: 42 },
+		});
+		expect(createCommandPlan("ref", ["fill", "login-input"], { native: true, value: "alice" }, readFileText)).toEqual({
+			kind: "one-shot",
+			method: "ref_fill",
+			params: { refId: "login-input", native: true, value: "alice" },
+			defaultTimeoutMs: 60_000,
+		});
 		expect(createCommandPlan("select", [], {}, readFileText)).toEqual({
 			kind: "usage-error",
 			message: "Usage: shuvgeist select <message>",

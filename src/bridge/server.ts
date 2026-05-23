@@ -657,6 +657,10 @@ export class BridgeServer {
 					maxEntries: typeof req.params?.maxEntries === "number" ? req.params.maxEntries : undefined,
 					includeHidden: req.params?.includeHidden === true,
 				});
+			} else if (req.method === "page_assert") {
+				throw new Error(
+					"Electron target dispatch for 'page_assert' is not supported yet. Use Chrome targets for page assertions.",
+				);
 			} else if (req.method === "locate_by_role") {
 				result = await this.electronSessions.locateByRole(target, req.params as never);
 			} else if (req.method === "locate_by_text") {

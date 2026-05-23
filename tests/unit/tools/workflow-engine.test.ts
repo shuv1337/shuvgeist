@@ -139,6 +139,189 @@ describe("WorkflowEngine", () => {
 		expect(result.steps.some((step) => step.status === "ok" && step.method === "repl")).toBe(true);
 	});
 
+	it("opens and pins a new tab target, then inherits tabId for targetable steps", async () => {
+		const dispatch = vi.fn(async (method: string) => {
+			if (method === "navigate") {
+				return { finalUrl: "https://example.com", tabId: 123 };
+			}
+			return { ok: true };
+		});
+		const engine = new WorkflowEngine({ dispatch });
+		const result = await engine.run({
+			target: { mode: "new-tab" },
+			steps: [
+				{
+					method: "navigate",
+					params: { url: "https://example.com" },
+				},
+				{
+					method: "screenshot",
+					params: { maxWidth: 800 },
+				},
+			],
+		});
+
+		expect(result.ok).toBe(true);
+		expect(result.warnings).toEqual([]);
+		expect(dispatch.mock.calls[0][1]).toEqual({ url: "https://example.com", newTab: true });
+		expect(dispatch.mock.calls[1][1]).toEqual({ maxWidth: 800, tabId: 123 });
+	});
+
+	it("records a non-fatal warning when new-tab targetable steps run before a tab is pinned", async () => {
+		const dispatch = vi.fn().mockResolvedValue({ ok: true });
+		const engine = new WorkflowEngine({ dispatch });
+		const result = await engine.run({
+			target: { mode: "new-tab" },
+			steps: [
+				{
+					method: "screenshot",
+					params: { maxWidth: 800 },
+				},
+			],
+		});
+
+		expect(result.ok).toBe(true);
+		expect(result.warnings).toEqual([
+			expect.objectContaining({
+				path: "0",
+				code: "target_unpinned",
+			}),
+		]);
+		expect(dispatch).toHaveBeenCalledWith("screenshot", { maxWidth: 800 }, undefined);
+	});
+
+	it("inherits pinned tabId and frameId unless a step explicitly overrides them", async () => {
+		const dispatch = vi.fn().mockResolvedValue({ ok: true });
+		const engine = new WorkflowEngine({ dispatch });
+		const result = await engine.run({
+			target: { mode: "pinned-tab", tabId: 55, frameId: 9 },
+			steps: [
+				{
+					method: "page_snapshot",
+					params: {},
+				},
+				{
+					method: "ref_click",
+					params: { ref: "ref-1", tabId: 77 },
+				},
+			],
+		});
+
+		expect(result.ok).toBe(true);
+		expect(dispatch.mock.calls[0][1]).toEqual({ tabId: 55, frameId: 9 });
+		expect(dispatch.mock.calls[1][1]).toEqual({ ref: "ref-1", tabId: 77, frameId: 9 });
+	});
+
+	it("requires tabId for pinned-tab workflows", async () => {
+		const engine = new WorkflowEngine({ dispatch: vi.fn() });
+		const result = await engine.run({
+			target: { mode: "pinned-tab" },
+			steps: [{ method: "screenshot", params: {} }],
+		});
+
+		expect(result.ok).toBe(false);
+		expect(result.errors.join("\n")).toContain("pinned-tab requires target.tabId");
+	});
+
+	it("allows CI support methods while keeping session methods disallowed", async () => {
+		const dispatch = vi.fn().mockResolvedValue({ ok: true });
+		const engine = new WorkflowEngine({ dispatch });
+
+		await expect(
+			engine.run({
+				steps: [
+					{ method: "frame_list", params: {} },
+					{ method: "network_start", params: {} },
+					{ method: "device_reset", params: {} },
+					{ method: "perf_metrics", params: {} },
+					{ method: "record_status", params: {} },
+				],
+			}),
+		).resolves.toMatchObject({ ok: true });
+
+		const sessionResult = await engine.run({
+			steps: [{ method: "session_history", params: {} }],
+		});
+		expect(sessionResult.ok).toBe(false);
+		expect(sessionResult.errors.join("\n")).toContain("disallowed workflow method");
+	});
+
+	it("executes workflow assertion steps and captures passing results", async () => {
+		const dispatch = vi.fn().mockResolvedValue({
+			ok: true,
+			kind: "text",
+			message: "Text assertion passed",
+			attempts: 1,
+		});
+		const engine = new WorkflowEngine({ dispatch });
+		const result = await engine.run({
+			target: { mode: "pinned-tab", tabId: 42, frameId: 3 },
+			steps: [
+				{
+					assert: { kind: "text", text: "Welcome" },
+					as: "welcome",
+				},
+			],
+		});
+
+		expect(result.ok).toBe(true);
+		expect(dispatch).toHaveBeenCalledWith("page_assert", { kind: "text", text: "Welcome", tabId: 42, frameId: 3 }, undefined);
+		expect(result.steps[0]).toMatchObject({ type: "assert", status: "ok", method: "page_assert", as: "welcome" });
+		expect(result.captured.welcome).toMatchObject({ ok: true, kind: "text" });
+	});
+
+	it("halts by default on failing workflow assertions", async () => {
+		const dispatch = vi
+			.fn()
+			.mockResolvedValueOnce({ ok: false, kind: "text", message: "Text was not found", attempts: 3 })
+			.mockResolvedValueOnce({ ok: true });
+		const engine = new WorkflowEngine({ dispatch });
+		const result = await engine.run({
+			steps: [
+				{
+					assert: { kind: "text", text: "Missing" },
+					as: "missing",
+				},
+				{
+					method: "screenshot",
+					params: {},
+				},
+			],
+		});
+
+		expect(result.ok).toBe(false);
+		expect(dispatch).toHaveBeenCalledTimes(1);
+		expect(result.steps[0]).toMatchObject({ type: "assert", status: "error", error: "Text was not found" });
+		expect(result.captured.missing).toMatchObject({ ok: false, kind: "text" });
+	});
+
+	it("continues after failing workflow assertions when onError is continue", async () => {
+		const dispatch = vi
+			.fn()
+			.mockResolvedValueOnce({ ok: false, kind: "text", message: "Text was not found", attempts: 3 })
+			.mockResolvedValueOnce({ ok: true });
+		const engine = new WorkflowEngine({ dispatch });
+		const result = await engine.run({
+			steps: [
+				{
+					assert: { kind: "text", text: "Missing" },
+					as: "missing",
+					onError: "continue",
+				},
+				{
+					method: "screenshot",
+					params: {},
+				},
+			],
+		});
+
+		expect(result.ok).toBe(false);
+		expect(dispatch).toHaveBeenCalledTimes(2);
+		expect(result.steps[0]).toMatchObject({ type: "assert", status: "error" });
+		expect(result.steps[1]).toMatchObject({ type: "command", status: "ok", method: "screenshot" });
+		expect(result.captured.missing).toMatchObject({ ok: false, kind: "text" });
+	});
+
 	it("returns partial results on abort", async () => {
 		const controller = new AbortController();
 		const dispatch = vi.fn(async (method: string) => {

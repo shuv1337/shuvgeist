@@ -119,7 +119,7 @@ describe("PageSnapshotTool", () => {
 	it("captures snapshot data through chrome.userScripts", async () => {
 		chrome.userScripts.execute.mockResolvedValue([
 			{
-				result: {
+				result: pageExecutionResult({
 					success: true,
 					result: {
 						url: "https://example.com",
@@ -144,7 +144,7 @@ describe("PageSnapshotTool", () => {
 							},
 						],
 					},
-				},
+				}),
 			},
 		]);
 		await expect(capturePageSnapshot({ tabId: 55 })).resolves.toMatchObject({
@@ -165,7 +165,7 @@ describe("PageSnapshotTool", () => {
 		chrome.tabs.query.mockResolvedValue([{ id: 90 }]);
 		chrome.userScripts.execute.mockResolvedValue([
 			{
-				result: {
+				result: pageExecutionResult({
 					success: true,
 					result: {
 						url: "https://example.com",
@@ -175,7 +175,7 @@ describe("PageSnapshotTool", () => {
 						truncated: false,
 						entries: [],
 					},
-				},
+				}),
 			},
 		]);
 
@@ -191,7 +191,7 @@ describe("PageSnapshotTool", () => {
 		chrome.tabs.query.mockResolvedValue([{ id: 91 }]);
 		chrome.userScripts.execute.mockResolvedValue([
 			{
-				result: {
+				result: pageExecutionResult({
 					success: true,
 					result: {
 						url: "https://example.com",
@@ -201,7 +201,7 @@ describe("PageSnapshotTool", () => {
 						truncated: false,
 						entries: [],
 					},
-				},
+				}),
 			},
 		]);
 
@@ -217,7 +217,7 @@ describe("PageSnapshotTool", () => {
 		chrome.tabs.query.mockResolvedValue([{ id: 92 }]);
 		chrome.userScripts.execute.mockResolvedValue([
 			{
-				result: {
+				result: pageExecutionResult({
 					success: true,
 					result: {
 						url: "https://example.com",
@@ -227,7 +227,7 @@ describe("PageSnapshotTool", () => {
 						truncated: false,
 						entries: [],
 					},
-				},
+				}),
 			},
 		]);
 
@@ -238,3 +238,7 @@ describe("PageSnapshotTool", () => {
 		expect(chrome.tabs.query).toHaveBeenCalledWith({ active: true, currentWindow: true });
 	});
 });
+
+function pageExecutionResult(value: unknown) {
+	return { success: true, value, console: [] };
+}

@@ -49,6 +49,7 @@ export const BridgeCapabilities = [
 	"workflow_run",
 	"workflow_validate",
 	"page_snapshot",
+	"page_assert",
 	"locate_by_role",
 	"locate_by_text",
 	"locate_by_label",
@@ -165,6 +166,7 @@ export const BridgeMethods = [
 	"workflow_run",
 	"workflow_validate",
 	"page_snapshot",
+	"page_assert",
 	"locate_by_role",
 	"locate_by_text",
 	"locate_by_label",
@@ -366,6 +368,30 @@ export interface PageSnapshotBridgeParams extends TargetedBridgeParams {
 	includeHidden?: boolean;
 }
 
+export type PageAssertKind = "expression" | "text" | "selector" | "role" | "label" | "url";
+export type PageAssertWorld = "user" | "main";
+
+export interface PageAssertParams extends TargetedBridgeParams {
+	kind: PageAssertKind;
+	world?: PageAssertWorld;
+	expression?: string;
+	text?: string;
+	selector?: string;
+	role?: string;
+	name?: string;
+	label?: string;
+	url?: string;
+	urlPattern?: string;
+	exact?: boolean;
+	visible?: boolean;
+	enabled?: boolean;
+	count?: number;
+	minCount?: number;
+	maxCount?: number;
+	timeoutMs?: number;
+	intervalMs?: number;
+}
+
 export interface LocateByRoleParams extends TargetedBridgeParams {
 	role: string;
 	name?: string;
@@ -387,11 +413,13 @@ export interface LocateByLabelParams extends TargetedBridgeParams {
 
 export interface RefClickParams extends TargetedBridgeParams {
 	refId: string;
+	native?: boolean;
 }
 
 export interface RefFillParams extends TargetedBridgeParams {
 	refId: string;
 	value: string;
+	native?: boolean;
 }
 
 export interface FrameListParams {
@@ -607,7 +635,7 @@ export interface WorkflowRunResultWire {
 	durationMs: number;
 	steps: Array<{
 		path: string;
-		type: "command" | "repeat" | "each";
+		type: "command" | "assert" | "repeat" | "each";
 		status: "ok" | "error" | "aborted";
 		durationMs: number;
 		method?: string;
@@ -619,6 +647,11 @@ export interface WorkflowRunResultWire {
 	}>;
 	captured: Record<string, unknown>;
 	errors: string[];
+	warnings: Array<{
+		path: string;
+		code: "target_unpinned";
+		message: string;
+	}>;
 	truncation: {
 		stepResults: number;
 		captures: number;
@@ -628,6 +661,19 @@ export interface WorkflowRunResultWire {
 export interface WorkflowValidateResult {
 	ok: boolean;
 	errors: string[];
+}
+
+export interface PageAssertResult {
+	ok: boolean;
+	kind: PageAssertKind;
+	message: string;
+	actual?: unknown;
+	expected?: unknown;
+	attempts: number;
+	durationMs: number;
+	timeoutMs: number;
+	tabId: number;
+	frameId: number;
 }
 
 export interface BridgeSnapshotEntry {

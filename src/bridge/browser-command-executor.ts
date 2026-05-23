@@ -13,9 +13,12 @@ import { ExtractImageTool } from "../tools/extract-image.js";
 import { resolveTabTarget } from "../tools/helpers/browser-target.js";
 import { getSharedDebuggerManager } from "../tools/helpers/debugger-manager.js";
 import { buildFrameTree, listFrames } from "../tools/helpers/frame-resolver.js";
-import { RefMap, type RefResolutionCandidate } from "../tools/helpers/ref-map.js";
+import { executePageFunction, type PageExecutionFunction } from "../tools/helpers/page-execution.js";
+import { type RefBoundingBox, RefMap, type RefResolutionCandidate } from "../tools/helpers/ref-map.js";
+import { NativeInputEventsRuntimeProvider, type NativeInputPoint } from "../tools/NativeInputEventsRuntimeProvider.js";
 import { NavigateTool } from "../tools/navigate.js";
 import { NetworkCaptureEngine } from "../tools/network-capture.js";
+import { buildMainWorldExpressionAssertCode, buildPageAssertResult, runPageAssert } from "../tools/page-assert.js";
 import {
 	buildRefLocatorBundle,
 	capturePageSnapshot,
@@ -45,6 +48,8 @@ import type {
 	NetworkItemParams,
 	NetworkListParams,
 	NetworkStartParams,
+	PageAssertParams,
+	PageAssertResult,
 	PageSnapshotBridgeParams,
 	PerfMetricsParams,
 	PerfTraceStartParams,
@@ -203,6 +208,9 @@ export class BrowserCommandExecutor {
 					break;
 				case "page_snapshot":
 					result = await this.pageSnapshot((params ?? {}) as PageSnapshotBridgeParams, signal);
+					break;
+				case "page_assert":
+					result = await this.pageAssert((params ?? {}) as unknown as PageAssertParams, signal, span?.context);
 					break;
 				case "locate_by_role":
 					result = await this.locateByRole((params ?? {}) as unknown as LocateByRoleParams, signal);
@@ -434,6 +442,25 @@ export class BrowserCommandExecutor {
 		return result.details;
 	}
 
+	async pageAssert(
+		params: PageAssertParams,
+		signal?: AbortSignal,
+		traceContext?: TraceContext,
+	): Promise<PageAssertResult> {
+		const tabId = await this.resolveBridgeTabId(params.tabId);
+		const target = { tabId, frameId: params.frameId };
+		if (params.world === "main") {
+			if (params.kind !== "expression" || !params.expression) {
+				return buildPageAssertResult(params, target, false, 1, Date.now(), params.timeoutMs ?? 0, {
+					ok: false,
+					message: "Main-world assertions require kind 'expression' and expression",
+				});
+			}
+			return this.pageAssertMainWorld(params, target, signal, traceContext);
+		}
+		return runPageAssert(params, target, signal);
+	}
+
 	async locateByRole(params: LocateByRoleParams, signal?: AbortSignal): Promise<unknown> {
 		const snapshot = await this.captureSnapshotForTarget(params, signal);
 		return this.storeLocatorMatches(
@@ -465,43 +492,113 @@ export class BrowserCommandExecutor {
 		);
 	}
 
+	private async pageAssertMainWorld(
+		params: PageAssertParams,
+		target: { tabId: number; frameId?: number },
+		signal?: AbortSignal,
+		traceContext?: TraceContext,
+	): Promise<PageAssertResult> {
+		const startedAt = Date.now();
+		const timeoutMs = params.timeoutMs ?? 5_000;
+		const intervalMs = params.intervalMs ?? 100;
+		const deadline = startedAt + timeoutMs;
+		let attempts = 0;
+		let lastResult: { ok: boolean; message: string; actual?: unknown; expected?: unknown } = {
+			ok: false,
+			message: "Main-world expression assertion did not execute",
+		};
+
+		do {
+			if (signal?.aborted) {
+				throw new Error("Page assertion aborted");
+			}
+			attempts += 1;
+			const evalResult = await this.evalCode(
+				{
+					code: buildMainWorldExpressionAssertCode(params.expression ?? ""),
+					tabId: target.tabId,
+					frameId: target.frameId,
+				},
+				signal,
+				traceContext,
+			);
+			const evalValue = isRecord(evalResult) && Object.hasOwn(evalResult, "value") ? evalResult.value : evalResult;
+			lastResult = isPageAssertCheckResult(evalValue)
+				? evalValue
+				: { ok: false, message: "Main-world expression assertion returned an invalid result", actual: evalValue };
+			if (lastResult.ok || Date.now() >= deadline) {
+				break;
+			}
+			await new Promise((resolve) => setTimeout(resolve, Math.min(intervalMs, Math.max(0, deadline - Date.now()))));
+		} while (Date.now() < deadline);
+
+		return buildPageAssertResult(params, target, lastResult.ok, attempts, startedAt, timeoutMs, lastResult);
+	}
+
 	async refClick(params: RefClickParams, signal?: AbortSignal): Promise<unknown> {
 		const resolution = await this.resolveReference(params.refId, params.tabId, params.frameId, signal);
-		await this.executeRefDomAction(
-			resolution.tabId,
-			resolution.frameId,
-			resolution.selector,
-			(selector) => `(() => {
-			const el = document.querySelector(${JSON.stringify(selector)});
-			if (!(el instanceof HTMLElement)) {
-				throw new Error("Resolved ref target is not clickable");
-			}
-			el.click();
-			return { ok: true };
-		})()`,
-		);
-		return { ok: true, refId: params.refId, ...resolution };
+		if (params.native) {
+			const point = await this.resolveNativeRefPoint(resolution, signal);
+			const nativeInput = new NativeInputEventsRuntimeProvider({
+				windowId: this.windowId,
+				tabId: resolution.tabId,
+				frameId: resolution.frameId,
+				debuggerManager: this.debuggerManager,
+				telemetry: this.telemetry,
+			});
+			await nativeInput.clickAt(point);
+			return {
+				ok: true,
+				refId: params.refId,
+				tabId: resolution.tabId,
+				frameId: resolution.frameId,
+				selector: resolution.selector,
+				native: true,
+				point,
+			};
+		}
+		await this.executeRefDomAction(resolution.tabId, resolution.frameId, resolution.selector, refClickInPage);
+		return {
+			ok: true,
+			refId: params.refId,
+			tabId: resolution.tabId,
+			frameId: resolution.frameId,
+			selector: resolution.selector,
+		};
 	}
 
 	async refFill(params: RefFillParams, signal?: AbortSignal): Promise<unknown> {
 		const resolution = await this.resolveReference(params.refId, params.tabId, params.frameId, signal);
-		await this.executeRefDomAction(
-			resolution.tabId,
-			resolution.frameId,
-			resolution.selector,
-			(selector) => `(() => {
-			const el = document.querySelector(${JSON.stringify(selector)});
-			if (!(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement)) {
-				throw new Error("Resolved ref target is not fillable");
-			}
-			el.focus();
-			el.value = ${JSON.stringify(params.value)};
-			el.dispatchEvent(new Event("input", { bubbles: true }));
-			el.dispatchEvent(new Event("change", { bubbles: true }));
-			return { ok: true };
-		})()`,
-		);
-		return { ok: true, refId: params.refId, ...resolution };
+		if (params.native) {
+			const point = await this.resolveNativeRefPoint(resolution, signal);
+			const nativeInput = new NativeInputEventsRuntimeProvider({
+				windowId: this.windowId,
+				tabId: resolution.tabId,
+				frameId: resolution.frameId,
+				debuggerManager: this.debuggerManager,
+				telemetry: this.telemetry,
+			});
+			await nativeInput.fillAt(point, params.value);
+			return {
+				ok: true,
+				refId: params.refId,
+				tabId: resolution.tabId,
+				frameId: resolution.frameId,
+				selector: resolution.selector,
+				native: true,
+				point,
+			};
+		}
+		await this.executeRefDomAction(resolution.tabId, resolution.frameId, resolution.selector, refFillInPage, [
+			params.value,
+		]);
+		return {
+			ok: true,
+			refId: params.refId,
+			tabId: resolution.tabId,
+			frameId: resolution.frameId,
+			selector: resolution.selector,
+		};
 	}
 
 	async frameList(params: FrameListParams): Promise<unknown> {
@@ -928,6 +1025,87 @@ export class BrowserCommandExecutor {
 			tabId: resolution.ref.tabId,
 			frameId: resolution.ref.frameId,
 			selector,
+			boundingBox: resolution.match.boundingBox,
+		};
+	}
+
+	private async resolveNativeRefPoint(resolution: ResolvedReference, signal?: AbortSignal): Promise<NativeInputPoint> {
+		if (signal?.aborted) {
+			throw new Error("Native ref coordinate resolution aborted");
+		}
+		const execution = await executePageFunction<{ ok: true; x: number; y: number } | { ok: false; error: string }>(
+			{ tabId: resolution.tabId, frameId: resolution.frameId },
+			nativeRefCoordinateInPage,
+			{
+				worldId: "shuvgeist-native-ref-coordinate",
+				args: [resolution.selector],
+				signal,
+			},
+		);
+		if (!execution.success) {
+			throw new Error(
+				`Native ref coordinate resolution failed for selector ${resolution.selector}: ${
+					execution.error || "unknown script error"
+				}`,
+			);
+		}
+		if (!isNativeRefCoordinateResult(execution.value)) {
+			if (isNativeRefCoordinateFailure(execution.value)) {
+				throw new Error(
+					`Native ref coordinate resolution failed for selector ${resolution.selector}: ${execution.value.error}`,
+				);
+			}
+			throw new Error(
+				`Native ref coordinate resolution failed for selector ${resolution.selector}: ${JSON.stringify(execution.value)}`,
+			);
+		}
+		const frameOffset = await this.resolveFrameViewportOffset(resolution.tabId, resolution.frameId, signal);
+		return { x: execution.value.x + frameOffset.x, y: execution.value.y + frameOffset.y };
+	}
+
+	private async resolveFrameViewportOffset(
+		tabId: number,
+		frameId: number,
+		signal?: AbortSignal,
+	): Promise<NativeInputPoint> {
+		if (frameId === 0) {
+			return { x: 0, y: 0 };
+		}
+		if (signal?.aborted) {
+			throw new Error("Native ref frame offset resolution aborted");
+		}
+		const frames = await listFrames(tabId);
+		const frame = frames.find((candidate) => candidate.frameId === frameId);
+		if (!frame) {
+			throw new Error(`Frame ${frameId} was not found for native ref coordinate resolution`);
+		}
+		const parentFrameId = typeof frame.parentFrameId === "number" ? frame.parentFrameId : 0;
+		const parentOffset = await this.resolveFrameViewportOffset(tabId, parentFrameId, signal);
+		const execution = await executePageFunction<{ ok: true; x: number; y: number } | { ok: false; error: string }>(
+			{ tabId, frameId: parentFrameId },
+			frameElementOffsetInPage,
+			{
+				worldId: "shuvgeist-native-frame-offset",
+				args: [frame.url],
+				signal,
+			},
+		);
+		if (!execution.success) {
+			throw new Error(
+				`Native ref frame offset resolution failed for frame ${frameId}: ${execution.error || "unknown script error"}`,
+			);
+		}
+		if (isNativeRefCoordinateFailure(execution.value)) {
+			throw new Error(`Native ref frame offset resolution failed for frame ${frameId}: ${execution.value.error}`);
+		}
+		if (!isNativeRefCoordinateResult(execution.value)) {
+			throw new Error(
+				`Native ref frame offset resolution failed for frame ${frameId}: ${JSON.stringify(execution.value)}`,
+			);
+		}
+		return {
+			x: parentOffset.x + execution.value.x,
+			y: parentOffset.y + execution.value.y,
 		};
 	}
 
@@ -935,22 +1113,131 @@ export class BrowserCommandExecutor {
 		tabId: number,
 		frameId: number,
 		selector: string,
-		buildCode: (selector: string) => string,
+		pageFunction: PageExecutionFunction,
+		extraArgs: unknown[] = [],
 	): Promise<void> {
-		const target: { tabId: number; allFrames?: boolean; frameIds?: number[] } = { tabId, allFrames: false };
-		if (frameId !== 0) {
-			target.frameIds = [frameId];
-		}
-		const results = await chrome.userScripts.execute({
-			js: [{ code: buildCode(selector) }],
-			target,
-			world: "USER_SCRIPT",
+		const execution = await executePageFunction<{ ok?: boolean }>({ tabId, frameId }, pageFunction, {
 			worldId: "shuvgeist-ref-action",
-			injectImmediately: true,
-		} as Parameters<typeof chrome.userScripts.execute>[0]);
-		const first = results[0] as { result?: { ok?: boolean } } | undefined;
-		if (!first?.result?.ok) {
-			throw new Error("Ref action did not confirm success");
+			args: [selector, ...extraArgs],
+		});
+		if (!execution.success) {
+			throw new Error(`Ref action failed for selector ${selector}: ${execution.error || "unknown script error"}`);
+		}
+		if (!execution.value?.ok) {
+			throw new Error(`Ref action did not confirm success for selector ${selector}`);
 		}
 	}
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isPageAssertCheckResult(
+	value: unknown,
+): value is { ok: boolean; message: string; actual?: unknown; expected?: unknown } {
+	return isRecord(value) && typeof value.ok === "boolean" && typeof value.message === "string";
+}
+
+interface ResolvedReference {
+	tabId: number;
+	frameId: number;
+	selector: string;
+	boundingBox?: RefBoundingBox;
+}
+
+function nativeRefCoordinateInPage(
+	selector: string,
+): { ok: true; x: number; y: number } | { ok: false; error: string } {
+	try {
+		const el = document.querySelector(selector);
+		if (!(el instanceof Element)) {
+			return { ok: false, error: "Resolved ref target is not present for native input" };
+		}
+		const rect = el.getBoundingClientRect();
+		if (!Number.isFinite(rect.left) || !Number.isFinite(rect.top) || rect.width <= 0 || rect.height <= 0) {
+			return { ok: false, error: "Resolved ref target has no usable viewport bounds" };
+		}
+		const x = rect.left + rect.width / 2;
+		const y = rect.top + rect.height / 2;
+		return { ok: true, x, y };
+	} catch (error) {
+		return {
+			ok: false,
+			error: `Unable to translate subframe ref coordinates: ${error instanceof Error ? error.message : String(error)}`,
+		};
+	}
+}
+
+function frameElementOffsetInPage(frameUrl: string): { ok: true; x: number; y: number } | { ok: false; error: string } {
+	try {
+		const candidates = Array.from(document.querySelectorAll("iframe,frame"));
+		for (const candidate of candidates) {
+			if (!(candidate instanceof HTMLIFrameElement || candidate instanceof HTMLFrameElement)) continue;
+			let matches = false;
+			try {
+				matches = candidate.contentWindow?.location.href === frameUrl;
+			} catch {
+				matches = false;
+			}
+			if (!matches) {
+				const rawSrc = candidate.getAttribute("src");
+				if (rawSrc) {
+					try {
+						matches = new URL(rawSrc, document.baseURI).href === frameUrl;
+					} catch {
+						matches = false;
+					}
+				}
+			}
+			if (!matches) continue;
+			const rect = candidate.getBoundingClientRect();
+			if (!Number.isFinite(rect.left) || !Number.isFinite(rect.top) || rect.width <= 0 || rect.height <= 0) {
+				return { ok: false, error: "Resolved frame element has no usable viewport bounds" };
+			}
+			return { ok: true, x: rect.left, y: rect.top };
+		}
+		return { ok: false, error: `No frame element matched ${frameUrl}` };
+	} catch (error) {
+		return {
+			ok: false,
+			error: `Unable to resolve frame element offset: ${error instanceof Error ? error.message : String(error)}`,
+		};
+	}
+}
+
+function refClickInPage(selector: string): { ok: true } {
+	const el = document.querySelector(selector);
+	if (!(el instanceof HTMLElement)) {
+		throw new Error("Resolved ref target is not clickable");
+	}
+	el.click();
+	return { ok: true };
+}
+
+function refFillInPage(selector: string, value: string): { ok: true } {
+	const el = document.querySelector(selector);
+	if (!(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement)) {
+		throw new Error("Resolved ref target is not fillable");
+	}
+	el.focus();
+	el.value = value;
+	el.dispatchEvent(new Event("input", { bubbles: true }));
+	el.dispatchEvent(new Event("change", { bubbles: true }));
+	return { ok: true };
+}
+
+function isNativeRefCoordinateResult(value: unknown): value is { ok: true; x: number; y: number } {
+	return (
+		isRecord(value) &&
+		value.ok === true &&
+		typeof value.x === "number" &&
+		typeof value.y === "number" &&
+		Number.isFinite(value.x) &&
+		Number.isFinite(value.y)
+	);
+}
+
+function isNativeRefCoordinateFailure(value: unknown): value is { ok: false; error: string } {
+	return isRecord(value) && value.ok === false && typeof value.error === "string";
 }

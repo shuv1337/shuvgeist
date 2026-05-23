@@ -4,6 +4,18 @@ import { NATIVE_INPUT_EVENTS_DESCRIPTION } from "../prompts/prompts.js";
 import { resolveTabTarget } from "./helpers/browser-target.js";
 import { type DebuggerManager, getSharedDebuggerManager } from "./helpers/debugger-manager.js";
 
+export interface NativeInputPoint {
+	x: number;
+	y: number;
+}
+
+export interface NativeInputActionResult {
+	success: true;
+	x: number;
+	y: number;
+	textLength?: number;
+}
+
 /**
  * Provides native input event functions to JavaScript REPL using Chrome Debugger API.
  * Dispatches REAL browser events (isTrusted: true) for automation of anti-bot sites.
@@ -55,6 +67,136 @@ export class NativeInputEventsRuntimeProvider implements SandboxRuntimeProvider 
 			frameId: this.frameId,
 		});
 		return tabId;
+	}
+
+	async clickAt(point: NativeInputPoint): Promise<NativeInputActionResult> {
+		this.validatePoint(point);
+		const tabId = await this.getTargetTabId();
+		const owner = `native-input-ref-click:${tabId}`;
+		await this.debuggerManager.acquireWithTrace(tabId, owner, { parent: this.traceContext });
+		try {
+			await this.dispatchMouseClick(tabId, point);
+			return { success: true, x: point.x, y: point.y };
+		} finally {
+			await this.debuggerManager.releaseWithTrace(tabId, owner, { parent: this.traceContext });
+		}
+	}
+
+	async fillAt(point: NativeInputPoint, text: string): Promise<NativeInputActionResult> {
+		this.validatePoint(point);
+		const tabId = await this.getTargetTabId();
+		const owner = `native-input-ref-fill:${tabId}`;
+		await this.debuggerManager.acquireWithTrace(tabId, owner, { parent: this.traceContext });
+		try {
+			await this.dispatchMouseClick(tabId, point);
+			await this.dispatchKeyDown(tabId, "Control");
+			await this.dispatchKeyPress(tabId, "a");
+			await this.dispatchKeyUp(tabId, "Control");
+			await this.dispatchKeyPress(tabId, "Backspace");
+			for (const char of text) {
+				await this.debuggerManager.sendCommandWithTrace(
+					tabId,
+					"Input.dispatchKeyEvent",
+					{
+						type: "keyDown",
+						text: char,
+					},
+					{ parent: this.traceContext },
+				);
+				await this.debuggerManager.sendCommandWithTrace(
+					tabId,
+					"Input.dispatchKeyEvent",
+					{
+						type: "keyUp",
+						text: char,
+					},
+					{ parent: this.traceContext },
+				);
+			}
+			return { success: true, x: point.x, y: point.y, textLength: text.length };
+		} finally {
+			await this.debuggerManager.releaseWithTrace(tabId, owner, { parent: this.traceContext });
+		}
+	}
+
+	private validatePoint(point: NativeInputPoint): void {
+		if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) {
+			throw new Error(`Native input point must be finite coordinates, got x=${point.x}, y=${point.y}`);
+		}
+	}
+
+	private async dispatchMouseClick(tabId: number, point: NativeInputPoint): Promise<void> {
+		await this.debuggerManager.sendCommandWithTrace(
+			tabId,
+			"Input.dispatchMouseEvent",
+			{
+				type: "mousePressed",
+				x: point.x,
+				y: point.y,
+				button: "left",
+				clickCount: 1,
+			},
+			{ parent: this.traceContext },
+		);
+		await this.debuggerManager.sendCommandWithTrace(
+			tabId,
+			"Input.dispatchMouseEvent",
+			{
+				type: "mouseReleased",
+				x: point.x,
+				y: point.y,
+				button: "left",
+				clickCount: 1,
+			},
+			{ parent: this.traceContext },
+		);
+	}
+
+	private async dispatchKeyPress(tabId: number, key: string): Promise<void> {
+		await this.dispatchKeyDown(tabId, key);
+		await this.dispatchKeyUp(tabId, key);
+	}
+
+	private async dispatchKeyDown(tabId: number, key: string): Promise<void> {
+		const keyInfo = this.getKeyInfo(key);
+		if (key === "Alt") this.modifiers |= this.MODIFIER_ALT;
+		if (key === "Control") this.modifiers |= this.MODIFIER_CTRL;
+		if (key === "Meta") this.modifiers |= this.MODIFIER_META;
+		if (key === "Shift") this.modifiers |= this.MODIFIER_SHIFT;
+		await this.debuggerManager.sendCommandWithTrace(
+			tabId,
+			"Input.dispatchKeyEvent",
+			{
+				type: "keyDown",
+				key: keyInfo.key,
+				code: keyInfo.code,
+				windowsVirtualKeyCode: keyInfo.keyCode,
+				nativeVirtualKeyCode: keyInfo.keyCode,
+				modifiers: this.modifiers,
+			},
+			{ parent: this.traceContext },
+		);
+	}
+
+	private async dispatchKeyUp(tabId: number, key: string): Promise<void> {
+		const keyInfo = this.getKeyInfo(key);
+		await this.debuggerManager.sendCommandWithTrace(
+			tabId,
+			"Input.dispatchKeyEvent",
+			{
+				type: "keyUp",
+				key: keyInfo.key,
+				code: keyInfo.code,
+				windowsVirtualKeyCode: keyInfo.keyCode,
+				nativeVirtualKeyCode: keyInfo.keyCode,
+				modifiers: this.modifiers,
+			},
+			{ parent: this.traceContext },
+		);
+		if (key === "Alt") this.modifiers &= ~this.MODIFIER_ALT;
+		if (key === "Control") this.modifiers &= ~this.MODIFIER_CTRL;
+		if (key === "Meta") this.modifiers &= ~this.MODIFIER_META;
+		if (key === "Shift") this.modifiers &= ~this.MODIFIER_SHIFT;
 	}
 
 	private getKeyInfo(key: string): { key: string; code: string; keyCode: number } {

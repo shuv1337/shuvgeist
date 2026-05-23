@@ -1,6 +1,7 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import { type Static, Type } from "@mariozechner/pi-ai";
 import { isUsableWindowId } from "./helpers/browser-target.js";
+import { executePageFunction } from "./helpers/page-execution.js";
 import type { RefLocatorBundle, SemanticLocatorCandidate } from "./helpers/ref-map.js";
 import { rankLocatorCandidates } from "./helpers/ref-map.js";
 
@@ -220,208 +221,230 @@ export function buildRefLocatorBundle(entry: PageSnapshotEntry): RefLocatorBundl
 	};
 }
 
-function buildSnapshotScript(config: { frameId: number; maxEntries: number; includeHidden: boolean }): string {
-	return `(() => {
-		const config = ${JSON.stringify(config)};
-		const selector = [
-			'a[href]',
-			'button',
-			'input',
-			'select',
-			'textarea',
-			'summary',
-			'[role]',
-			'[tabindex]',
-			'[contenteditable="true"]',
-			'label',
-			'h1,h2,h3,h4,h5,h6',
-			'main,nav,header,footer,aside,article,section'
-		].join(',');
-		const landmarkRoles = new Set(['main', 'navigation', 'banner', 'contentinfo', 'complementary', 'region', 'search']);
-		const interactiveRoles = new Set(['button', 'link', 'textbox', 'checkbox', 'radio', 'switch', 'combobox', 'listbox', 'menuitem', 'tab', 'slider', 'spinbutton', 'option']);
+function snapshotInPage(config: {
+	frameId: number;
+	maxEntries: number;
+	includeHidden: boolean;
+}): SnapshotScriptResponse {
+	const selector = [
+		"a[href]",
+		"button",
+		"input",
+		"select",
+		"textarea",
+		"summary",
+		"[role]",
+		"[tabindex]",
+		'[contenteditable="true"]',
+		"label",
+		"h1,h2,h3,h4,h5,h6",
+		"main,nav,header,footer,aside,article,section",
+	].join(",");
+	const landmarkRoles = new Set(["main", "navigation", "banner", "contentinfo", "complementary", "region", "search"]);
+	const interactiveRoles = new Set([
+		"button",
+		"link",
+		"textbox",
+		"checkbox",
+		"radio",
+		"switch",
+		"combobox",
+		"listbox",
+		"menuitem",
+		"tab",
+		"slider",
+		"spinbutton",
+		"option",
+	]);
 
-		const normalize = (value, maxLen) => {
-			if (typeof value !== 'string') return '';
-			const text = value.replace(/\\s+/g, ' ').trim();
-			if (!text) return '';
-			return text.length <= maxLen ? text : text.slice(0, Math.max(0, maxLen - 1)) + '...';
-		};
+	const normalize = (value: unknown, maxLen: number): string => {
+		if (typeof value !== "string") return "";
+		const text = value.replace(/\s+/g, " ").trim();
+		if (!text) return "";
+		return text.length <= maxLen ? text : `${text.slice(0, Math.max(0, maxLen - 1))}...`;
+	};
 
-		const isVisible = (element) => {
-			const style = window.getComputedStyle(element);
-			if (style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse') return false;
-			const rect = element.getBoundingClientRect();
-			if (rect.width <= 0 || rect.height <= 0) return false;
-			return true;
-		};
+	const isVisible = (element: Element): boolean => {
+		const style = window.getComputedStyle(element);
+		if (style.display === "none" || style.visibility === "hidden" || style.visibility === "collapse") return false;
+		const rect = element.getBoundingClientRect();
+		return rect.width > 0 && rect.height > 0;
+	};
 
-		const safeEscape = (input) => {
-			if (window.CSS && typeof window.CSS.escape === 'function') return window.CSS.escape(input);
-			return input.replace(/[^a-zA-Z0-9_-]/g, '\\\\$&');
-		};
+	const safeEscape = (input: string): string => {
+		if (window.CSS && typeof window.CSS.escape === "function") return window.CSS.escape(input);
+		return input.replace(/[^a-zA-Z0-9_-]/g, "\\$&");
+	};
 
-		const implicitRole = (element) => {
-			const tag = element.tagName.toLowerCase();
-			if (tag === 'a' && element.getAttribute('href')) return 'link';
-			if (tag === 'button') return 'button';
-			if (tag === 'select') return 'combobox';
-			if (tag === 'textarea') return 'textbox';
-			if (tag === 'summary') return 'button';
-			if (tag === 'input') {
-				const type = (element.getAttribute('type') || 'text').toLowerCase();
-				if (type === 'checkbox') return 'checkbox';
-				if (type === 'radio') return 'radio';
-				if (type === 'range') return 'slider';
-				if (type === 'number') return 'spinbutton';
-				if (type === 'button' || type === 'submit' || type === 'reset') return 'button';
-				return 'textbox';
-			}
-			if (tag === 'main') return 'main';
-			if (tag === 'nav') return 'navigation';
-			if (tag === 'header') return 'banner';
-			if (tag === 'footer') return 'contentinfo';
-			if (tag === 'aside') return 'complementary';
-			if (tag === 'section' && (element.getAttribute('aria-label') || element.getAttribute('aria-labelledby'))) return 'region';
-			return '';
-		};
+	const implicitRole = (element: Element): string => {
+		const tag = element.tagName.toLowerCase();
+		if (tag === "a" && element.getAttribute("href")) return "link";
+		if (tag === "button") return "button";
+		if (tag === "select") return "combobox";
+		if (tag === "textarea") return "textbox";
+		if (tag === "summary") return "button";
+		if (tag === "input") {
+			const type = (element.getAttribute("type") || "text").toLowerCase();
+			if (type === "checkbox") return "checkbox";
+			if (type === "radio") return "radio";
+			if (type === "range") return "slider";
+			if (type === "number") return "spinbutton";
+			if (type === "button" || type === "submit" || type === "reset") return "button";
+			return "textbox";
+		}
+		if (tag === "main") return "main";
+		if (tag === "nav") return "navigation";
+		if (tag === "header") return "banner";
+		if (tag === "footer") return "contentinfo";
+		if (tag === "aside") return "complementary";
+		if (tag === "section" && (element.getAttribute("aria-label") || element.getAttribute("aria-labelledby"))) {
+			return "region";
+		}
+		return "";
+	};
 
-		const elementName = (element) => {
-			const ariaLabel = element.getAttribute('aria-label');
-			if (ariaLabel) return normalize(ariaLabel, 120);
-			const title = element.getAttribute('title');
-			if (title) return normalize(title, 120);
-			if (element instanceof HTMLInputElement && element.value) return normalize(element.value, 120);
-			const alt = element.getAttribute('alt');
-			if (alt) return normalize(alt, 120);
-			return normalize(element.textContent || '', 120);
-		};
+	const elementName = (element: Element): string => {
+		const ariaLabel = element.getAttribute("aria-label");
+		if (ariaLabel) return normalize(ariaLabel, 120);
+		const title = element.getAttribute("title");
+		if (title) return normalize(title, 120);
+		if (element instanceof HTMLInputElement && element.value) return normalize(element.value, 120);
+		const alt = element.getAttribute("alt");
+		if (alt) return normalize(alt, 120);
+		return normalize(element.textContent || "", 120);
+	};
 
-		const elementLabel = (element) => {
-			const ariaLabelledBy = element.getAttribute('aria-labelledby');
-			if (ariaLabelledBy) {
-				const parts = ariaLabelledBy
-					.split(/\\s+/)
-					.filter(Boolean)
-					.map((id) => document.getElementById(id))
-					.filter((node) => node)
-					.map((node) => normalize(node.textContent || '', 120))
-					.filter(Boolean);
-				if (parts.length > 0) return parts.join(' ');
-			}
-			if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement || element instanceof HTMLSelectElement) {
-				if (element.labels && element.labels.length > 0) {
-					return normalize(element.labels[0].textContent || '', 120);
-				}
-				const id = element.getAttribute('id');
-				if (id) {
-					const label = document.querySelector('label[for="' + safeEscape(id) + '"]');
-					if (label) return normalize(label.textContent || '', 120);
-				}
-			}
-			return '';
-		};
-
-		const selectorCandidates = (element) => {
-			const out = [];
-			const tag = element.tagName.toLowerCase();
-			const id = element.getAttribute('id');
-			if (id) out.push('#' + safeEscape(id));
-			const dataTestId = element.getAttribute('data-testid');
-			if (dataTestId) out.push('[data-testid="' + safeEscape(dataTestId) + '"]');
-			const name = element.getAttribute('name');
-			if (name) out.push(tag + '[name="' + safeEscape(name) + '"]');
-			const classes = (element.getAttribute('class') || '')
-				.split(/\\s+/)
+	const elementLabel = (element: Element): string => {
+		const ariaLabelledBy = element.getAttribute("aria-labelledby");
+		if (ariaLabelledBy) {
+			const parts = ariaLabelledBy
+				.split(/\s+/)
 				.filter(Boolean)
-				.filter((name) => !name.startsWith('shuvgeist-'))
-				.slice(0, 2);
-			if (classes.length > 0) out.push(tag + '.' + classes.map((item) => safeEscape(item)).join('.'));
-			if (element.parentElement) {
-				const sameTag = Array.from(element.parentElement.children).filter((child) => child.tagName === element.tagName);
-				const index = sameTag.indexOf(element) + 1;
-				if (index > 0) out.push(tag + ':nth-of-type(' + index + ')');
+				.map((id) => document.getElementById(id))
+				.filter((node): node is HTMLElement => node !== null)
+				.map((node) => normalize(node.textContent || "", 120))
+				.filter(Boolean);
+			if (parts.length > 0) return parts.join(" ");
+		}
+		if (
+			element instanceof HTMLInputElement ||
+			element instanceof HTMLTextAreaElement ||
+			element instanceof HTMLSelectElement
+		) {
+			if (element.labels && element.labels.length > 0) {
+				return normalize(element.labels[0].textContent || "", 120);
 			}
-			out.push(tag);
-			return Array.from(new Set(out)).slice(0, 5);
-		};
-
-		const ordinalPath = (element) => {
-			const path = [];
-			let node = element;
-			while (node && node !== document.body && node.parentElement) {
-				path.unshift(Array.prototype.indexOf.call(node.parentElement.children, node));
-				node = node.parentElement;
+			const id = element.getAttribute("id");
+			if (id) {
+				const label = document.querySelector(`label[for="${safeEscape(id)}"]`);
+				if (label) return normalize(label.textContent || "", 120);
 			}
-			return path;
-		};
+		}
+		return "";
+	};
 
-		const relevant = Array.from(document.querySelectorAll(selector));
-		const seen = new Set();
-		const out = [];
-		let totalCandidates = 0;
+	const selectorCandidates = (element: Element): string[] => {
+		const out: string[] = [];
+		const tag = element.tagName.toLowerCase();
+		const id = element.getAttribute("id");
+		if (id) out.push(`#${safeEscape(id)}`);
+		const dataTestId = element.getAttribute("data-testid");
+		if (dataTestId) out.push(`[data-testid="${safeEscape(dataTestId)}"]`);
+		const name = element.getAttribute("name");
+		if (name) out.push(`${tag}[name="${safeEscape(name)}"]`);
+		const classes = (element.getAttribute("class") || "")
+			.split(/\s+/)
+			.filter(Boolean)
+			.filter((namePart) => !namePart.startsWith("shuvgeist-"))
+			.slice(0, 2);
+		if (classes.length > 0) out.push(`${tag}.${classes.map((item) => safeEscape(item)).join(".")}`);
+		if (element.parentElement) {
+			const sameTag = Array.from(element.parentElement.children).filter(
+				(child) => child.tagName === element.tagName,
+			);
+			const index = sameTag.indexOf(element) + 1;
+			if (index > 0) out.push(`${tag}:nth-of-type(${index})`);
+		}
+		out.push(tag);
+		return Array.from(new Set(out)).slice(0, 5);
+	};
 
-		for (const element of relevant) {
-			if (!(element instanceof HTMLElement)) continue;
-			if (seen.has(element)) continue;
-			seen.add(element);
+	const ordinalPath = (element: Element): number[] => {
+		const path: number[] = [];
+		let node: Element = element;
+		while (node && node !== document.body && node.parentElement) {
+			path.unshift(Array.prototype.indexOf.call(node.parentElement.children, node) as number);
+			node = node.parentElement;
+		}
+		return path;
+	};
 
-			const visible = isVisible(element);
-			if (!config.includeHidden && !visible) continue;
+	const relevant = Array.from(document.querySelectorAll(selector));
+	const seen = new Set<Element>();
+	const out: SnapshotScriptEntry[] = [];
+	let totalCandidates = 0;
 
-			const tagName = element.tagName.toLowerCase();
-			const explicitRole = element.getAttribute('role') || '';
-			const role = explicitRole || implicitRole(element);
-			const headingLevel = /^h[1-6]$/.test(tagName) ? Number.parseInt(tagName.slice(1), 10) : undefined;
-			const landmark = landmarkRoles.has(role) ? role : undefined;
-			const interactive = interactiveRoles.has(role) || element.tabIndex >= 0 || element.isContentEditable;
-			if (!interactive && !headingLevel && !landmark) continue;
+	for (const element of relevant) {
+		if (!(element instanceof HTMLElement)) continue;
+		if (seen.has(element)) continue;
+		seen.add(element);
 
-			totalCandidates++;
-			if (out.length >= config.maxEntries) continue;
+		const visible = isVisible(element);
+		if (!config.includeHidden && !visible) continue;
 
-			const rect = element.getBoundingClientRect();
-			const label = elementLabel(element);
-			const attrs = {};
-			for (const key of ['id', 'name', 'type', 'href', 'placeholder', 'aria-label', 'data-testid', 'title']) {
-				const value = element.getAttribute(key);
-				if (value) attrs[key] = normalize(value, 120);
-			}
+		const tagName = element.tagName.toLowerCase();
+		const explicitRole = element.getAttribute("role") || "";
+		const role = explicitRole || implicitRole(element);
+		const headingLevel = /^h[1-6]$/.test(tagName) ? Number.parseInt(tagName.slice(1), 10) : undefined;
+		const landmark = landmarkRoles.has(role) ? role : undefined;
+		const interactive = interactiveRoles.has(role) || element.tabIndex >= 0 || element.isContentEditable;
+		if (!interactive && !headingLevel && !landmark) continue;
 
-			out.push({
-				snapshotId: 'e' + (out.length + 1),
-				frameId: config.frameId,
-				tagName,
-				role: role || undefined,
-				name: elementName(element) || undefined,
-				text: normalize(element.textContent || '', 180) || undefined,
-				label: label || undefined,
-				attributes: attrs,
-				selectorCandidates: selectorCandidates(element),
-				ordinalPath: ordinalPath(element),
-				boundingBox: {
-					x: rect.x,
-					y: rect.y,
-					width: rect.width,
-					height: rect.height
-				},
-				interactive,
-				headingLevel,
-				landmark
-			});
+		totalCandidates++;
+		if (out.length >= config.maxEntries) continue;
+
+		const rect = element.getBoundingClientRect();
+		const label = elementLabel(element);
+		const attrs: Record<string, string> = {};
+		for (const key of ["id", "name", "type", "href", "placeholder", "aria-label", "data-testid", "title"]) {
+			const value = element.getAttribute(key);
+			if (value) attrs[key] = normalize(value, 120);
 		}
 
-		return {
-			success: true,
-			result: {
-				url: location.href,
-				title: document.title || '',
-				generatedAt: Date.now(),
-				totalCandidates,
-				truncated: totalCandidates > out.length,
-				entries: out
-			}
-		};
-	})()`;
+		out.push({
+			snapshotId: `e${out.length + 1}`,
+			frameId: config.frameId,
+			tagName,
+			role: role || undefined,
+			name: elementName(element) || undefined,
+			text: normalize(element.textContent || "", 180) || undefined,
+			label: label || undefined,
+			attributes: attrs,
+			selectorCandidates: selectorCandidates(element),
+			ordinalPath: ordinalPath(element),
+			boundingBox: {
+				x: rect.x,
+				y: rect.y,
+				width: rect.width,
+				height: rect.height,
+			},
+			interactive,
+			headingLevel,
+			landmark,
+		});
+	}
+
+	return {
+		success: true,
+		result: {
+			url: location.href,
+			title: document.title || "",
+			generatedAt: Date.now(),
+			totalCandidates,
+			truncated: totalCandidates > out.length,
+			entries: out,
+		},
+	};
 }
 
 async function resolveSnapshotTabId(tabId: number | undefined, windowId: number | undefined): Promise<number> {
@@ -439,42 +462,20 @@ export async function capturePageSnapshot(options: CapturePageSnapshotOptions): 
 	const maxEntries = Math.max(1, Math.min(500, options.maxEntries ?? DEFAULT_MAX_ENTRIES));
 	const includeHidden = Boolean(options.includeHidden);
 
-	try {
-		await chrome.userScripts.configureWorld({
-			worldId: SNAPSHOT_WORLD_ID,
-			messaging: true,
-		});
-	} catch {
-		// No-op when world already exists.
-	}
-
-	const code = buildSnapshotScript({
+	const config = {
 		frameId,
 		maxEntries,
 		includeHidden,
-	});
-	const target: {
-		tabId: number;
-		allFrames: false;
-		frameIds?: number[];
-	} = {
-		tabId: options.tabId,
-		allFrames: false,
 	};
-	if (frameId !== 0) target.frameIds = [frameId];
-
-	const executeOptions = {
-		js: [{ code }],
-		target,
-		world: "USER_SCRIPT",
-		worldId: SNAPSHOT_WORLD_ID,
-		injectImmediately: true,
-	};
-	const resultList = await chrome.userScripts.execute(
-		executeOptions as unknown as Parameters<typeof chrome.userScripts.execute>[0],
+	const execution = await executePageFunction<SnapshotScriptResponse>(
+		{ tabId: options.tabId, frameId },
+		snapshotInPage,
+		{ worldId: SNAPSHOT_WORLD_ID, args: [config] },
 	);
-	const first = resultList[0] as { result?: SnapshotScriptResponse } | undefined;
-	const response = first?.result;
+	if (!execution.success) {
+		throw new Error(execution.error || "Page snapshot script failed");
+	}
+	const response = execution.value;
 	if (!response) throw new Error("Page snapshot script returned no result");
 	if (!response.success || !response.result) {
 		throw new Error(response.error || "Page snapshot script failed");

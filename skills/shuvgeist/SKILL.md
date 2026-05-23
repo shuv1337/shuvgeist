@@ -282,6 +282,30 @@ Use this when a human can disambiguate the target faster than the model can.
 
 ## Deterministic automation surface
 
+### Page assertions
+
+Use `shuvgeist assert ...` for CI-style pass/fail checks. Prefer this over `repl 'document...'` for page assertions because `assert` runs against the page context by default, auto-waits, and maps failures to exit code `1`.
+
+```bash
+shuvgeist assert text "Welcome" --timeout 10s
+shuvgeist assert selector "button[type=submit]" --visible --enabled
+shuvgeist assert role button --name "Continue" --visible
+shuvgeist assert label "Email" --visible
+shuvgeist assert url "https://example.com/dashboard"
+shuvgeist assert url --url-pattern "/dashboard"
+shuvgeist assert expr 'document.title.includes("Dashboard")'
+```
+
+Use `--json` for automation. A failed assertion is a successful bridge response with `ok: false`; it is not a transport error.
+
+Expression assertions default to the user-script world. Use MAIN-world assertions only when app state is not visible from DOM/user-script context:
+
+```bash
+shuvgeist assert expr 'window.__APP_STATE__.ready === true' --world main
+```
+
+`--world main` uses the sensitive `eval` path and requires sensitive browser access in Bridge settings.
+
 ### Workflows
 
 Use workflows when you want one bounded bridge request to own a multi-step browser flow.
@@ -296,6 +320,9 @@ shuvgeist workflow run --file workflow.json --dry-run
 Workflow model highlights:
 
 - `steps` execute sequentially
+- target modes are `active`, `new-tab`, and `pinned-tab`
+- CI workflows should usually use `"target": { "mode": "new-tab" }`
+- `assert` steps delegate to `page_assert`, halt by default on failure, and can continue with `onError: "continue"`
 - `repeat` and `each` loops are supported
 - exact token substitution like `"%{urls}"` preserves type
 - interpolated strings like `"hello %{name}"` produce strings
@@ -335,6 +362,8 @@ Operate on prior semantic matches without repeating the search. `<refId>` may be
 ```bash
 shuvgeist ref click <refId>
 shuvgeist ref fill <refId> --value "user@example.com"
+shuvgeist ref click <refId> --native
+shuvgeist ref fill <refId> --value "user@example.com" --native
 ```
 
 Ref caveats:
@@ -343,6 +372,8 @@ Ref caveats:
 - refs are in-memory only
 - navigation invalidates refs
 - stale or ambiguous refs should fail instead of guessing
+- `--native` uses trusted debugger-backed input and does not fall back to synthetic DOM events
+- native refs can target iframe refs when Shuvgeist can resolve frame coordinates; inaccessible frames fail clearly
 
 ### Frame inspection
 
@@ -508,7 +539,7 @@ shuvgeist perf trace-start --timeout 2m
 | Code | Meaning | Action |
 |------|---------|--------|
 | 0 | Success | Continue |
-| 1 | Command/runtime error | Inspect the returned error |
+| 1 | Assertion failed or command/runtime error | Inspect the returned assertion result or error |
 | 2 | No extension target connected | Connect or launch a browser target |
 | 3 | Auth/configuration/network error | Check token, URL, local bridge config, or discovery |
 
@@ -519,6 +550,7 @@ shuvgeist perf trace-start --timeout 2m
 ```bash
 shuvgeist snapshot --json
 shuvgeist locate role button --name "Sign in" --json
+shuvgeist assert role button --name "Sign in" --visible
 shuvgeist ref click <refId>
 ```
 

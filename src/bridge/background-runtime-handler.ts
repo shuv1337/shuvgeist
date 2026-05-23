@@ -18,6 +18,7 @@ import { RuntimeMessageBridge } from "@mariozechner/pi-web-ui/sandbox/RuntimeMes
 import { getShuvgeistStorage } from "../storage/app-storage.js";
 import { isProtectedTabUrl, resolveTabTarget } from "../tools/helpers/browser-target.js";
 import { getSharedDebuggerManager } from "../tools/helpers/debugger-manager.js";
+import { executePageFunction } from "../tools/helpers/page-execution.js";
 import { NativeInputEventsRuntimeProvider } from "../tools/NativeInputEventsRuntimeProvider.js";
 import { type NavigateParams, NavigateTool } from "../tools/navigate.js";
 import { checkUserScriptsAvailability } from "../tools/repl/userscripts-helpers.js";
@@ -66,8 +67,8 @@ export function resolveBackgroundUserScriptMessage(
 		return true; // async
 	}
 
-	// Console messages are captured inline in buildDirectBrowserJsCode's
-	// wrapper; still ack them to avoid "receiving end does not exist" warnings
+	// Console messages are captured inline in executePageFunction's wrapper;
+	// still ack them to avoid "receiving end does not exist" warnings
 	// when user skill code happens to call sendRuntimeMessage({type: "console"}).
 	if (message.type === "console") {
 		sendResponse({ success: true, sandboxId });
@@ -82,12 +83,11 @@ export function resolveBackgroundUserScriptMessage(
 // ---------------------------------------------------------------------------
 
 /**
- * Build a self-contained wrapper code string for chrome.userScripts.execute().
+ * Build a self-contained page function for chrome.userScripts.execute().
  *
  * This mirrors src/tools/repl/userscripts-helpers.ts#buildWrapperCode but:
  *   - Does NOT call RUNTIME_MESSAGE_ROUTER.registerSandbox() (service worker
  *     has no DOM, no window message listener).
- *   - Captures console output inline (no ConsoleRuntimeProvider instance).
  *   - Still injects the RuntimeMessageBridge for "user-script" context so that
  *     skill code running inside browserjs() can call nativeClick() / etc via
  *     chrome.runtime.sendMessage; those messages get routed by the background
@@ -99,7 +99,7 @@ export function buildDirectBrowserJsCode(options: {
 	skillLibrary: string;
 	sandboxId: string;
 }): string {
-	const { userCode, args, skillLibrary, sandboxId } = options;
+	const { userCode, skillLibrary, sandboxId } = options;
 
 	const bridgeCode = RuntimeMessageBridge.generateBridgeCode({
 		context: "user-script",
@@ -113,58 +113,18 @@ export function buildDirectBrowserJsCode(options: {
 	const nativeInputRuntime = nativeInput.getRuntime();
 	const nativeInputInject = `(${nativeInputRuntime.toString()})(${JSON.stringify(sandboxId)});`;
 
-	// Serialize user args for injection.
-	const argsJson = JSON.stringify(args ?? []);
+	return `
+	(async function(...__args__) {
+			${bridgeCode}
 
-	// Wrapper template. We assemble the user function separately so user code
-	// stays syntactically whole (no escaping needed).
-	const wrapperHead = `
-(async function() {
-	const __consoleLogs = [];
-	const __origConsole = {
-		log: console.log.bind(console),
-		warn: console.warn.bind(console),
-		error: console.error.bind(console),
-		info: console.info.bind(console),
-	};
-	const __capture = (method) => (...args) => {
-		let text;
-		try {
-			text = args.map((a) => (typeof a === 'object' ? JSON.stringify(a) : String(a))).join(' ');
-		} catch {
-			text = args.map((a) => String(a)).join(' ');
-		}
-		__consoleLogs.push({ type: method, text });
-		__origConsole[method].apply(console, args);
-	};
-	console.log = __capture('log');
-	console.warn = __capture('warn');
-	console.error = __capture('error');
-	console.info = __capture('info');
+			${nativeInputInject}
 
-	try {
-		${bridgeCode}
+			${skillLibrary}
 
-		${nativeInputInject}
-
-		${skillLibrary}
-
-		const __args__ = ${argsJson};
-		const __func__ = ${userCode};
-		const __lastValue__ = await __func__(...__args__);
-		return { success: true, lastValue: __lastValue__, console: __consoleLogs };
-	} catch (__err__) {
-		return {
-			success: false,
-			error: __err__ && __err__.message ? __err__.message : String(__err__),
-			stack: __err__ && __err__.stack ? __err__.stack : '',
-			console: __consoleLogs,
-		};
-	}
-})()
-`;
-
-	return wrapperHead;
+			const __func__ = ${userCode};
+			return await __func__(...__args__);
+	})
+	`;
 }
 
 // ---------------------------------------------------------------------------
@@ -257,40 +217,15 @@ export async function handleBgBrowserJs(
 			sandboxId: execSandboxId,
 		});
 
-		try {
-			await chrome.userScripts.configureWorld({
-				worldId: FIXED_WORLD_ID,
-				messaging: true,
-				csp: "script-src 'unsafe-eval' 'unsafe-inline'; connect-src 'none'; img-src 'none'; media-src 'none'; frame-src 'none'; font-src 'none'; object-src 'none'; default-src 'none';",
-			});
-		} catch (e) {
-			console.warn("[BgRuntime] Failed to configure userScripts world:", e);
-		}
-
-		const target = (typeof targetFrameId === "number"
-			? { tabId, frameIds: [targetFrameId] }
-			: { tabId, allFrames: false }) as unknown as chrome.userScripts.UserScriptInjection["target"];
-		const injectionConfig: chrome.userScripts.UserScriptInjection = {
-			js: [{ code: wrapperCode }] as unknown as chrome.userScripts.UserScriptInjection["js"],
-			target,
-			world: "USER_SCRIPT",
+		const result = await executePageFunction({ tabId, frameId: targetFrameId }, wrapperCode, {
 			worldId: FIXED_WORLD_ID,
-			injectImmediately: true,
-		};
+			csp: "script-src 'unsafe-eval' 'unsafe-inline'; connect-src 'none'; img-src 'none'; media-src 'none'; frame-src 'none'; font-src 'none'; object-src 'none'; default-src 'none';",
+			args: parsedArgs,
+			includeConsole: true,
+			requireUserScripts: true,
+		});
 
-		const results = await chrome.userScripts.execute(injectionConfig);
-
-		const result = results[0]?.result as
-			| {
-					success: boolean;
-					lastValue?: unknown;
-					error?: string;
-					stack?: string;
-					console?: Array<{ type: string; text: string }>;
-			  }
-			| undefined;
-
-		if (!result) {
+		if (result.missingResult) {
 			return { success: true, error: "No result returned from script execution", console: [] };
 		}
 
@@ -305,7 +240,7 @@ export async function handleBgBrowserJs(
 
 		return {
 			success: true,
-			result: result.lastValue,
+			result: result.value,
 			console: result.console ?? [],
 		};
 	} catch (error: unknown) {
@@ -337,6 +272,7 @@ export async function handleBgNavigate(
 			result: {
 				finalUrl: result.details.finalUrl,
 				title: result.details.title,
+				tabId: result.details.tabId,
 				skills: result.details.skills,
 			},
 		};

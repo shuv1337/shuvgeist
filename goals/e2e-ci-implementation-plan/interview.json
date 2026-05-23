@@ -1,0 +1,91 @@
+{
+  "stage": "interview",
+  "title": "Shuvgeist deterministic e2e CI",
+  "goalSlug": "e2e-ci-implementation-plan",
+  "questions": [
+    {
+      "id": "execution_scope",
+      "prompt": "What should this /goal execute?",
+      "description": "The plan is already chunked. This decides whether the generated goal asks an agent to complete the whole roadmap or only the first independently valid milestone.",
+      "answerMode": "single-custom",
+      "recommendedAnswer": "Execute the full plan as a sequence of chunk stop points, starting at Chunk A and stopping after each validated chunk unless the /goal runner is explicitly told to continue.",
+      "recommendedOptionIds": ["full_chunked_plan"],
+      "options": [
+        {
+          "id": "full_chunked_plan",
+          "label": "Full chunked plan"
+        },
+        {
+          "id": "first_chunk_only",
+          "label": "Chunk A only"
+        },
+        {
+          "id": "assertions_mvp",
+          "label": "Assertions MVP"
+        }
+      ],
+      "required": true
+    },
+    {
+      "id": "electron_assertions",
+      "prompt": "How should Electron-targeted page assertions be handled in the initial implementation?",
+      "description": "The current bridge routes Electron targets through a separate server path. Implementing full Electron assertions is possible but larger than the browser-tab CI path.",
+      "answerMode": "single-custom",
+      "recommendedAnswer": "Keep Electron page assertions out of scope for the initial implementation, but add a tested explicit unsupported error so --target electron assertions fail clearly.",
+      "recommendedOptionIds": ["explicit_unsupported"],
+      "options": [
+        {
+          "id": "explicit_unsupported",
+          "label": "Unsupported clearly"
+        },
+        {
+          "id": "implement_electron",
+          "label": "Implement Electron"
+        }
+      ],
+      "required": true
+    },
+    {
+      "id": "native_subframes",
+      "prompt": "Should native ref actions support iframe/subframe refs in the first pass?",
+      "description": "Current native input evaluates selectors in the main tab context. Real subframe support needs frame-aware CDP context and coordinate handling.",
+      "answerMode": "single-custom",
+      "recommendedAnswer": "Defer subframe native support. In the first pass, native ref actions should support main-frame refs and fail clearly for subframe refs.",
+      "recommendedOptionIds": ["defer_subframes"],
+      "options": [
+        {
+          "id": "defer_subframes",
+          "label": "Defer subframes"
+        },
+        {
+          "id": "support_subframes",
+          "label": "Support subframes"
+        }
+      ],
+      "required": true
+    },
+    {
+      "id": "live_e2e_requirement",
+      "prompt": "What live browser validation should be required before this goal is done?",
+      "description": "Unit and integration tests can cover most logic. Live extension/browser coverage is heavier and belongs in Playwright e2e or documented manual smoke.",
+      "answerMode": "single-custom",
+      "recommendedAnswer": "Require a deterministic local-fixture Playwright extension e2e smoke when stable; if it is blocked or flaky, document the exact blocker and keep manual smoke commands in docs.",
+      "recommendedOptionIds": ["playwright_when_stable"],
+      "options": [
+        {
+          "id": "playwright_when_stable",
+          "label": "Playwright if stable"
+        },
+        {
+          "id": "manual_only",
+          "label": "Manual smoke only"
+        },
+        {
+          "id": "must_be_automated",
+          "label": "Must automate"
+        }
+      ],
+      "required": true
+    }
+  ]
+}

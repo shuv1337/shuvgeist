@@ -2,6 +2,12 @@ const navigateExecute = vi.fn();
 const selectExecute = vi.fn();
 const extractExecute = vi.fn();
 const debuggerExecute = vi.fn();
+const runPageAssert = vi.fn();
+const pageSnapshotExecute = vi.fn();
+const capturePageSnapshot = vi.fn();
+const nativeClickAt = vi.fn();
+const nativeFillAt = vi.fn();
+const nativeProviderOptions = vi.fn();
 
 vi.mock("../../../src/tools/navigate.js", () => ({
 	NavigateTool: class {
@@ -22,6 +28,69 @@ vi.mock("../../../src/tools/extract-image.js", () => ({
 	},
 }));
 
+vi.mock("../../../src/tools/page-assert.js", () => ({
+	runPageAssert,
+	buildMainWorldExpressionAssertCode: vi.fn((expression: string) => `Boolean(${expression})`),
+	buildPageAssertResult: vi.fn(
+		(
+			params: { kind: string; timeoutMs?: number },
+			target: { tabId: number; frameId?: number },
+			ok: boolean,
+			attempts: number,
+			_startedAt: number,
+			timeoutMs: number,
+			check: { message: string; actual?: unknown; expected?: unknown },
+		) => ({
+			ok,
+			kind: params.kind,
+			message: check.message,
+			actual: check.actual,
+			expected: check.expected,
+			attempts,
+			durationMs: 0,
+			timeoutMs,
+			tabId: target.tabId,
+			frameId: target.frameId ?? 0,
+		}),
+	),
+}));
+
+vi.mock("../../../src/tools/page-snapshot.js", () => ({
+	PageSnapshotTool: class {
+		windowId?: number;
+		execute = pageSnapshotExecute;
+	},
+	capturePageSnapshot,
+	buildRefLocatorBundle: vi.fn(
+		(entry: {
+			selectorCandidates?: string[];
+			role?: string;
+			name?: string;
+			text?: string;
+			label?: string;
+			tagName?: string;
+			attributes?: Record<string, string>;
+			ordinalPath?: number[];
+			boundingBox?: { x: number; y: number; width: number; height: number };
+		}) => ({
+		selectorCandidates: entry.selectorCandidates,
+		semantic: {
+			role: entry.role,
+			name: entry.name,
+			text: entry.text,
+			label: entry.label,
+		},
+		tagName: entry.tagName,
+		attributes: entry.attributes,
+		ordinalPath: entry.ordinalPath,
+		lastKnownBoundingBox: entry.boundingBox,
+	}),
+	),
+	locateByRole: vi.fn(() => []),
+	locateByText: vi.fn(() => []),
+	locateByLabel: vi.fn(() => []),
+}));
+
 vi.mock("../../../src/tools/debugger.js", () => ({
 	DebuggerTool: class {
 		execute = debuggerExecute;
@@ -30,7 +99,13 @@ vi.mock("../../../src/tools/debugger.js", () => ({
 }));
 
 vi.mock("../../../src/tools/NativeInputEventsRuntimeProvider.js", () => ({
-	NativeInputEventsRuntimeProvider: class {},
+	NativeInputEventsRuntimeProvider: class {
+		constructor(options: unknown) {
+			nativeProviderOptions(options);
+		}
+		clickAt = nativeClickAt;
+		fillAt = nativeFillAt;
+	},
 }));
 
 vi.mock("../../../src/tools/repl/runtime-providers.js", () => ({
@@ -46,6 +121,8 @@ declare global {
 	var chrome: {
 		tabs: { query: ReturnType<typeof vi.fn> };
 		runtime: { getURL: ReturnType<typeof vi.fn> };
+		webNavigation: { getAllFrames: ReturnType<typeof vi.fn> };
+		userScripts: { configureWorld: ReturnType<typeof vi.fn>; execute: ReturnType<typeof vi.fn> };
 	};
 }
 
@@ -55,6 +132,13 @@ globalThis.chrome = {
 	},
 	runtime: {
 		getURL: vi.fn((value: string) => `chrome-extension://test/${value}`),
+	},
+	webNavigation: {
+		getAllFrames: vi.fn(),
+	},
+	userScripts: {
+		configureWorld: vi.fn(),
+		execute: vi.fn(),
 	},
 };
 
@@ -71,8 +155,17 @@ describe("BrowserCommandExecutor", () => {
 		selectExecute.mockReset();
 		extractExecute.mockReset();
 		debuggerExecute.mockReset();
+		runPageAssert.mockReset();
+		pageSnapshotExecute.mockReset();
+		capturePageSnapshot.mockReset();
+		nativeClickAt.mockReset();
+		nativeFillAt.mockReset();
+		nativeProviderOptions.mockReset();
 		chrome.tabs.query.mockReset();
 		chrome.runtime.getURL.mockClear();
+		chrome.webNavigation.getAllFrames.mockReset();
+		chrome.userScripts.configureWorld.mockReset();
+		chrome.userScripts.execute.mockReset();
 	});
 
 	it("returns status with active tab and capabilities", async () => {
@@ -154,6 +247,35 @@ describe("BrowserCommandExecutor", () => {
 
 		await expect(executor.dispatch("select_element", { message: "pick it" })).resolves.toEqual({ selector: "#login" });
 		expect(selectExecute).toHaveBeenCalledWith("bridge", { message: "pick it" }, undefined);
+	});
+
+	it("dispatches user-world page assertions", async () => {
+		runPageAssert.mockResolvedValue({
+			ok: true,
+			kind: "text",
+			message: "Text assertion passed",
+			attempts: 1,
+			durationMs: 5,
+			timeoutMs: 100,
+			tabId: 42,
+			frameId: 3,
+		});
+		chrome.tabs.query.mockResolvedValue([{ id: 42, url: "https://example.com" }]);
+		const executor = new BrowserCommandExecutor({ windowId: 7, sensitiveAccessEnabled: false });
+
+		await expect(
+			executor.dispatch("page_assert", { kind: "text", text: "Welcome", frameId: 3, timeoutMs: 100 }),
+		).resolves.toMatchObject({
+			ok: true,
+			kind: "text",
+			tabId: 42,
+			frameId: 3,
+		});
+		expect(runPageAssert).toHaveBeenCalledWith(
+			{ kind: "text", text: "Welcome", frameId: 3, timeoutMs: 100 },
+			{ tabId: 42, frameId: 3 },
+			undefined,
+		);
 	});
 
 	it("gates eval/cookies by sensitive access and proxies debugger results", async () => {
@@ -297,4 +419,112 @@ describe("BrowserCommandExecutor", () => {
 			bridged.sessionInject({ expectedSessionId: "session-1", role: "user", content: "hello" }, aborted.signal),
 		).rejects.toMatchObject({ code: -32005, message: "Session injection aborted" });
 	});
+
+	it("routes native ref click through debugger-backed input at frame coordinates", async () => {
+		const snapshot = buildRefSnapshot();
+		pageSnapshotExecute.mockResolvedValue({ details: snapshot });
+		capturePageSnapshot.mockResolvedValue(snapshot);
+		chrome.webNavigation.getAllFrames.mockResolvedValue([
+			{ frameId: 0, url: "https://example.com/" },
+			{ frameId: 7, parentFrameId: 0, url: "https://example.com/frame" },
+		]);
+		chrome.userScripts.execute.mockResolvedValueOnce([
+			{ result: { success: true, value: { ok: true, x: 120, y: 80 }, console: [] } },
+		]).mockResolvedValueOnce([
+			{ result: { success: true, value: { ok: true, x: 0, y: 0 }, console: [] } },
+		]);
+		nativeClickAt.mockResolvedValue({ success: true, x: 120, y: 80 });
+		const executor = new BrowserCommandExecutor({ windowId: 7, sensitiveAccessEnabled: false });
+
+		await executor.pageSnapshot({ tabId: 42, frameId: 7 });
+		await expect(executor.refClick({ refId: "login-input", native: true })).resolves.toMatchObject({
+			ok: true,
+			refId: "login-input",
+			tabId: 42,
+			frameId: 7,
+			native: true,
+			point: { x: 120, y: 80 },
+		});
+
+		expect(chrome.userScripts.execute).toHaveBeenCalledWith(
+			expect.objectContaining({
+				target: { tabId: 42, frameIds: [7] },
+				worldId: "shuvgeist-native-ref-coordinate",
+			}),
+		);
+		expect(nativeProviderOptions).toHaveBeenCalledWith(expect.objectContaining({ windowId: 7, tabId: 42, frameId: 7 }));
+		expect(nativeClickAt).toHaveBeenCalledWith({ x: 120, y: 80 });
+		expect(nativeFillAt).not.toHaveBeenCalled();
+	});
+
+	it("keeps synthetic ref click unchanged when native is not requested", async () => {
+		const snapshot = buildRefSnapshot();
+		pageSnapshotExecute.mockResolvedValue({ details: snapshot });
+		capturePageSnapshot.mockResolvedValue(snapshot);
+		chrome.userScripts.execute.mockResolvedValue([{ result: { success: true, value: { ok: true }, console: [] } }]);
+		const executor = new BrowserCommandExecutor({ windowId: 7, sensitiveAccessEnabled: false });
+
+		await executor.pageSnapshot({ tabId: 42, frameId: 7 });
+		await expect(executor.refClick({ refId: "login-input" })).resolves.toMatchObject({
+			ok: true,
+			refId: "login-input",
+			tabId: 42,
+			frameId: 7,
+			selector: "#login",
+		});
+
+		expect(chrome.userScripts.execute).toHaveBeenCalledWith(
+			expect.objectContaining({
+				target: { tabId: 42, frameIds: [7] },
+				worldId: "shuvgeist-ref-action",
+			}),
+		);
+		expect(nativeClickAt).not.toHaveBeenCalled();
+	});
+
+	it("does not fall back to synthetic fill when native ref input fails", async () => {
+		const snapshot = buildRefSnapshot();
+		pageSnapshotExecute.mockResolvedValue({ details: snapshot });
+		capturePageSnapshot.mockResolvedValue(snapshot);
+		chrome.webNavigation.getAllFrames.mockResolvedValue([
+			{ frameId: 0, url: "https://example.com/" },
+			{ frameId: 7, parentFrameId: 0, url: "https://example.com/frame" },
+		]);
+		chrome.userScripts.execute.mockResolvedValueOnce([
+			{ result: { success: true, value: { ok: true, x: 120, y: 80 }, console: [] } },
+		]).mockResolvedValueOnce([
+			{ result: { success: true, value: { ok: true, x: 0, y: 0 }, console: [] } },
+		]);
+		nativeFillAt.mockRejectedValue(new Error("debugger attach failed"));
+		const executor = new BrowserCommandExecutor({ windowId: 7, sensitiveAccessEnabled: false });
+
+		await executor.pageSnapshot({ tabId: 42, frameId: 7 });
+		await expect(executor.refFill({ refId: "login-input", value: "alice", native: true })).rejects.toThrow(
+			"debugger attach failed",
+		);
+
+		expect(nativeFillAt).toHaveBeenCalledWith({ x: 120, y: 80 }, "alice");
+		expect(chrome.userScripts.execute).toHaveBeenCalledTimes(2);
+		expect(chrome.userScripts.execute).toHaveBeenCalledWith(
+			expect.objectContaining({ worldId: "shuvgeist-native-ref-coordinate" }),
+		);
+	});
 });
+
+function buildRefSnapshot() {
+	const entry = {
+		snapshotId: "login-input",
+		tabId: 42,
+		frameId: 7,
+		selectorCandidates: ["#login"],
+		role: "textbox",
+		name: "Login",
+		text: "",
+		label: "Login",
+		tagName: "input",
+		attributes: { id: "login" },
+		ordinalPath: [1, 2, 3],
+		boundingBox: { x: 10, y: 20, width: 40, height: 20 },
+	};
+	return { tabId: 42, frameId: 7, entries: [entry] };
+}

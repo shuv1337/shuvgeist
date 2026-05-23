@@ -112,7 +112,7 @@ export async function launchBrowser(options: LaunchOptions, statusUrl: string): 
 	}
 
 	// 3. Check if browser is already connected
-	if (await isExtensionConnected(statusUrl)) {
+	if (!options.userDataDir && !options.useDefaultProfile && (await isExtensionConnected(statusUrl))) {
 		return {
 			pid: 0,
 			browserPath: browser.browserPath,

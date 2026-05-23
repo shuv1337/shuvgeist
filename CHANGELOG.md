@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+## [1.1.15] - 2026-05-23
+
+### Added
+
+- Deterministic browser assertion support through `shuvgeist assert expr|text|selector|role|label|url`, workflow assertion steps, and page-context assertion docs for e2e CI usage.
+- Native semantic ref actions via `shuvgeist ref click|fill --native`, backed by typed debugger input methods and frame-aware coordinate resolution.
+- E2E CI documentation covering headless launch readiness checks, workflow target pinning, assertion exit codes, native refs, and sensitive MAIN-world assertion caveats.
+
+### Changed
+
+- Workflow execution can pin target tabs with `active`, `new-tab`, and `pinned-tab` modes and carries non-fatal target warnings in workflow results.
+- CLI assertion failures now exit with code `1`, while no extension target exits `2` and auth/config/network errors exit `3`.
+
+### Fixed
+
+- Electron-targeted `page_assert` and native ref actions now fail with explicit unsupported messages instead of generic dispatcher behavior or silent synthetic fallback.
+
 ## [1.1.14] - 2026-05-21
 
 ### Added

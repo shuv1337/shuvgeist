@@ -77,6 +77,7 @@ Current CLI surface:
 - browser lifecycle: `launch`, `close`, `status`
 - navigation: `navigate`, `tabs`, `switch`
 - page execution: `repl`, `eval`, `screenshot`, `cookies`, `select`
+- page assertions: `assert expr`, `assert text`, `assert selector`, `assert role`, `assert label`, `assert url`
 - deterministic workflows: `workflow run`, `workflow validate`
 - semantic page inspection: `snapshot`, `locate`, `ref`, `frame`
 - debugger-backed diagnostics: `network`, `device`, `perf`
@@ -199,9 +200,42 @@ shuvgeist tabs --json
 shuvgeist screenshot --out page.png
 shuvgeist record start --out /tmp/example.webm --max-duration 5s
 shuvgeist repl 'return await browserjs(() => document.title)'
+shuvgeist assert text "Example Domain" --timeout 10s
 shuvgeist snapshot --json
 shuvgeist locate text "Sign in" --json
 ```
+
+### Deterministic e2e smoke
+
+Use `assert` for CI-style page checks instead of embedding assertions in REPL snippets. Assertions run against the page context by default and return structured results in `--json` mode.
+
+```bash
+shuvgeist launch --url http://localhost:3000 --headless --json
+shuvgeist assert text "Welcome" --timeout 10s --json
+shuvgeist assert role button --name "Continue" --visible --json
+shuvgeist assert selector "form [type=submit]" --enabled --json
+```
+
+Use workflow target pinning for multi-step tests so focus changes do not move the target tab:
+
+```json
+{
+  "target": { "mode": "new-tab" },
+  "steps": [
+    { "method": "navigate", "params": { "url": "http://localhost:3000" } },
+    { "assert": { "kind": "text", "text": "Welcome" }, "as": "welcome" }
+  ]
+}
+```
+
+For native trusted input through semantic refs:
+
+```bash
+shuvgeist locate label "Email" --json
+shuvgeist ref fill <refId> --value "user@example.com" --native
+```
+
+Before treating a machine as CI-ready, verify that `shuvgeist launch --headless --json` produces a connected extension target and that the local fixture assertions pass. See [docs/e2e-ci.md](docs/e2e-ci.md) for the full checklist.
 
 ### Electron targets
 
@@ -273,7 +307,7 @@ Supported env vars:
 Exit codes:
 
 - `0`: success
-- `1`: command/runtime error
+- `1`: assertion failure or command/runtime error
 - `2`: no extension target connected
 - `3`: auth/configuration/network error
 
@@ -292,6 +326,7 @@ Current bridge behavior:
 Sensitive bridge access enables commands such as:
 
 - `shuvgeist eval`
+- `shuvgeist assert expr --world main`
 - `shuvgeist cookies`
 - `shuvgeist network get`
 - `shuvgeist network body`

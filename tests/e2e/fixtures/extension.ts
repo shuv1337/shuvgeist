@@ -1,9 +1,12 @@
 import { chromium, type BrowserContext, type Page, type ServiceWorker } from "@playwright/test";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 
 export async function launchExtensionContext(): Promise<{ context: BrowserContext; extensionId: string; serviceWorker: ServiceWorker }> {
 	const extensionPath = path.resolve("dist-chrome");
-	const context = await chromium.launchPersistentContext("", {
+	const userDataDir = await mkdtemp(path.join(tmpdir(), "shuvgeist-e2e-"));
+	const context = await chromium.launchPersistentContext(userDataDir, {
 		channel: "chromium",
 		headless: true,
 		args: [

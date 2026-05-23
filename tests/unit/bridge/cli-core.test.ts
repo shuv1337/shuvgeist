@@ -55,6 +55,12 @@ describe("cli-core", () => {
 		expect(isNetworkOrConfigError(new Error("logic failure"))).toBe(false);
 
 		expect(exitCodeForResponse({ id: 1, result: { ok: true } })).toBe(0);
+		expect(
+			exitCodeForResponse({
+				id: 1,
+				result: { ok: false, kind: "text", message: "missing", attempts: 3 },
+			}),
+		).toBe(1);
 		expect(exitCodeForResponse({ id: 1, error: { code: -32000, message: "No extension" } })).toBe(2);
 		expect(exitCodeForResponse({ id: 1, error: { code: -32001, message: "Auth" } })).toBe(3);
 		expect(exitCodeForResponse({ id: 1, error: { code: -32003, message: "Exec" } })).toBe(1);
@@ -123,6 +129,29 @@ describe("cli-core", () => {
 			method: "eval",
 			params: { code: "return 1", tabId: 42, frameId: 7 },
 			defaultTimeoutMs: 120_000,
+			target: { kind: "chrome-tab", tabId: 42, frameId: 7 },
+		});
+
+		expect(
+			createCommandPlan(
+				"assert",
+				["role", "button"],
+				{ tabId: "42", frameId: "7", name: "Continue", visible: true, timeout: "10s", interval: "250ms" },
+				readFileText,
+			),
+		).toEqual({
+			kind: "assert",
+			params: {
+				tabId: 42,
+				frameId: 7,
+				timeoutMs: 10_000,
+				intervalMs: 250,
+				visible: true,
+				kind: "role",
+				role: "button",
+				name: "Continue",
+			},
+			defaultTimeoutMs: 15_000,
 			target: { kind: "chrome-tab", tabId: 42, frameId: 7 },
 		});
 	});

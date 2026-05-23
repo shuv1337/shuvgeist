@@ -17,6 +17,7 @@ describe("bridge protocol", () => {
 		expect(getBridgeCapabilities(false)).not.toContain("record_start");
 		expect(getBridgeCapabilities(false)).not.toContain("record_stop");
 		expect(getBridgeCapabilities(false)).not.toContain("record_status");
+		expect(getBridgeCapabilities(false)).toContain("page_assert");
 		expect(getBridgeCapabilities(false)).toEqual(
 			BridgeCapabilities.filter(
 				(cap) =>

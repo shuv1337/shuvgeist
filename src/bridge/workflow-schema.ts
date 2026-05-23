@@ -15,6 +15,25 @@ const workflowWaitTypeSchema = Type.Union(
 	},
 );
 
+const workflowTargetModeSchema = Type.Union(
+	[Type.Literal("active"), Type.Literal("new-tab"), Type.Literal("pinned-tab")],
+	{
+		description: "Workflow target mode",
+	},
+);
+
+export const workflowTargetSchema = Type.Object(
+	{
+		mode: workflowTargetModeSchema,
+		tabId: Type.Optional(Type.Integer({ minimum: 0 })),
+		frameId: Type.Optional(Type.Integer({ minimum: 0 })),
+	},
+	{
+		additionalProperties: false,
+		description: "Target strategy for targetable workflow steps",
+	},
+);
+
 export const workflowWaitSchema = Type.Object(
 	{
 		type: workflowWaitTypeSchema,
@@ -52,10 +71,24 @@ const workflowCommandStepSchema = Type.Object(
 	},
 );
 
+const workflowAssertStepSchema = Type.Object(
+	{
+		id: Type.Optional(Type.String({ minLength: 1 })),
+		assert: Type.Record(Type.String({ minLength: 1 }), Type.Unknown()),
+		as: Type.Optional(Type.String({ minLength: 1 })),
+		wait: Type.Optional(workflowWaitSchema),
+		onError: Type.Optional(workflowOnErrorSchema),
+	},
+	{
+		additionalProperties: false,
+	},
+);
+
 export const workflowStepSchema = Type.Recursive((Self) =>
 	Type.Union(
 		[
 			workflowCommandStepSchema,
+			workflowAssertStepSchema,
 			Type.Object(
 				{
 					id: Type.Optional(Type.String({ minLength: 1 })),
@@ -87,6 +120,7 @@ export const workflowSchema = Type.Object(
 	{
 		name: Type.Optional(Type.String({ minLength: 1 })),
 		args: Type.Optional(Type.Record(Type.String({ minLength: 1 }), workflowArgDefinitionSchema)),
+		target: Type.Optional(workflowTargetSchema),
 		defaultWait: Type.Optional(workflowWaitSchema),
 		steps: Type.Array(workflowStepSchema, { minItems: 1, maxItems: WORKFLOW_MAX_STEPS }),
 	},
@@ -96,9 +130,11 @@ export const workflowSchema = Type.Object(
 );
 
 export type WorkflowOnErrorPolicy = Static<typeof workflowOnErrorSchema>;
+export type WorkflowTarget = Static<typeof workflowTargetSchema>;
 export type WorkflowWaitSpec = Static<typeof workflowWaitSchema>;
 export type WorkflowArgDefinition = Static<typeof workflowArgDefinitionSchema>;
 export type WorkflowCommandStep = Static<typeof workflowCommandStepSchema>;
+export type WorkflowAssertStep = Static<typeof workflowAssertStepSchema>;
 export type WorkflowRepeatStep = {
 	id?: string;
 	repeat: number;
@@ -113,7 +149,7 @@ export type WorkflowEachStep = {
 	steps: WorkflowStep[];
 	onError?: WorkflowOnErrorPolicy;
 };
-export type WorkflowStep = WorkflowCommandStep | WorkflowRepeatStep | WorkflowEachStep;
+export type WorkflowStep = WorkflowCommandStep | WorkflowAssertStep | WorkflowRepeatStep | WorkflowEachStep;
 export type WorkflowDefinition = Static<typeof workflowSchema>;
 
 export interface WorkflowValidationError {

@@ -1,0 +1,23 @@
+# Facts
+
+- The implementation preserves existing REPL semantics: direct page DOM access still happens through browserjs(), and new CI assertions are added separately.
+- A shared page execution helper exists for new page-context assertion scripts and supports user-script worlds, serialized args, console capture, frame targeting, and abort handling.
+- The shared page execution helper uses Chrome userScripts termination with an executionId when available so aborted page executions can be preempted.
+- The bridge protocol exposes page_assert as a non-sensitive capability, while expression assertions in main world reuse the existing sensitive eval gate.
+- Electron-targeted page_assert requests fail with a clear tested unsupported message instead of a generic dispatcher error.
+- Page assertions support expression, text, selector, role, label, and URL checks with auto-waiting, attempts, duration, timeout, tabId, and frameId in the result.
+- Assertion failures return structured PageAssertResult objects with ok false, and bridge transport errors remain ordinary bridge errors.
+- The CLI exposes shuvgeist assert subcommands for expr, text, selector, role, label, and url, with target, timeout, interval, visibility, count, and world flags where applicable.
+- The CLI exits 0 for passing assertions, 1 for assertion failures, 2 when no extension target is reachable, and 3 for auth, registration, invalid method, network, or config errors.
+- Workflow definitions support target modes active, new-tab, and pinned-tab, and targetable steps inherit pinned tabId and frameId unless they explicitly override them.
+- Workflow new-tab mode records non-fatal warnings when a targetable step runs before any pinned tabId exists, and those warnings do not make the workflow fail.
+- Navigate bridge responses preserve tabId for current-tab and new-tab navigations so workflow target pinning has a stable source.
+- Workflow assertion steps can pass, fail, halt by default, continue with onError continue, and capture the PageAssertResult under as on both pass and fail paths.
+- Workflow mode allows the CI-useful frame, network, device, performance, and record methods while keeping select_element, recursive workflow methods, and session methods disallowed.
+- Native ref click and fill support trusted debugger-backed input through typed NativeInputEventsRuntimeProvider methods and never silently fall back to synthetic DOM events.
+- Native ref click and fill support iframe and subframe refs by resolving the correct frame context and dispatching trusted input to the resolved element.
+- Documentation, README examples, the Shuvgeist skill guide, and CHANGELOG explain deterministic e2e assertions, workflow target pinning, native refs, exit codes, and sensitive-access caveats.
+- Required tests are hermetic by default, and stable live browser coverage uses a local deterministic fixture under Playwright extension e2e tests.
+- Headless launch is verified end to end: shuvgeist launch --headless produces a connected extension target before docs claim CI readiness.
+- Each implementation chunk starts from live git status, runs required GitNexus impact checks before symbol edits, keeps changes chunk-scoped, and validates before stopping.
+- The final validation gate for implementation is ./check.sh, npm run build, and npm run build:cli, with Playwright extension e2e run when the live fixture smoke is stable.

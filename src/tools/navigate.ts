@@ -28,6 +28,7 @@ function markNavigationEnd() {
 const navigateSchema = Type.Object({
 	url: Type.Optional(Type.String({ description: "URL to navigate to (in current tab or new tab if newTab is true)" })),
 	newTab: Type.Optional(Type.Boolean({ description: "Set to true to open URL in a new tab instead of current tab" })),
+	tabId: Type.Optional(Type.Number({ description: "Explicit tab ID to navigate instead of the active tab" })),
 	listTabs: Type.Optional(Type.Boolean({ description: "Set to true to list all open tabs" })),
 	switchToTab: Type.Optional(Type.Number({ description: "Tab ID to switch to (get IDs from listTabs)" })),
 });
@@ -92,7 +93,7 @@ export class NavigateTool implements AgentTool<typeof navigateSchema, NavigateRe
 		}
 
 		// Get active tab for navigation actions
-		const { tabId } = await resolveTabTarget({ windowId: this.windowId });
+		const { tabId } = await resolveTabTarget({ windowId: this.windowId, tabId: args.tabId });
 
 		let finalUrl: string;
 		let targetTabId = tabId;

@@ -10,6 +10,7 @@ export interface CliFlags {
 	token?: string;
 	json?: boolean;
 	timeout?: string;
+	interval?: string;
 	out?: string;
 	maxWidth?: string;
 	maxHeight?: string;
@@ -37,6 +38,15 @@ export interface CliFlags {
 	minScore?: string;
 	name?: string;
 	value?: string;
+	world?: string;
+	exact?: boolean;
+	visible?: boolean;
+	enabled?: boolean;
+	native?: boolean;
+	count?: string;
+	minCount?: string;
+	maxCount?: string;
+	urlPattern?: string;
 	search?: string;
 	includeSensitive?: boolean;
 	preset?: string;
@@ -85,6 +95,7 @@ export type CliCommandPlan =
 			target?: BridgeTarget;
 	  }
 	| { kind: "repl"; params: Record<string, unknown>; defaultTimeoutMs: number; target?: BridgeTarget }
+	| { kind: "assert"; params: Record<string, unknown>; defaultTimeoutMs: number; target?: BridgeTarget }
 	| { kind: "screenshot"; params: Record<string, unknown>; defaultTimeoutMs: number; target?: BridgeTarget }
 	| { kind: "cookies"; defaultTimeoutMs: number; target?: BridgeTarget }
 	| {
@@ -267,7 +278,9 @@ export function isNetworkOrConfigError(err: unknown): boolean {
 }
 
 export function exitCodeForResponse(response: BridgeResponse): number {
-	if (!response.error) return 0;
+	if (!response.error) {
+		return isAssertionResult(response.result) && response.result.ok === false ? 1 : 0;
+	}
 	if (response.error.code === ErrorCodes.NO_EXTENSION_TARGET) return 2;
 	if (
 		response.error.code === ErrorCodes.AUTH_FAILED ||
@@ -277,6 +290,18 @@ export function exitCodeForResponse(response: BridgeResponse): number {
 		return 3;
 	}
 	return 1;
+}
+
+function isAssertionResult(value: unknown): value is { ok: boolean; kind: string; attempts: number } {
+	return (
+		typeof value === "object" &&
+		value !== null &&
+		"ok" in value &&
+		"kind" in value &&
+		"attempts" in value &&
+		typeof (value as { ok?: unknown }).ok === "boolean" &&
+		typeof (value as { kind?: unknown }).kind === "string"
+	);
 }
 
 export function createCommandPlan(
@@ -348,6 +373,62 @@ export function createCommandPlan(
 				method: "eval",
 				params,
 				defaultTimeoutMs: BridgeDefaults.SLOW_REQUEST_TIMEOUT_MS,
+				target,
+			};
+		}
+		case "assert": {
+			const mode = positionals[0];
+			const query = positionals.slice(1).join(" ");
+			const params: Record<string, unknown> = {};
+			applyTargetFlags(flags, params);
+			const assertionTimeoutMs = parseTimeout(flags.timeout, 5_000) ?? 5_000;
+			params.timeoutMs = assertionTimeoutMs;
+			if (flags.interval) params.intervalMs = parseTimeout(flags.interval, 100);
+			if (flags.exact) params.exact = true;
+			if (flags.visible) params.visible = true;
+			if (flags.enabled) params.enabled = true;
+			if (flags.count) params.count = Number.parseInt(flags.count, 10);
+			if (flags.minCount) params.minCount = Number.parseInt(flags.minCount, 10);
+			if (flags.maxCount) params.maxCount = Number.parseInt(flags.maxCount, 10);
+			if (flags.world === "main") params.world = "main";
+			if (flags.urlPattern) params.urlPattern = flags.urlPattern;
+			if (mode === "expr" || mode === "expression") {
+				if (!query) return { kind: "usage-error", message: "Usage: shuvgeist assert expr <expression>" };
+				params.kind = "expression";
+				params.expression = query;
+			} else if (mode === "text") {
+				if (!query) return { kind: "usage-error", message: "Usage: shuvgeist assert text <text>" };
+				params.kind = "text";
+				params.text = query;
+			} else if (mode === "selector") {
+				if (!query) return { kind: "usage-error", message: "Usage: shuvgeist assert selector <selector>" };
+				params.kind = "selector";
+				params.selector = query;
+			} else if (mode === "role") {
+				if (!query) return { kind: "usage-error", message: "Usage: shuvgeist assert role <role> [--name name]" };
+				params.kind = "role";
+				params.role = query;
+				if (flags.name) params.name = flags.name;
+			} else if (mode === "label") {
+				if (!query) return { kind: "usage-error", message: "Usage: shuvgeist assert label <label>" };
+				params.kind = "label";
+				params.label = query;
+			} else if (mode === "url") {
+				const expected = query || flags.urlPattern;
+				if (!expected)
+					return { kind: "usage-error", message: "Usage: shuvgeist assert url <url> [--url-pattern regex]" };
+				params.kind = "url";
+				if (query) params.url = query;
+			} else {
+				return {
+					kind: "usage-error",
+					message: "Usage: shuvgeist assert <expr|text|selector|role|label|url> <query>",
+				};
+			}
+			return {
+				kind: "assert",
+				params,
+				defaultTimeoutMs: assertionTimeoutMs + 5_000,
 				target,
 			};
 		}
@@ -510,6 +591,7 @@ export function createCommandPlan(
 			}
 			const params: Record<string, unknown> = { refId };
 			applyTargetFlags(flags, params);
+			if (flags.native) params.native = true;
 			if (action === "click") {
 				return {
 					kind: "one-shot",

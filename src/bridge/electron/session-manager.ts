@@ -420,6 +420,9 @@ export class ElectronSessionManager {
 	}
 
 	async refClick(target: BridgeTarget, params: RefClickParams): Promise<RefActionResult> {
+		if (params.native) {
+			throw new Error("Native ref click is not supported for Electron targets");
+		}
 		const resolved = this.resolveTarget(target);
 		if (!resolved) throw noSessionError(target);
 		const ref = this.resolveRef(resolved.session.id, resolved.window.ref, params.refId);
@@ -428,6 +431,9 @@ export class ElectronSessionManager {
 	}
 
 	async refFill(target: BridgeTarget, params: RefFillParams): Promise<RefActionResult> {
+		if (params.native) {
+			throw new Error("Native ref fill is not supported for Electron targets");
+		}
 		const resolved = this.resolveTarget(target);
 		if (!resolved) throw noSessionError(target);
 		const ref = this.resolveRef(resolved.session.id, resolved.window.ref, params.refId);

@@ -3,12 +3,14 @@ import {
 	validateWorkflowDefinition,
 	WORKFLOW_MAX_LOOP_ITERATIONS,
 	type WorkflowArgDefinition,
+	type WorkflowAssertStep,
 	type WorkflowCommandStep,
 	type WorkflowDefinition,
 	type WorkflowEachStep,
 	type WorkflowOnErrorPolicy,
 	type WorkflowRepeatStep,
 	type WorkflowStep,
+	type WorkflowTarget,
 	type WorkflowWaitSpec,
 } from "../bridge/workflow-schema.js";
 
@@ -20,13 +22,62 @@ const DEFAULT_ALLOWED_METHODS = new Set<string>([
 	"screenshot",
 	"eval",
 	"page_snapshot",
+	"page_assert",
 	"locate_by_role",
 	"locate_by_text",
 	"locate_by_label",
 	"ref_click",
 	"ref_fill",
+	"frame_list",
+	"frame_tree",
+	"network_start",
+	"network_stop",
+	"network_list",
+	"network_clear",
+	"network_stats",
+	"network_get",
+	"network_body",
+	"network_curl",
+	"device_emulate",
+	"device_reset",
+	"perf_metrics",
+	"perf_trace_start",
+	"perf_trace_stop",
+	"record_start",
+	"record_stop",
+	"record_status",
 ]);
 const DISALLOWED_METHODS = new Set<string>(["workflow_run", "workflow_validate", "select_element"]);
+const TARGETABLE_METHODS = new Set<string>([
+	"navigate",
+	"repl",
+	"screenshot",
+	"eval",
+	"page_snapshot",
+	"page_assert",
+	"locate_by_role",
+	"locate_by_text",
+	"locate_by_label",
+	"ref_click",
+	"ref_fill",
+	"frame_list",
+	"frame_tree",
+	"network_start",
+	"network_stop",
+	"network_list",
+	"network_clear",
+	"network_stats",
+	"network_get",
+	"network_body",
+	"network_curl",
+	"device_emulate",
+	"device_reset",
+	"perf_metrics",
+	"perf_trace_start",
+	"perf_trace_stop",
+	"record_start",
+	"record_status",
+]);
 const UNRESOLVED_CAPTURE_SENTINEL = "__workflow_unresolved_capture__";
 
 export type WorkflowDispatch = (
@@ -55,7 +106,7 @@ export type WorkflowStepStatus = "ok" | "error" | "aborted";
 
 export interface WorkflowStepResult {
 	path: string;
-	type: "command" | "repeat" | "each";
+	type: "command" | "assert" | "repeat" | "each";
 	status: WorkflowStepStatus;
 	durationMs: number;
 	method?: string;
@@ -64,6 +115,12 @@ export interface WorkflowStepResult {
 	iterations?: number;
 	result?: unknown;
 	error?: string;
+}
+
+export interface WorkflowWarning {
+	path: string;
+	code: "target_unpinned";
+	message: string;
 }
 
 export interface WorkflowRunResult {
@@ -77,6 +134,7 @@ export interface WorkflowRunResult {
 	steps: WorkflowStepResult[];
 	captured: Record<string, unknown>;
 	errors: string[];
+	warnings: WorkflowWarning[];
 	truncation: {
 		stepResults: number;
 		captures: number;
@@ -87,6 +145,7 @@ interface WorkflowExecutionState {
 	executedSteps: number;
 	steps: WorkflowStepResult[];
 	errors: string[];
+	warnings: WorkflowWarning[];
 	truncation: {
 		stepResults: number;
 		captures: number;
@@ -98,11 +157,18 @@ interface WorkflowExecutionContext {
 	variables: Record<string, unknown>;
 	dryRun: boolean;
 	defaultWait?: WorkflowWaitSpec;
+	target: WorkflowTargetState;
 }
 
 interface ExecuteStepsResult {
 	aborted: boolean;
 	halted: boolean;
+}
+
+interface WorkflowTargetState {
+	mode: "active" | "new-tab" | "pinned-tab";
+	tabId?: number;
+	frameId?: number;
 }
 
 export class WorkflowEngine {
@@ -145,6 +211,7 @@ export class WorkflowEngine {
 				steps: [],
 				captured: {},
 				errors: validation.errors,
+				warnings: [],
 				truncation: { stepResults: 0, captures: 0 },
 			};
 		}
@@ -153,6 +220,7 @@ export class WorkflowEngine {
 			executedSteps: 0,
 			steps: [],
 			errors: [],
+			warnings: [],
 			truncation: { stepResults: 0, captures: 0 },
 			captured: {},
 		};
@@ -160,6 +228,7 @@ export class WorkflowEngine {
 			variables: validation.variables,
 			dryRun,
 			defaultWait: validation.workflow.defaultWait,
+			target: createTargetState(validation.workflow.target),
 		};
 
 		let aborted = false;
@@ -187,6 +256,7 @@ export class WorkflowEngine {
 			steps: state.steps,
 			captured: state.captured,
 			errors: state.errors,
+			warnings: state.warnings,
 			truncation: state.truncation,
 		};
 	}
@@ -211,6 +281,9 @@ export class WorkflowEngine {
 		const variables = this.resolveInitialVariables(validation.value.args ?? {}, providedArgs ?? {});
 		if (!variables.ok) {
 			return { ok: false, errors: variables.errors };
+		}
+		if (validation.value.target?.mode === "pinned-tab" && typeof validation.value.target.tabId !== "number") {
+			return { ok: false, errors: ["Workflow target mode pinned-tab requires target.tabId"] };
 		}
 
 		return { ok: true, workflow: validation.value, variables: variables.values };
@@ -293,6 +366,9 @@ export class WorkflowEngine {
 		if (isCommandStep(step)) {
 			return this.executeCommandStep(step, context, state, signal, path);
 		}
+		if (isAssertStep(step)) {
+			return this.executeAssertStep(step, context, state, signal, path);
+		}
 		if (isRepeatStep(step)) {
 			return this.executeRepeatStep(step, context, state, signal, path);
 		}
@@ -310,7 +386,7 @@ export class WorkflowEngine {
 		const wait = step.wait ?? context.defaultWait;
 		const policy: WorkflowOnErrorPolicy = step.onError ?? "stop";
 
-		if (DISALLOWED_METHODS.has(step.method) || step.method === "workflow_run") {
+		if (DISALLOWED_METHODS.has(step.method) || step.method === "workflow_run" || step.method.startsWith("session_")) {
 			const message = `Step ${path} uses disallowed workflow method: ${step.method}`;
 			this.recordStep(
 				state,
@@ -373,7 +449,9 @@ export class WorkflowEngine {
 		}
 
 		try {
-			const result = context.dryRun ? { dryRun: true } : await this.dispatch(step.method, resolvedParams, signal);
+			const targetParams = this.applyTargetToParams(step.method, resolvedParams, context, state, path);
+			const result = context.dryRun ? { dryRun: true } : await this.dispatch(step.method, targetParams, signal);
+			this.updatePinnedTargetFromResult(step.method, result, context);
 			const boundedResult = this.boundValue(result, this.maxStepResultChars);
 
 			if (step.as) {
@@ -417,6 +495,95 @@ export class WorkflowEngine {
 			if (aborted) {
 				return { aborted: true, halted: false };
 			}
+			return { aborted: false, halted: policy === "stop" };
+		}
+	}
+
+	private async executeAssertStep(
+		step: WorkflowAssertStep,
+		context: WorkflowExecutionContext,
+		state: WorkflowExecutionState,
+		signal: AbortSignal | undefined,
+		path: string,
+	): Promise<ExecuteStepsResult> {
+		const started = Date.now();
+		const wait = step.wait ?? context.defaultWait;
+		const policy: WorkflowOnErrorPolicy = step.onError ?? "stop";
+		let resolvedParams: Record<string, unknown>;
+		try {
+			resolvedParams = this.substituteValue(step.assert, context.variables, context.dryRun, path) as Record<
+				string,
+				unknown
+			>;
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			this.recordStep(
+				state,
+				{
+					path,
+					type: "assert",
+					status: "error",
+					durationMs: Date.now() - started,
+					method: "page_assert",
+					wait,
+					as: step.as,
+					error: message,
+				},
+				policy === "stop",
+			);
+			return { aborted: false, halted: policy === "stop" };
+		}
+
+		try {
+			const targetParams = this.applyTargetToParams("page_assert", resolvedParams, context, state, path);
+			const result = context.dryRun
+				? { dryRun: true, ok: true }
+				: await this.dispatch("page_assert", targetParams, signal);
+			const boundedResult = this.boundValue(result, this.maxStepResultChars);
+			if (step.as) {
+				context.variables[step.as] = context.dryRun ? UNRESOLVED_CAPTURE_SENTINEL : result;
+				const boundedCapture = this.boundValue(result, this.maxCaptureChars);
+				if (Object.keys(state.captured).length < this.maxRecordedSteps) {
+					state.captured[step.as] = boundedCapture;
+				} else {
+					state.truncation.captures += 1;
+				}
+			}
+			const assertionOk = context.dryRun || assertionResultOk(result);
+			this.recordStep(
+				state,
+				{
+					path,
+					type: "assert",
+					status: assertionOk ? "ok" : "error",
+					durationMs: Date.now() - started,
+					method: "page_assert",
+					wait,
+					as: step.as,
+					result: boundedResult,
+					error: assertionOk ? undefined : assertionResultMessage(result),
+				},
+				!assertionOk && policy === "stop",
+			);
+			return { aborted: false, halted: !assertionOk && policy === "stop" };
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			const aborted = isAbortError(error, signal);
+			this.recordStep(
+				state,
+				{
+					path,
+					type: "assert",
+					status: aborted ? "aborted" : "error",
+					durationMs: Date.now() - started,
+					method: "page_assert",
+					wait,
+					as: step.as,
+					error: message,
+				},
+				!aborted && policy === "stop",
+			);
+			if (aborted) return { aborted: true, halted: false };
 			return { aborted: false, halted: policy === "stop" };
 		}
 	}
@@ -724,10 +891,65 @@ export class WorkflowEngine {
 			state.errors.push(message);
 		}
 	}
+
+	private applyTargetToParams(
+		method: string,
+		params: Record<string, unknown> | undefined,
+		context: WorkflowExecutionContext,
+		state: WorkflowExecutionState,
+		path: string,
+	): Record<string, unknown> | undefined {
+		if (!TARGETABLE_METHODS.has(method) || context.target.mode === "active") {
+			return params;
+		}
+
+		const nextParams = { ...(params ?? {}) };
+		const hasTabId = Object.hasOwn(nextParams, "tabId");
+		const hasFrameId = Object.hasOwn(nextParams, "frameId");
+
+		if (context.target.mode === "new-tab" && typeof context.target.tabId !== "number") {
+			if (method === "navigate" && !hasTabId) {
+				nextParams.newTab = nextParams.newTab !== false;
+				return nextParams;
+			}
+			state.warnings.push({
+				path,
+				code: "target_unpinned",
+				message: `Step ${path} uses targetable method '${method}' before new-tab target pinning has a tabId`,
+			});
+			return params;
+		}
+
+		if (!hasTabId && typeof context.target.tabId === "number") {
+			nextParams.tabId = context.target.tabId;
+		}
+		if (method !== "navigate" && !hasFrameId && typeof context.target.frameId === "number") {
+			nextParams.frameId = context.target.frameId;
+		}
+
+		return nextParams;
+	}
+
+	private updatePinnedTargetFromResult(method: string, result: unknown, context: WorkflowExecutionContext): void {
+		if (method !== "navigate" || context.target.mode !== "new-tab" || typeof context.target.tabId === "number") {
+			return;
+		}
+		if (!isRecord(result) || typeof result.tabId !== "number") {
+			return;
+		}
+		context.target.tabId = result.tabId;
+		if (typeof result.frameId === "number") {
+			context.target.frameId = result.frameId;
+		}
+	}
 }
 
 function isCommandStep(step: WorkflowStep): step is WorkflowCommandStep {
 	return Object.hasOwn(step, "method");
+}
+
+function isAssertStep(step: WorkflowStep): step is WorkflowAssertStep {
+	return Object.hasOwn(step, "assert");
 }
 
 function isRepeatStep(step: WorkflowStep): step is WorkflowRepeatStep {
@@ -736,6 +958,17 @@ function isRepeatStep(step: WorkflowStep): step is WorkflowRepeatStep {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function createTargetState(target: WorkflowTarget | undefined): WorkflowTargetState {
+	if (!target) {
+		return { mode: "active" };
+	}
+	return {
+		mode: target.mode,
+		tabId: target.tabId,
+		frameId: target.frameId,
+	};
 }
 
 function matchExactToken(value: string): string | undefined {
@@ -800,4 +1033,15 @@ function isAbortError(error: unknown, signal?: AbortSignal): boolean {
 	}
 	const message = error.message.toLowerCase();
 	return message.includes("abort");
+}
+
+function assertionResultOk(result: unknown): boolean {
+	return isRecord(result) && result.ok === true;
+}
+
+function assertionResultMessage(result: unknown): string {
+	if (isRecord(result) && typeof result.message === "string") {
+		return result.message;
+	}
+	return "Workflow assertion failed";
 }

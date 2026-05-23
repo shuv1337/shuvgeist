@@ -8,6 +8,9 @@ describe("workflow schema", () => {
 	it("accepts valid command, repeat, and each workflows", () => {
 		const workflow = {
 			name: "valid-workflow",
+			target: {
+				mode: "new-tab",
+			},
 			args: {
 				urls: {
 					required: true,
@@ -24,6 +27,14 @@ describe("workflow schema", () => {
 						url: "%{startUrl}",
 					},
 					onError: "stop",
+				},
+				{
+					assert: {
+						kind: "text",
+						text: "Welcome",
+						timeoutMs: 5000,
+					},
+					as: "welcome",
 				},
 				{
 					repeat: 2,

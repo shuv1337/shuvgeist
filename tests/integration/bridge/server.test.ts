@@ -561,6 +561,28 @@ describe("BridgeServer", () => {
 					target: { kind: "electron-window", sessionId: "e1", windowRef: "w1" },
 				}),
 			).resolves.toMatchObject({ id: 9, result: { ok: true, refId: "e1:w1:ref1", selector: "#save" } });
+			await expect(
+				sendRequestAndReadResponse(cli.ws, {
+					id: 10,
+					method: "ref_click",
+					params: { refId: "e1:w1:ref1", native: true },
+					target: { kind: "electron-window", sessionId: "e1", windowRef: "w1" },
+				}),
+			).resolves.toMatchObject({
+				id: 10,
+				error: { message: "Native ref click is not supported for Electron targets" },
+			});
+			await expect(
+				sendRequestAndReadResponse(cli.ws, {
+					id: 11,
+					method: "page_assert",
+					params: { kind: "text", text: "Save" },
+					target: { kind: "electron-window", sessionId: "e1", windowRef: "w1" },
+				}),
+			).resolves.toMatchObject({
+				id: 11,
+				error: { message: "Electron target dispatch for 'page_assert' is not supported yet. Use Chrome targets for page assertions." },
+			});
 
 			cdp.setTargets([
 				{
@@ -578,16 +600,16 @@ describe("BridgeServer", () => {
 					webSocketDebuggerUrl: `ws://127.0.0.1:${cdpPort}/devtools/page/2`,
 				},
 			]);
-			await sendRequestAndReadResponse(cli.ws, { id: 10, method: "electron_windows", params: {} });
+			await sendRequestAndReadResponse(cli.ws, { id: 12, method: "electron_windows", params: {} });
 			await expect(
 				sendRequestAndReadResponse(cli.ws, {
-					id: 11,
+					id: 13,
 					method: "ref_click",
 					params: { refId: "e1:w1:ref1" },
 					target: { kind: "electron-window", sessionId: "e1", windowRef: "w2" },
 				}),
 			).resolves.toMatchObject({
-				id: 11,
+				id: 13,
 				error: { message: "Electron ref 'e1:w1:ref1' does not exist for target 'e1:w2'. Run locate or snapshot again." },
 			});
 		} finally {
