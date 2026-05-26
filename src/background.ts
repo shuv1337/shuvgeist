@@ -65,23 +65,16 @@ import type {
 } from "./tts/internal-messages.js";
 import { isKokoroHealthStale, probeKokoroHealth, refreshKokoroHealth } from "./tts/kokoro-health.js";
 import { configureTtsOverlayWorld, injectTtsOverlay, removeTtsOverlay } from "./tts/overlay-inject.js";
-import {
-	buildProviderConfig,
-	getProviderVoiceId,
-	getSampleTtsPhrase,
-	listTtsVoices,
-	prepareTtsText,
-} from "./tts/service.js";
+import { TtsPlaybackCoordinator } from "./tts/playback-coordinator.js";
+import { getProviderVoiceId, getSampleTtsPhrase, listTtsVoices } from "./tts/service.js";
 import { DEFAULT_TTS_SETTINGS, loadTtsSettings } from "./tts/settings.js";
 import {
 	createInitialTtsPlaybackState,
 	type KokoroHealthStatus,
 	reduceTtsPlaybackState,
-	type TtsFallbackReason,
 	type TtsOverlayState,
 	type TtsPlayhead,
 	type TtsProviderId,
-	type TtsReadingSession,
 	type TtsSettingsSnapshot,
 	type TtsVoice,
 } from "./tts/types.js";
@@ -156,8 +149,6 @@ let ttsOverlayTabId: number | null = null;
 let ttsWorldConfigured = false;
 
 const overlayPorts = new Map<number, chrome.runtime.Port>();
-const activeReadingSessions = new Map<string, TtsReadingSession>();
-const sessionFallbackOverrides = new Map<string, Exclude<TtsProviderId, "kokoro">>();
 
 function generateSessionId(): string {
 	return `tts-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
@@ -180,12 +171,15 @@ function sendToOverlay(tabId: number, message: TtsPortMessage): void {
 }
 
 function markOverlayDetached(tabId: number): void {
-	for (const session of activeReadingSessions.values()) {
-		if (session.tabId === tabId) {
-			session.overlayAttached = false;
-		}
-	}
+	ttsCoordinator.markOverlayDetached(tabId);
 }
+
+const ttsCoordinator = new TtsPlaybackCoordinator({
+	sendToOverlay,
+	logEvent: logTtsEvent,
+	now: () => Date.now(),
+	createSessionId: generateSessionId,
+});
 
 function getBackgroundProviderSecrets() {
 	const storage = ensureBackgroundStorage();
@@ -218,16 +212,11 @@ async function refreshTtsSettingsState(): Promise<void> {
 }
 
 function currentTtsOverlayState(): TtsOverlayState {
-	const activeSession = ttsOverlayTabId
-		? Array.from(activeReadingSessions.values()).find(
-				(session) => session.tabId === ttsOverlayTabId && session.hasReadAlong,
-			)
-		: undefined;
-	return {
-		...ttsState,
-		enabled: ttsSettingsSnapshot.enabled,
-		hasReadAlong: Boolean(activeSession?.hasReadAlong),
-	};
+	return ttsCoordinator.currentOverlayState({
+		overlayTabId: ttsOverlayTabId,
+		playbackState: ttsState,
+		settings: ttsSettingsSnapshot,
+	});
 }
 
 async function ensureTtsOverlayWorld(): Promise<void> {
@@ -411,45 +400,12 @@ async function applyOffscreenEvent(response: TtsOffscreenResponse): Promise<void
 	await syncTtsOverlay();
 }
 
-function resolveVoiceIdForProvider(provider: TtsProviderId): string {
-	return getProviderVoiceId(ttsSettingsSnapshot, provider) || ttsSettingsSnapshot.voiceId;
-}
-
-function getModelIdForProvider(provider: TtsProviderId): string | undefined {
-	switch (provider) {
-		case "kokoro":
-			return ttsSettingsSnapshot.kokoroModelId;
-		case "openai":
-			return ttsSettingsSnapshot.openaiModelId;
-		case "elevenlabs":
-			return ttsSettingsSnapshot.elevenLabsModelId;
-	}
-}
-
 function endReadingSession(sessionId: string, notifyOverlay = true): void {
-	const session = activeReadingSessions.get(sessionId);
-	if (!session) {
-		return;
-	}
-	activeReadingSessions.delete(sessionId);
-	sessionFallbackOverrides.delete(sessionId);
-	if (notifyOverlay && session.overlayAttached) {
-		sendToOverlay(session.tabId, { type: "tts-session-end", sessionId });
-	}
-	logTtsEvent("session.end", {
-		sessionId,
-		provider: session.provider,
-		hasReadAlong: session.hasReadAlong,
-		fallbackReason: session.fallbackReason,
-	});
+	ttsCoordinator.endReadingSession(sessionId, notifyOverlay);
 }
 
 function forwardPlayhead(sessionId: string, playhead: TtsPlayhead): void {
-	const session = activeReadingSessions.get(sessionId);
-	if (!session || !session.overlayAttached) {
-		return;
-	}
-	sendToOverlay(session.tabId, { type: "tts-playhead", sessionId, playhead });
+	ttsCoordinator.forwardPlayhead(sessionId, playhead);
 }
 
 async function speakCommand(payload: TtsSpeakPayload, context: { tabId?: number } = {}): Promise<TtsRuntimeResponse> {
@@ -459,123 +415,77 @@ async function speakCommand(payload: TtsSpeakPayload, context: { tabId?: number 
 	}
 
 	const tabId = context.tabId ?? ttsOverlayTabId ?? undefined;
-	const sessionId = payload.sessionId ?? generateSessionId();
+	const sessionId = ttsCoordinator.createSessionId(payload);
 	const requestedProvider = ttsSettingsSnapshot.provider;
-	const fallbackProvider = payload.fallbackProvider ?? sessionFallbackOverrides.get(sessionId);
-	if (fallbackProvider) {
-		sessionFallbackOverrides.set(sessionId, fallbackProvider);
-	}
-
-	const prepared =
-		payload.command.kind === "raw-text"
-			? prepareTtsText(payload.command.text, ttsSettingsSnapshot.maxTextChars)
-			: prepareTtsText(payload.command.text, ttsSettingsSnapshot.maxTextChars);
-	if (!prepared.text) {
-		return { ok: false, error: "No readable text to speak" };
-	}
-
-	let provider: TtsProviderId = requestedProvider;
-	let hasReadAlong = false;
-	let fallbackReason: TtsFallbackReason | undefined;
+	const fallbackProvider = ttsCoordinator.rememberFallbackProvider(sessionId, payload.fallbackProvider);
 	let probeStatus: KokoroHealthStatus | null = null;
-
-	if (payload.command.kind === "page-target") {
-		if (requestedProvider !== "kokoro") {
-			fallbackReason = "legacy-provider-mode";
-		} else {
-			probeStatus = isKokoroHealthStale(ttsSettingsSnapshot.kokoroBaseUrl)
-				? await sendKokoroProbeResult(tabId ?? ttsOverlayTabId ?? 0, true)
-				: await sendKokoroProbeResult(tabId ?? ttsOverlayTabId ?? 0, false);
-			if (probeStatus.status === "ok" && ttsSettingsSnapshot.readAlongEnabled && tabId) {
-				hasReadAlong = true;
-			} else if (probeStatus.status === "captioned-unsupported") {
-				fallbackReason = "captioned-unsupported";
-			} else if (probeStatus.status !== "ok") {
-				if (fallbackProvider) {
-					provider = fallbackProvider;
-					fallbackReason = "kokoro-unreachable";
-				} else {
-					return { ok: false, error: probeStatus.message || "Kokoro is unavailable. Choose a one-shot fallback." };
-				}
-			}
-		}
+	if (payload.command.kind === "page-target" && requestedProvider === "kokoro") {
+		probeStatus = isKokoroHealthStale(ttsSettingsSnapshot.kokoroBaseUrl)
+			? await sendKokoroProbeResult(tabId ?? ttsOverlayTabId ?? 0, true)
+			: await sendKokoroProbeResult(tabId ?? ttsOverlayTabId ?? 0, false);
 	}
-
-	if (payload.command.kind === "raw-text" && fallbackProvider) {
-		provider = fallbackProvider;
-		fallbackReason = "kokoro-unreachable";
+	const plan = ttsCoordinator.planSpeak({
+		payload,
+		sessionId,
+		settings: ttsSettingsSnapshot,
+		tabId,
+		fallbackProvider,
+		kokoroStatus: probeStatus,
+	});
+	if ("error" in plan) {
+		return { ok: false, error: plan.error };
 	}
 
 	const providerSecrets = await getBackgroundProviderSecrets();
-	const voiceId = resolveVoiceIdForProvider(provider);
 	ttsState = reduceTtsPlaybackState(ttsState, {
 		type: "speak-start",
-		text: prepared.text,
-		truncated: prepared.truncated || (payload.command.kind === "page-target" && payload.command.truncated),
+		text: plan.preparedText,
+		truncated: plan.truncated,
 	});
 	logTtsEvent("session.start", {
 		sessionId,
-		provider,
+		provider: plan.provider,
 		sourceKind: payload.command.kind,
-		hasReadAlong,
-		fallbackReason,
+		hasReadAlong: plan.hasReadAlong,
+		fallbackReason: plan.fallbackReason,
 		requestedProvider,
 	});
 	await syncTtsOverlay();
 
-	const offscreenMessage: TtsOffscreenMessage = hasReadAlong
-		? {
-				type: "tts-offscreen-synthesize-captioned",
-				sessionId,
-				request: {
-					text: prepared.text,
-					voiceId,
-					speed: ttsSettingsSnapshot.speed,
-					modelId: ttsSettingsSnapshot.kokoroModelId,
-				},
-				config: buildProviderConfig(ttsSettingsSnapshot, "kokoro", providerSecrets),
-			}
-		: {
-				type: "tts-offscreen-synthesize",
-				provider,
-				request: {
-					text: prepared.text,
-					voiceId,
-					speed: ttsSettingsSnapshot.speed,
-					modelId: getModelIdForProvider(provider),
-				},
-				config: buildProviderConfig(ttsSettingsSnapshot, provider, providerSecrets),
-			};
+	const offscreenMessage: TtsOffscreenMessage = ttsCoordinator.createOffscreenMessage(
+		plan,
+		ttsSettingsSnapshot,
+		providerSecrets,
+	);
 
 	const response = await dispatchTtsOffscreenMessage(offscreenMessage);
 	if (!response.ok) {
-		sessionFallbackOverrides.delete(sessionId);
+		ttsCoordinator.clearFallbackProvider(sessionId);
 		return { ok: false, error: response.error };
 	}
 
 	if (payload.command.kind === "page-target" && tabId) {
-		if (hasReadAlong) {
-			activeReadingSessions.set(sessionId, {
-				id: sessionId,
+		if (plan.hasReadAlong) {
+			ttsCoordinator.startReadingSession({
+				sessionId,
 				tabId,
-				provider,
+				provider: plan.provider,
 				sourceKind: "page-target",
-				text: prepared.text,
-				startedAt: Date.now(),
+				text: plan.preparedText,
 				hasReadAlong: true,
-				overlayAttached: true,
+				fallbackReason: plan.fallbackReason,
 			});
 		} else {
-			sessionFallbackOverrides.delete(sessionId);
+			ttsCoordinator.clearFallbackProvider(sessionId);
 		}
 		sendToOverlay(tabId, {
 			type: "tts-session-ack",
 			sessionId,
-			hasReadAlong,
-			fallbackReason,
+			hasReadAlong: plan.hasReadAlong,
+			fallbackReason: plan.fallbackReason,
 		});
-	} else if (!hasReadAlong) {
-		sessionFallbackOverrides.delete(sessionId);
+	} else if (!plan.hasReadAlong) {
+		ttsCoordinator.clearFallbackProvider(sessionId);
 	}
 
 	await applyOffscreenEvent(response);
@@ -1356,10 +1266,8 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 	if (tabId !== ttsOverlayTabId || changeInfo.status !== "complete") return;
 	if (!ttsState.overlayVisible || isProtectedTabUrl(tab.url)) return;
 	markOverlayDetached(tabId);
-	for (const session of activeReadingSessions.values()) {
-		if (session.tabId === tabId) {
-			sendToOverlay(tabId, { type: "tts-session-end", sessionId: session.id });
-		}
+	for (const session of ttsCoordinator.getSessionsForTab(tabId)) {
+		sendToOverlay(tabId, { type: "tts-session-end", sessionId: session.id });
 	}
 	void syncTtsOverlay().catch((error) => {
 		console.warn("[Background:TTS] Failed to re-sync overlay after navigation:", error);
@@ -1374,10 +1282,8 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 		ttsOverlayTabId = null;
 		ttsState = reduceTtsPlaybackState(ttsState, { type: "overlay-closed" });
 	}
-	for (const session of Array.from(activeReadingSessions.values())) {
-		if (session.tabId === tabId) {
-			endReadingSession(session.id, false);
-		}
+	for (const session of ttsCoordinator.getSessionsForTab(tabId)) {
+		endReadingSession(session.id, false);
 	}
 	markOverlayDetached(tabId);
 });
@@ -1555,11 +1461,7 @@ function registerTtsOverlayPort(port: chrome.runtime.Port): void {
 		} catch {}
 	}
 	overlayPorts.set(tabId, port);
-	for (const session of activeReadingSessions.values()) {
-		if (session.tabId === tabId) {
-			session.overlayAttached = true;
-		}
-	}
+	ttsCoordinator.markOverlayAttached(tabId);
 	port.onMessage.addListener((message) => {
 		handleTtsOverlayPortMessage(message, tabId);
 	});

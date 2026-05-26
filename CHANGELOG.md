@@ -8,6 +8,7 @@
 - Bridge protocol method, capability, sensitivity, route, write-lock, CLI command, and default-timeout metadata now derive from a shared command catalog module. (#30)
 - Bridge request target routing now goes through shared target-execution metadata and normalized target error helpers. (#31)
 - Sidepanel session model resolution, metadata, and bridge session runtime behavior now live behind tested sidepanel runtime helpers. (#32)
+- TTS provider fallback decisions and read-along session bookkeeping now run through a tested playback coordinator while background keeps Chrome/offscreen adapters. (#33)
 
 ### Fixed
 
