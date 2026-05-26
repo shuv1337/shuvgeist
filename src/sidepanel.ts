@@ -82,6 +82,7 @@ import {
 	normalizeModelForRuntime,
 	resolveModelSpec as resolveModelSpecFromSources,
 } from "./sidepanel/model-resolution.js";
+import { buildSessionMetadata, shouldSaveSession } from "./sidepanel/session-metadata.js";
 import { ShuvgeistAppStorage } from "./storage/app-storage.js";
 import { registerAskUserWhichElementRenderer } from "./tools/ask-user-which-element-renderer.js";
 import { DebuggerTool } from "./tools/debugger.js";
@@ -427,12 +428,6 @@ const generateTitle = (messages: AgentMessage[]): string => {
 	return text.length <= 50 ? text : `${text.substring(0, 47)}...`;
 };
 
-const shouldSaveSession = (messages: AgentMessage[]): boolean => {
-	const hasUserMsg = messages.some((m: AgentMessage) => m.role === "user" || m.role === "user-with-attachments");
-	const hasAssistantMsg = messages.some((m: AgentMessage) => m.role === "assistant");
-	return hasUserMsg && hasAssistantMsg;
-};
-
 const saveSession = async () => {
 	if (!storage.sessions || !currentSessionId || !agent) return;
 
@@ -440,71 +435,16 @@ const saveSession = async () => {
 	if (!shouldSaveSession(state.messages)) return;
 
 	try {
-		// Calculate cumulative usage from all assistant messages
-		const usage = {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		};
-
-		for (const msg of state.messages) {
-			if (msg.role === "assistant") {
-				usage.input += msg.usage.input;
-				usage.output += msg.usage.output;
-				usage.cacheRead += msg.usage.cacheRead;
-				usage.cacheWrite += msg.usage.cacheWrite;
-				usage.totalTokens += msg.usage.input + msg.usage.output + msg.usage.cacheRead + msg.usage.cacheWrite;
-				if (msg.usage.cost) {
-					usage.cost.input += msg.usage.cost.input;
-					usage.cost.output += msg.usage.cost.output;
-					usage.cost.cacheRead += msg.usage.cost.cacheRead;
-					usage.cost.cacheWrite += msg.usage.cost.cacheWrite;
-					usage.cost.total += msg.usage.cost.total;
-				}
-			}
-		}
-
-		// Generate preview text (first 2KB of user + assistant text)
-		let preview = "";
-		for (const msg of state.messages) {
-			if (preview.length >= 2048) break;
-			if (msg.role === "user") {
-				const text =
-					typeof msg.content === "string"
-						? msg.content
-						: msg.content
-								.filter((c) => c.type === "text")
-								.map((c) => c.text)
-								.join("\n") || "";
-				preview += `${text}\n`;
-			} else if (msg.role === "assistant") {
-				const text = msg.content
-					.filter((c) => c.type === "text" || c.type === "thinking")
-					.map((c) => (c.type === "text" ? c.text : c.thinking))
-					.join("\n");
-				preview += `${text}\n`;
-			}
-		}
-		preview = preview.substring(0, 2048);
-
 		// Preserve createdAt if session already exists
 		const existingMetadata = await storage.sessions.getMetadata(currentSessionId);
 		const createdAt = existingMetadata?.createdAt || new Date().toISOString();
-
-		const metadata = {
-			id: currentSessionId,
+		const metadata = buildSessionMetadata({
+			sessionId: currentSessionId,
 			title: currentTitle,
 			createdAt,
 			lastModified: new Date().toISOString(),
-			messageCount: state.messages.length,
-			usage,
-			modelId: state.model.id,
-			thinkingLevel: state.thinkingLevel,
-			preview,
-		};
+			state,
+		});
 
 		await storage.sessions.saveSession(currentSessionId, state, metadata, currentTitle);
 	} catch (err) {
