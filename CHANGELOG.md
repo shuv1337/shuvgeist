@@ -7,6 +7,7 @@
 - Expanded README, CLI help, site, skill, and e2e CI documentation for deterministic assertions, workflow target pinning, native semantic refs, readiness checks, and exit codes.
 - Bridge protocol method, capability, sensitivity, route, write-lock, CLI command, and default-timeout metadata now derive from a shared command catalog module. (#30)
 - Bridge request target routing now goes through shared target-execution metadata and normalized target error helpers. (#31)
+- Sidepanel session model resolution, metadata, and bridge session runtime behavior now live behind tested sidepanel runtime helpers. (#32)
 
 ### Fixed
 

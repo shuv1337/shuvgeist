@@ -9,6 +9,29 @@ export function shouldSaveSession(messages: AgentMessage[]): boolean {
 	return hasUserMsg && hasAssistantMsg;
 }
 
+export function generateSessionTitle(messages: AgentMessage[]): string {
+	const firstUserMsg = messages.find((message) => message.role === "user" || message.role === "user-with-attachments");
+	if (!firstUserMsg || (firstUserMsg.role !== "user" && firstUserMsg.role !== "user-with-attachments")) return "";
+
+	let text = "";
+	const content = firstUserMsg.content;
+	if (typeof content === "string") {
+		text = content;
+	} else {
+		const textBlocks = content.filter((block) => block.type === "text");
+		text = textBlocks.map((block) => block.text || "").join(" ");
+	}
+
+	text = text.trim();
+	if (!text) return "";
+
+	const sentenceEnd = text.search(/[.!?]/);
+	if (sentenceEnd > 0 && sentenceEnd <= 50) {
+		return text.substring(0, sentenceEnd + 1);
+	}
+	return text.length <= 50 ? text : text.substring(0, 47) + "...";
+}
+
 export function aggregateSessionUsage(messages: AgentMessage[]): SessionMetadata["usage"] {
 	const usage: SessionMetadata["usage"] = {
 		input: 0,

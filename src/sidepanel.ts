@@ -31,22 +31,20 @@ import {
 	type BridgeToSidepanelMessage,
 } from "./bridge/internal-messages.js";
 import { bridgeLog } from "./bridge/logging.js";
-import type { BridgeMethod } from "./bridge/protocol.js";
-import {
-	type BridgeScreenshotResult,
-	ErrorCodes,
-	type ReplParams,
-	type ScreenshotParams,
-	type SessionArtifactsResult,
-	type SessionInjectParams,
-	type SessionNewParams,
-	type SessionNewResult,
-	type SessionSetModelParams,
-	type SessionSetModelResult,
+import type {
+	BridgeMethod,
+	BridgeScreenshotResult,
+	ReplParams,
+	ScreenshotParams,
+	SessionArtifactsResult,
+	SessionInjectParams,
+	SessionNewParams,
+	SessionNewResult,
+	SessionSetModelParams,
+	SessionSetModelResult,
 } from "./bridge/protocol.js";
 import {
 	projectSessionMessage,
-	projectSessionMessages,
 	type SessionBridgeAdapter,
 	type SessionBridgeEventEnvelope,
 	type SessionSnapshot,
@@ -82,7 +80,8 @@ import {
 	normalizeModelForRuntime,
 	resolveModelSpec as resolveModelSpecFromSources,
 } from "./sidepanel/model-resolution.js";
-import { buildSessionMetadata, shouldSaveSession } from "./sidepanel/session-metadata.js";
+import { buildSessionMetadata, generateSessionTitle, shouldSaveSession } from "./sidepanel/session-metadata.js";
+import { SidepanelSessionRuntime } from "./sidepanel/session-runtime.js";
 import { ShuvgeistAppStorage } from "./storage/app-storage.js";
 import { registerAskUserWhichElementRenderer } from "./tools/ask-user-which-element-renderer.js";
 import { DebuggerTool } from "./tools/debugger.js";
@@ -404,30 +403,6 @@ async function updateAuthLabel() {
 // ============================================================================
 // HELPERS
 // ============================================================================
-const generateTitle = (messages: AgentMessage[]): string => {
-	const firstUserMsg = messages.find((m) => m.role === "user" || m.role === "user-with-attachments");
-	if (!firstUserMsg || (firstUserMsg.role !== "user" && firstUserMsg.role !== "user-with-attachments")) return "";
-
-	let text = "";
-	const content = firstUserMsg.content;
-
-	if (typeof content === "string") {
-		text = content;
-	} else {
-		const textBlocks = content.filter((c) => c.type === "text");
-		text = textBlocks.map((c) => c.text || "").join(" ");
-	}
-
-	text = text.trim();
-	if (!text) return "";
-
-	const sentenceEnd = text.search(/[.!?]/);
-	if (sentenceEnd > 0 && sentenceEnd <= 50) {
-		return text.substring(0, sentenceEnd + 1);
-	}
-	return text.length <= 50 ? text : `${text.substring(0, 47)}...`;
-};
-
 const saveSession = async () => {
 	if (!storage.sessions || !currentSessionId || !agent) return;
 
@@ -465,18 +440,7 @@ const emitSessionBridgeEvent = (event: SessionBridgeEventEnvelope) => {
 };
 
 const currentSessionSnapshot = (): SessionSnapshot => {
-	const messages = agent?.state.messages || [];
-	const projectedMessages = projectSessionMessages(messages);
-	return {
-		sessionId: currentSessionId,
-		persisted: Boolean(currentSessionId),
-		title: currentTitle,
-		model: agent?.state.model ? { provider: agent.state.model.provider, id: agent.state.model.id } : undefined,
-		isStreaming: Boolean(agent?.state.isStreaming),
-		messageCount: messages.length,
-		lastMessageIndex: messages.length > 0 ? messages.length - 1 : -1,
-		messages: projectedMessages,
-	};
+	return getSessionRuntime().getSnapshot();
 };
 
 const emitSessionChanged = () => {
@@ -510,131 +474,10 @@ const emitSessionMessage = (message: AgentMessage, messageIndex?: number) => {
 	});
 };
 
-const appendInjectedMessage = async (params: SessionInjectParams) => {
-	if (!currentSessionId) {
-		const error = new Error("No active persisted session");
-		(error as Error & { code?: number }).code = ErrorCodes.NO_ACTIVE_SESSION;
-		throw error;
-	}
-	if (params.expectedSessionId !== currentSessionId) {
-		const error = new Error("Active session changed");
-		(error as Error & { code?: number }).code = ErrorCodes.SESSION_MISMATCH;
-		throw error;
-	}
-	if (agent.state.isStreaming) {
-		if (params.waitForIdle === false) {
-			const error = new Error("Session is busy");
-			(error as Error & { code?: number }).code = ErrorCodes.SESSION_BUSY;
-			throw error;
-		}
-		const waitStartedAt = Date.now();
-		await agent.waitForIdle();
-		bridgeLog("info", "session injection waited for idle", {
-			role: "extension",
-			method: "session_inject",
-			sessionId: currentSessionId,
-			durationMs: Date.now() - waitStartedAt,
-			outcome: "success",
-		});
-	}
+const appendInjectedMessage = async (params: SessionInjectParams) => getSessionRuntime().appendInjectedMessage(params);
 
-	const timestamp = Date.now();
-	const message =
-		params.role === "assistant"
-			? {
-					role: "assistant" as const,
-					content: [{ type: "text" as const, text: params.content }],
-					api: agent.state.model.api,
-					provider: agent.state.model.provider,
-					model: agent.state.model.id,
-					usage: {
-						input: 0,
-						output: 0,
-						cacheRead: 0,
-						cacheWrite: 0,
-						totalTokens: 0,
-						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-					},
-					stopReason: "stop" as const,
-					timestamp,
-				}
-			: {
-					role: "user" as const,
-					content: params.content,
-					timestamp,
-				};
-
-	const messageIndex = agent.state.messages.length;
-
-	if (params.role === "assistant") {
-		// Assistant messages are just appended — no agent turn needed.
-		agent.state.messages = [...agent.state.messages, message];
-	} else {
-		// User messages trigger a full agent turn (prompt + model response),
-		// matching the behavior of typing in the sidebar input.
-		// prompt() is async and runs the agent loop, but we don't await it
-		// here — the caller gets the inject confirmation immediately while
-		// the model streams in the background.
-		agent.prompt(message).catch((err) => {
-			console.error("[Bridge] Injected prompt failed:", err);
-		});
-	}
-
-	if (!currentTitle && shouldSaveSession(agent.state.messages)) {
-		currentTitle = generateTitle(agent.state.messages);
-	}
-	await saveSession();
-	renderApp();
-	emitSessionMessage(message, messageIndex);
-	emitSessionChanged();
-	return {
-		ok: true as const,
-		sessionId: currentSessionId,
-		messageIndex,
-	};
-};
-
-const bridgeNewSession = async (params: SessionNewParams): Promise<SessionNewResult> => {
-	// Wait for any active streaming to finish before switching
-	if (agent.state.isStreaming) {
-		await agent.waitForIdle();
-	}
-
-	// Resolve model if requested
-	let model: Model<any> | undefined;
-	if (params.model) {
-		model = await resolveModelSpec(params.model);
-	}
-
-	// Reset session state
-	currentSessionId = undefined;
-	currentTitle = "";
-
-	// Create fresh agent (reuses the full setup in createAgent)
-	await createAgent(
-		model
-			? {
-					systemPrompt: SYSTEM_PROMPT,
-					model,
-					thinkingLevel: "medium",
-					messages: [],
-					tools: [],
-				}
-			: undefined,
-	);
-
-	// Assign a session ID immediately so inject works right away
-	currentSessionId = crypto.randomUUID();
-	updateUrl(currentSessionId);
-	emitSessionChanged();
-	renderApp();
-
-	return {
-		ok: true as const,
-		sessionId: currentSessionId,
-		model: agent.state.model ? { provider: agent.state.model.provider, id: agent.state.model.id } : undefined,
-	};
-};
+const bridgeNewSession = async (params: SessionNewParams): Promise<SessionNewResult> =>
+	getSessionRuntime().newSession(params);
 
 /**
  * Resolve a model spec string like "anthropic/claude-sonnet-4-6" or "gpt-4o"
@@ -647,47 +490,77 @@ const resolveModelSpec = async (spec: string, providerHint?: string): Promise<Mo
 	});
 };
 
-const bridgeSetModel = async (params: SessionSetModelParams): Promise<SessionSetModelResult> => {
-	const model = await resolveModelSpec(params.model, params.provider);
+const bridgeSetModel = async (params: SessionSetModelParams): Promise<SessionSetModelResult> =>
+	getSessionRuntime().setModel(params);
 
-	const normalizedModel = normalizeModelForRuntime(model);
-	agent.state.model = normalizedModel;
-	chatPanel.agentInterface?.requestUpdate();
-	await storage.settings.set("lastUsedModel", normalizedModel);
-	updateAuthLabel().catch(() => {});
-	emitSessionChanged();
-	renderApp();
+let sessionRuntime: SidepanelSessionRuntime | undefined;
 
-	return {
-		ok: true as const,
-		model: { provider: normalizedModel.provider, id: normalizedModel.id },
+function getSessionArtifactsResult(): SessionArtifactsResult {
+	const artifacts = chatPanel.artifactsPanel?.artifacts;
+	const result: SessionArtifactsResult = {
+		sessionId: currentSessionId,
+		artifacts: [],
 	};
-};
+	if (artifacts) {
+		for (const [, artifact] of artifacts) {
+			result.artifacts.push({
+				filename: artifact.filename,
+				content: artifact.content,
+				createdAt: artifact.createdAt.toISOString(),
+				updatedAt: artifact.updatedAt.toISOString(),
+			});
+		}
+	}
+	return result;
+}
+
+function getSessionRuntime(): SidepanelSessionRuntime {
+	if (!sessionRuntime) {
+		sessionRuntime = new SidepanelSessionRuntime({
+			getAgent: () => agent,
+			getSessionId: () => currentSessionId,
+			setSessionId: (sessionId) => {
+				currentSessionId = sessionId;
+			},
+			getTitle: () => currentTitle,
+			setTitle: (title) => {
+				currentTitle = title;
+			},
+			systemPrompt: SYSTEM_PROMPT,
+			saveSession,
+			render: renderApp,
+			emitSessionChanged,
+			emitSessionMessage,
+			updateUrl,
+			createAgent: async (initialState) => createAgent(initialState),
+			resolveModelSpec,
+			normalizeModelForRuntime,
+			requestModelUiUpdate: () => chatPanel.agentInterface?.requestUpdate(),
+			setLastUsedModel: (model) => storage.settings.set("lastUsedModel", model),
+			updateAuthLabel,
+			getArtifactsResult: getSessionArtifactsResult,
+			logSessionIdleWait: (durationMs) => {
+				bridgeLog("info", "session injection waited for idle", {
+					role: "extension",
+					method: "session_inject",
+					sessionId: currentSessionId,
+					durationMs,
+					outcome: "success",
+				});
+			},
+			createSessionId: () => crypto.randomUUID(),
+		});
+	}
+	return sessionRuntime;
+}
 
 const sessionBridgeAdapter: SessionBridgeAdapter = {
 	getSnapshot: currentSessionSnapshot,
-	waitForIdle: () => agent.waitForIdle(),
+	waitForIdle: () => getSessionRuntime().waitForIdle(),
 	appendInjectedMessage,
 	newSession: bridgeNewSession,
 	setModel: bridgeSetModel,
-	getArtifacts(): SessionArtifactsResult {
-		const artifacts = chatPanel.artifactsPanel?.artifacts;
-		const result: SessionArtifactsResult = {
-			sessionId: currentSessionId,
-			artifacts: [],
-		};
-		if (artifacts) {
-			for (const [, artifact] of artifacts) {
-				result.artifacts.push({
-					filename: artifact.filename,
-					content: artifact.content,
-					createdAt: artifact.createdAt.toISOString(),
-					updatedAt: artifact.updatedAt.toISOString(),
-				});
-			}
-		}
-		return result;
-	},
+	getArtifacts: () => getSessionRuntime().getArtifacts(),
 	subscribe(listener) {
 		sessionBridgeListeners.add(listener);
 		return () => sessionBridgeListeners.delete(listener);
@@ -1040,7 +913,7 @@ const createAgent = async (initialState?: Partial<AgentState>, shouldSave = true
 			}
 
 			if (!currentTitle && shouldSaveSession(messages)) {
-				currentTitle = generateTitle(messages);
+				currentTitle = generateSessionTitle(messages);
 				emitSessionChanged();
 			}
 

@@ -3,6 +3,7 @@ import {
 	aggregateSessionUsage,
 	buildSessionMetadata,
 	buildSessionPreview,
+	generateSessionTitle,
 	shouldSaveSession,
 } from "../../src/sidepanel/session-metadata.js";
 
@@ -29,6 +30,13 @@ describe("sidepanel session metadata", () => {
 		expect(shouldSaveSession([user("hello")])).toBe(false);
 		expect(shouldSaveSession([assistant([{ type: "text", text: "hi" }])])).toBe(false);
 		expect(shouldSaveSession([user("hello"), assistant([{ type: "text", text: "hi" }])])).toBe(true);
+	});
+
+	it("generates concise titles from the first user message", () => {
+		expect(generateSessionTitle([user("Short request. More text")])).toBe("Short request.");
+		expect(generateSessionTitle([user("a".repeat(80))])).toBe("a".repeat(47) + "...");
+		expect(generateSessionTitle([user([{ type: "text", text: "Attached question" }])])).toBe("Attached question");
+		expect(generateSessionTitle([assistant([{ type: "text", text: "ignored" }])])).toBe("");
 	});
 
 	it("aggregates assistant usage and costs", () => {
