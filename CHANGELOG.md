@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Expanded README, CLI help, site, skill, and e2e CI documentation for deterministic assertions, workflow target pinning, native semantic refs, readiness checks, and exit codes.
+
 ## [1.1.15] - 2026-05-23
 
 ### Added

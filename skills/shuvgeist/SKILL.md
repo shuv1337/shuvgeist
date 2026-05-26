@@ -98,6 +98,7 @@ Shuvgeist can launch one for you:
 shuvgeist launch
 shuvgeist launch --url https://example.com
 shuvgeist launch --headless
+shuvgeist launch --url http://127.0.0.1:3000 --headless --user-data-dir "${RUNNER_TEMP:-/tmp}/shuvgeist-profile"
 ```
 
 Close a CLI-launched browser with:
@@ -287,6 +288,7 @@ Use this when a human can disambiguate the target faster than the model can.
 Use `shuvgeist assert ...` for CI-style pass/fail checks. Prefer this over `repl 'document...'` for page assertions because `assert` runs against the page context by default, auto-waits, and maps failures to exit code `1`.
 
 ```bash
+shuvgeist status --json
 shuvgeist assert text "Welcome" --timeout 10s
 shuvgeist assert selector "button[type=submit]" --visible --enabled
 shuvgeist assert role button --name "Continue" --visible
@@ -297,6 +299,8 @@ shuvgeist assert expr 'document.title.includes("Dashboard")'
 ```
 
 Use `--json` for automation. A failed assertion is a successful bridge response with `ok: false`; it is not a transport error.
+
+Before relying on assertions in CI, `status --json` should show a connected extension and include `page_assert` in extension capabilities. If `assert` reports `Unknown method: page_assert`, rebuild/reload the extension and CLI so the bridge surfaces match.
 
 Expression assertions default to the user-script world. Use MAIN-world assertions only when app state is not visible from DOM/user-script context:
 

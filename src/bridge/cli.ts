@@ -1398,15 +1398,25 @@ Notes:
   screenshot --out writes a sibling viewport.json with css/image size, DPR, and scale;
   screenshot --json includes those same metadata fields in the response.
 
+Examples:
+  shuvgeist launch --url http://127.0.0.1:3000 --headless --user-data-dir /tmp/shuvgeist-profile --json
+  shuvgeist status --json
+  shuvgeist assert text "Welcome" --timeout 10s --json
+  shuvgeist assert role button --name "Continue" --visible --json
+  shuvgeist assert expr 'window.__APP_STATE__.ready === true' --world main --json
+  shuvgeist workflow run --file smoke.workflow.json --json
+  shuvgeist locate label "Email" --json
+  shuvgeist ref fill <refId> --value "user@example.com" --native --json
+
 Config file: ~/.shuvgeist/bridge.json
 Environment: SHUVGEIST_BRIDGE_URL, SHUVGEIST_BRIDGE_HOST,
              SHUVGEIST_BRIDGE_PORT, SHUVGEIST_BRIDGE_TOKEN
 
 Exit codes:
   0  success
-  1  command/runtime error
+  1  assertion failed or command/runtime error
   2  no extension target connected
-  3  auth/configuration/network error
+  3  auth/configuration/network/invalid-method/registration error
 `);
 }
 

@@ -210,7 +210,8 @@ shuvgeist locate text "Sign in" --json
 Use `assert` for CI-style page checks instead of embedding assertions in REPL snippets. Assertions run against the page context by default and return structured results in `--json` mode.
 
 ```bash
-shuvgeist launch --url http://localhost:3000 --headless --json
+shuvgeist launch --url http://127.0.0.1:3000 --headless --user-data-dir "${RUNNER_TEMP:-/tmp}/shuvgeist-profile" --json
+shuvgeist status --json
 shuvgeist assert text "Welcome" --timeout 10s --json
 shuvgeist assert role button --name "Continue" --visible --json
 shuvgeist assert selector "form [type=submit]" --enabled --json
@@ -222,7 +223,7 @@ Use workflow target pinning for multi-step tests so focus changes do not move th
 {
   "target": { "mode": "new-tab" },
   "steps": [
-    { "method": "navigate", "params": { "url": "http://localhost:3000" } },
+    { "method": "navigate", "params": { "url": "http://127.0.0.1:3000" } },
     { "assert": { "kind": "text", "text": "Welcome" }, "as": "welcome" }
   ]
 }
@@ -235,7 +236,7 @@ shuvgeist locate label "Email" --json
 shuvgeist ref fill <refId> --value "user@example.com" --native
 ```
 
-Before treating a machine as CI-ready, verify that `shuvgeist launch --headless --json` produces a connected extension target and that the local fixture assertions pass. See [docs/e2e-ci.md](docs/e2e-ci.md) for the full checklist.
+Before treating a machine as CI-ready, verify that `shuvgeist launch --headless --json` produces a connected extension target, `status --json` advertises the `page_assert` capability, and the local fixture assertions pass. See [docs/e2e-ci.md](docs/e2e-ci.md) for the full checklist, assertion flags, workflow target modes, native ref caveats, and exit-code contract.
 
 ### Electron targets
 

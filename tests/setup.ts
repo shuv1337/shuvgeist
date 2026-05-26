@@ -51,16 +51,21 @@ if (!("DOMMatrix" in globalThis)) {
 	(globalThis as typeof globalThis & { DOMMatrix: typeof DOMMatrixMock }).DOMMatrix = DOMMatrixMock;
 }
 
-const localStorageCandidate = (globalThis as typeof globalThis & { localStorage?: Storage }).localStorage;
-if (!localStorageCandidate || typeof localStorageCandidate.getItem !== "function") {
+function hasUsableStorage(name: "localStorage" | "sessionStorage"): boolean {
+	const descriptor = Object.getOwnPropertyDescriptor(globalThis, name);
+	if (!descriptor || !("value" in descriptor)) return false;
+	const storage = descriptor.value as Storage | undefined;
+	return typeof storage?.getItem === "function";
+}
+
+if (!hasUsableStorage("localStorage")) {
 	Object.defineProperty(globalThis, "localStorage", {
 		value: new StorageMock(),
 		configurable: true,
 	});
 }
 
-const sessionStorageCandidate = (globalThis as typeof globalThis & { sessionStorage?: Storage }).sessionStorage;
-if (!sessionStorageCandidate || typeof sessionStorageCandidate.getItem !== "function") {
+if (!hasUsableStorage("sessionStorage")) {
 	Object.defineProperty(globalThis, "sessionStorage", {
 		value: new StorageMock(),
 		configurable: true,
