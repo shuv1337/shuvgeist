@@ -1,0 +1,9 @@
+- The goal covers every GitHub issue that is open in shuv1337/shuvgeist when execution begins.
+- Implementation-ready Electron issues are resolved before higher-level product or human-decision issues.
+- The first implementation batch fixes foundational Electron launch, attach, main-inspector, and source-root behavior.
+- The second implementation batch adds Electron renderer parity for assertions, network capture, and performance metrics where CDP supports them.
+- Human-decision issues are researched and updated with a recommendation before implementation proceeds.
+- Issue #15 is revisited after Electron target capabilities are clarified, and is either closed as no longer needed, converted into narrower implementation work, or documented with a current blocker.
+- Issue #42 produces a documented trusted-input strategy before any native or OS-level input implementation is attempted.
+- Each resolved issue has validation evidence from focused tests, check scripts, or live Shuvgeist CLI testing appropriate to the change.
+- The goal is done only when all open issues are either closed with pushed fixes or explicitly documented as still blocked with the current blocker and next human action.

@@ -103,8 +103,9 @@ async function createFakeCdpServer(port: number): Promise<{
 			url: "app://primary",
 			webSocketDebuggerUrl: `ws://127.0.0.1:${port}/devtools/page/1`,
 		},
-	];
-	const httpServer = createServer((req, res) => {
+		];
+		const sockets = new Set<WebSocket>();
+		const httpServer = createServer((req, res) => {
 		if (req.url === "/json/version") {
 			res.writeHead(200, { "Content-Type": "application/json" });
 			res.end(
@@ -123,9 +124,11 @@ async function createFakeCdpServer(port: number): Promise<{
 		res.writeHead(404);
 		res.end();
 	});
-	const wss = new WebSocketServer({ server: httpServer as Server });
-	wss.on("connection", (ws) => {
-		ws.on("message", (data: Buffer | string) => {
+		const wss = new WebSocketServer({ server: httpServer as Server });
+		wss.on("connection", (ws) => {
+			sockets.add(ws);
+			ws.on("close", () => sockets.delete(ws));
+			ws.on("message", (data: Buffer | string) => {
 			const msg = JSON.parse(typeof data === "string" ? data : data.toString("utf-8")) as {
 				id: number;
 				method: string;
@@ -164,9 +167,16 @@ async function createFakeCdpServer(port: number): Promise<{
 							},
 						}),
 					);
-				} else if (msg.params?.expression?.includes("electronRefActionScript")) {
-					ws.send(JSON.stringify({ id: msg.id, result: { result: { value: { ok: true } } } }));
-				} else if (msg.params?.expression?.includes("electronMainInfoScript")) {
+					} else if (msg.params?.expression?.includes("electronRefActionScript")) {
+						ws.send(JSON.stringify({ id: msg.id, result: { result: { value: { ok: true } } } }));
+					} else if (msg.params?.expression?.includes("electronPageAssertScript")) {
+						ws.send(
+							JSON.stringify({
+								id: msg.id,
+								result: { result: { value: { ok: true, message: "Text assertion passed", actual: "Save" } } },
+							}),
+						);
+					} else if (msg.params?.expression?.includes("electronMainInfoScript")) {
 					ws.send(
 						JSON.stringify({
 							id: msg.id,
@@ -220,7 +230,42 @@ async function createFakeCdpServer(port: number): Promise<{
 						},
 					}),
 				);
-			} else if (msg.method === "Page.stopScreencast" || msg.method === "Page.screencastFrameAck") {
+				} else if (msg.method === "Network.enable") {
+					ws.send(JSON.stringify({ id: msg.id, result: {} }));
+					ws.send(
+						JSON.stringify({
+							method: "Network.requestWillBeSent",
+							params: {
+								requestId: "req-1",
+								type: "Fetch",
+								request: { method: "GET", url: "https://example.test/data", headers: { Accept: "application/json" } },
+							},
+						}),
+					);
+					ws.send(
+						JSON.stringify({
+							method: "Network.responseReceived",
+							params: {
+								requestId: "req-1",
+								response: { status: 200, mimeType: "application/json", headers: { "Content-Type": "application/json" } },
+							},
+						}),
+					);
+					ws.send(JSON.stringify({ method: "Network.loadingFinished", params: { requestId: "req-1" } }));
+				} else if (msg.method === "Network.getResponseBody") {
+					ws.send(JSON.stringify({ id: msg.id, result: { body: "{\"ok\":true}", base64Encoded: false } }));
+				} else if (msg.method === "Network.disable") {
+					ws.send(JSON.stringify({ id: msg.id, result: {} }));
+				} else if (msg.method === "Performance.enable") {
+					ws.send(JSON.stringify({ id: msg.id, result: {} }));
+				} else if (msg.method === "Performance.getMetrics") {
+					ws.send(
+						JSON.stringify({
+							id: msg.id,
+							result: { metrics: [{ name: "JSHeapUsedSize", value: 1234 }, { name: "Nodes", value: 42 }] },
+						}),
+					);
+				} else if (msg.method === "Page.stopScreencast" || msg.method === "Page.screencastFrameAck") {
 				ws.send(JSON.stringify({ id: msg.id, result: {} }));
 			} else {
 				ws.send(JSON.stringify({ id: msg.id, result: {} }));
@@ -232,8 +277,9 @@ async function createFakeCdpServer(port: number): Promise<{
 		setTargets: (nextTargets: FakeCdpTarget[]) => {
 			targets = nextTargets;
 		},
-		close: async () => {
-			await new Promise<void>((resolve) => wss.close(() => resolve()));
+			close: async () => {
+				for (const socket of sockets) socket.close();
+				await new Promise<void>((resolve) => wss.close(() => resolve()));
 			await new Promise<void>((resolve) => httpServer.close(() => resolve()));
 		},
 	};
@@ -579,11 +625,55 @@ describe("BridgeServer", () => {
 					params: { kind: "text", text: "Save" },
 					target: { kind: "electron-window", sessionId: "e1", windowRef: "w1" },
 				}),
+			).resolves.toMatchObject({ id: 11, result: { ok: true, kind: "text", message: "Text assertion passed" } });
+			await expect(
+				sendRequestAndReadResponse(cli.ws, {
+					id: 12,
+					method: "network_start",
+					params: {},
+					target: { kind: "electron-window", sessionId: "e1", windowRef: "w1" },
+				}),
+			).resolves.toMatchObject({ id: 12, result: { active: true, tabId: -1, sessionId: "e1", windowRef: "w1" } });
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			await expect(
+				sendRequestAndReadResponse(cli.ws, {
+					id: 13,
+					method: "network_list",
+					params: {},
+					target: { kind: "electron-window", sessionId: "e1", windowRef: "w1" },
+				}),
 			).resolves.toMatchObject({
-				id: 11,
-				error: { message: "Electron target dispatch for 'page_assert' is not supported yet. Use Chrome targets for page assertions." },
+				id: 13,
+				result: [
+					{
+						requestId: "req-1",
+						url: "https://example.test/data",
+						status: 200,
+						hasResponseBody: true,
+						sessionId: "e1",
+						windowRef: "w1",
+					},
+				],
 			});
-
+			await expect(
+				sendRequestAndReadResponse(cli.ws, {
+					id: 14,
+					method: "perf_metrics",
+					params: {},
+					target: { kind: "electron-window", sessionId: "e1", windowRef: "w1" },
+				}),
+			).resolves.toMatchObject({
+				id: 14,
+				result: {
+					tabId: -1,
+					sessionId: "e1",
+					windowRef: "w1",
+					metrics: [
+						{ name: "JSHeapUsedSize", value: 1234 },
+						{ name: "Nodes", value: 42 },
+					],
+				},
+			});
 			cdp.setTargets([
 				{
 					id: "page-1",
@@ -600,16 +690,16 @@ describe("BridgeServer", () => {
 					webSocketDebuggerUrl: `ws://127.0.0.1:${cdpPort}/devtools/page/2`,
 				},
 			]);
-			await sendRequestAndReadResponse(cli.ws, { id: 12, method: "electron_windows", params: {} });
+			await sendRequestAndReadResponse(cli.ws, { id: 15, method: "electron_windows", params: {} });
 			await expect(
 				sendRequestAndReadResponse(cli.ws, {
-					id: 13,
+					id: 16,
 					method: "ref_click",
 					params: { refId: "e1:w1:ref1" },
 					target: { kind: "electron-window", sessionId: "e1", windowRef: "w2" },
 				}),
 			).resolves.toMatchObject({
-				id: 13,
+				id: 16,
 				error: { message: "Electron ref 'e1:w1:ref1' does not exist for target 'e1:w2'. Run locate or snapshot again." },
 			});
 		} finally {

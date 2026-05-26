@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
 	extractElectronSource,
+	electronSourceInspectorTestHooks,
 	inspectElectronSourceLayout,
 	listElectronSource,
 	readElectronSourceFile,
@@ -115,6 +116,16 @@ describe("electron source inspector", () => {
 	it("returns a teaching error for unsupported layouts", async () => {
 		await expect(listElectronSource({ sourcePath: tempRoot })).rejects.toThrow(
 			"Unsupported or encrypted Electron source layout",
+		);
+	});
+
+	it("infers packaged roots from shell launcher wrappers", async () => {
+		const wrapper = join(tempRoot, "bin", "fixture");
+		await mkdir(join(tempRoot, "bin"), { recursive: true });
+		await writeFile(wrapper, '#!/usr/bin/env bash\nexec /opt/fixture/bin/fixture "$@"\n');
+
+		await expect(electronSourceInspectorTestHooks.inferExecutableSourceRoots(wrapper)).resolves.toEqual(
+			expect.arrayContaining(["/opt/fixture/bin", "/opt/fixture"]),
 		);
 	});
 });

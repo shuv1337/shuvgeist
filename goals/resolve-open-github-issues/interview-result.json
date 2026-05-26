@@ -1,0 +1,47 @@
+{
+  "decision": "submitted",
+  "stage": "interview",
+  "result": {
+    "stage": "interview",
+    "title": "Resolve open Shuvgeist GitHub issues",
+    "goalSlug": "resolve-open-github-issues",
+    "answers": [
+      {
+        "questionId": "scope",
+        "selectedOptionIds": [
+          "all_open"
+        ],
+        "customAnswer": "",
+        "answer": "All open issues",
+        "completed": true
+      },
+      {
+        "questionId": "blocked_human_issues",
+        "selectedOptionIds": [
+          "research_recommend_then_implement"
+        ],
+        "customAnswer": "",
+        "answer": "Research then implement",
+        "completed": true
+      },
+      {
+        "questionId": "execution_order",
+        "selectedOptionIds": [
+          "foundations_first"
+        ],
+        "customAnswer": "",
+        "answer": "Foundations first",
+        "completed": true
+      },
+      {
+        "questionId": "done_condition",
+        "selectedOptionIds": [
+          "closed_or_documented_blocked"
+        ],
+        "customAnswer": "",
+        "answer": "Closed or documented blocked",
+        "completed": true
+      }
+    ]
+  }
+}

@@ -11,7 +11,14 @@ import type {
 	LocateByLabelParams,
 	LocateByRoleParams,
 	LocateByTextParams,
+	NetworkCurlParams,
+	NetworkItemParams,
+	NetworkListParams,
+	NetworkStartParams,
+	PageAssertParams,
+	PageAssertResult,
 	PageSnapshotBridgeResult,
+	PerfMetricsParams,
 	RecordFrameEventData,
 	RecordStartParams,
 	RecordStartResult,
@@ -37,9 +44,14 @@ import type {
 	ElectronSessionSummary,
 	ElectronWindow,
 } from "./types.js";
-import { captureElectronWindowScreenshot, evaluateElectronWindow } from "./window-executor.js";
+import { assertElectronWindow, captureElectronWindowScreenshot, evaluateElectronWindow } from "./window-executor.js";
 
 interface CdpVersionResponse {
+	Browser?: string;
+	webSocketDebuggerUrl?: string;
+}
+
+interface InspectorEndpoint {
 	Browser?: string;
 	webSocketDebuggerUrl?: string;
 }
@@ -50,6 +62,7 @@ export class ElectronSessionManager {
 	private readonly sessionStore = new ElectronSessionStore();
 	private readonly refs = new Map<string, Map<string, ElectronRefEntry>>();
 	private readonly recordings = new Map<string, ElectronRecordingState>();
+	private readonly networkCaptures = new Map<string, ElectronNetworkCaptureState>();
 
 	list(): ElectronSessionSummary[] {
 		return this.sessionStore.summaries();
@@ -88,7 +101,9 @@ export class ElectronSessionManager {
 			process: child,
 		});
 		await this.refreshWindows(session);
-		child.once("exit", () => this.sessionStore.delete(session.id));
+		child.once("exit", () => {
+			void this.deleteSessionIfCdpExited(session.id, port);
+		});
 		return this.sessionStore.toSummary(session);
 	}
 
@@ -172,6 +187,12 @@ export class ElectronSessionManager {
 				awaitPromise: true,
 				returnByValue: true,
 			});
+			if ("exceptionDetails" in response && response.exceptionDetails) {
+				const details = response.exceptionDetails as { text?: string; exception?: { description?: string } };
+				throw new Error(
+					details.exception?.description ?? details.text ?? "Electron main inspector evaluation failed.",
+				);
+			}
 			const value = response.result?.value;
 			if (!value) throw new Error("Electron main inspector did not return metadata.");
 			return value;
@@ -329,6 +350,163 @@ export class ElectronSessionManager {
 		const client = await this.connectToPage(resolved.window);
 		try {
 			return await captureElectronWindowScreenshot(client, maxWidth);
+		} finally {
+			client.close();
+		}
+	}
+
+	async assert(target: BridgeTarget, params: PageAssertParams): Promise<PageAssertResult> {
+		const resolved = this.resolveTarget(target);
+		if (!resolved) throw noSessionError(target);
+		if (params.world === "main") {
+			throw new Error("Electron assertions do not support --world main; use renderer/user-world assertions.");
+		}
+		const client = await this.connectToPage(resolved.window);
+		try {
+			return await assertElectronWindow(client, params);
+		} finally {
+			client.close();
+		}
+	}
+
+	async networkStart(target: BridgeTarget, params: NetworkStartParams): Promise<ElectronNetworkCaptureStats> {
+		const resolved = this.resolveTarget(target);
+		if (!resolved) throw noSessionError(target);
+		const scope = refScope(resolved.session.id, resolved.window.ref);
+		const existing = this.networkCaptures.get(scope);
+		if (existing?.active) return this.networkStatsForState(existing);
+		const client = await this.connectToPage(resolved.window);
+		const state: ElectronNetworkCaptureState = existing ?? {
+			scope,
+			sessionId: resolved.session.id,
+			windowRef: resolved.window.ref,
+			active: true,
+			maxEntries: params.maxEntries ?? 250,
+			maxBodyBytes: params.maxBodyBytes ?? 256_000,
+			requests: new Map(),
+			order: [],
+			storedBodyBytes: 0,
+			evictedRequests: 0,
+			client,
+		};
+		state.active = true;
+		state.client = client;
+		state.maxEntries = params.maxEntries ?? state.maxEntries;
+		state.maxBodyBytes = params.maxBodyBytes ?? state.maxBodyBytes;
+		state.removeListeners?.forEach((remove) => {
+			remove();
+		});
+		state.removeListeners = [
+			client.on("Network.requestWillBeSent", (event) => this.handleNetworkEvent(state, "request", event)),
+			client.on("Network.responseReceived", (event) => this.handleNetworkEvent(state, "response", event)),
+			client.on("Network.loadingFinished", (event) => {
+				void this.finishNetworkRequest(state, event);
+			}),
+			client.on("Network.loadingFailed", (event) => this.handleNetworkEvent(state, "failed", event)),
+			client.onClose(() => {
+				state.active = false;
+			}),
+		];
+		this.networkCaptures.set(scope, state);
+		await client.send("Network.enable");
+		return this.networkStatsForState(state);
+	}
+
+	async networkStop(target: BridgeTarget): Promise<ElectronNetworkCaptureStats> {
+		const state = this.resolveNetworkState(target);
+		if (!state) return this.emptyNetworkStats(target);
+		state.active = false;
+		state.removeListeners?.forEach((remove) => {
+			remove();
+		});
+		state.removeListeners = undefined;
+		void state.client.send("Network.disable").catch(() => undefined);
+		state.client.close();
+		return this.networkStatsForState(state);
+	}
+
+	networkList(target: BridgeTarget, params: NetworkListParams): ElectronCapturedNetworkRequest[] {
+		const state = this.resolveNetworkState(target);
+		if (!state) return [];
+		const search = params.search?.toLowerCase();
+		const items = state.order
+			.map((requestId) => state.requests.get(requestId))
+			.filter((request): request is ElectronCapturedNetworkRequest => Boolean(request))
+			.filter(
+				(request) =>
+					!search || request.url.toLowerCase().includes(search) || request.method.toLowerCase().includes(search),
+			);
+		const limit = typeof params.limit === "number" ? Math.max(0, params.limit) : items.length;
+		return items
+			.slice(-limit)
+			.reverse()
+			.map((item) => ({ ...item, id: item.requestId }));
+	}
+
+	networkClear(target: BridgeTarget): ElectronNetworkCaptureStats {
+		const state = this.resolveNetworkState(target);
+		if (!state) return this.emptyNetworkStats(target);
+		state.requests.clear();
+		state.order = [];
+		state.storedBodyBytes = 0;
+		state.evictedRequests = 0;
+		return this.networkStatsForState(state);
+	}
+
+	networkStats(target: BridgeTarget): ElectronNetworkCaptureStats {
+		const state = this.resolveNetworkState(target);
+		return state ? this.networkStatsForState(state) : this.emptyNetworkStats(target);
+	}
+
+	networkGet(target: BridgeTarget, params: NetworkItemParams): ElectronCapturedNetworkRequest {
+		const item = this.resolveNetworkState(target)?.requests.get(params.requestId);
+		if (!item) throw new Error(`Captured request ${params.requestId} was not found`);
+		return { ...item, id: item.requestId };
+	}
+
+	networkBody(target: BridgeTarget, params: NetworkItemParams): { requestBody?: string; responseBody?: string } {
+		const item = this.networkGet(target, params);
+		return { requestBody: item.requestBody, responseBody: item.responseBody };
+	}
+
+	networkCurl(target: BridgeTarget, params: NetworkCurlParams): { requestId: string; command: string } {
+		const item = this.networkGet(target, params);
+		const parts = ["curl", "-X", shellEscape(item.method), shellEscape(item.url)];
+		for (const [key, value] of Object.entries(item.requestHeaders ?? {})) {
+			parts.push("-H", shellEscape(`${key}: ${value}`));
+		}
+		if (item.requestBody) parts.push("--data-raw", shellEscape(item.requestBody));
+		return { requestId: params.requestId, command: parts.join(" ") };
+	}
+
+	async perfMetrics(
+		target: BridgeTarget,
+		_params: PerfMetricsParams = {},
+	): Promise<{
+		tabId: number;
+		sessionId: string;
+		windowRef: string;
+		metrics: Array<{ name: string; value: number }>;
+	}> {
+		const resolved = this.resolveTarget(target);
+		if (!resolved) throw noSessionError(target);
+		const client = await this.connectToPage(resolved.window);
+		try {
+			await client.send("Performance.enable");
+			const response = await client.send<{ metrics?: Array<{ name?: string; value?: number }> }>(
+				"Performance.getMetrics",
+			);
+			return {
+				tabId: -1,
+				sessionId: resolved.session.id,
+				windowRef: resolved.window.ref,
+				metrics: (response.metrics ?? [])
+					.filter(
+						(metric): metric is { name: string; value: number } =>
+							typeof metric.name === "string" && typeof metric.value === "number",
+					)
+					.map((metric) => ({ name: metric.name, value: metric.value })),
+			};
 		} finally {
 			client.close();
 		}
@@ -550,13 +728,19 @@ export class ElectronSessionManager {
 	}
 
 	private async resolveMainInspector(port: number): Promise<ElectronSession["mainInspector"]> {
-		const version = await waitForCdp(port, 3000);
+		const version = await resolveInspectorEndpoint(port, 3000);
 		return {
 			port,
 			webSocketDebuggerUrl: version.webSocketDebuggerUrl,
 			available: Boolean(version.webSocketDebuggerUrl),
 			browser: version.Browser,
 		};
+	}
+
+	private async deleteSessionIfCdpExited(sessionId: string, port: number): Promise<void> {
+		if (await shouldDeleteSessionAfterChildExit(port)) {
+			this.sessionStore.delete(sessionId);
+		}
 	}
 
 	private connectToMainInspector(
@@ -766,6 +950,150 @@ export class ElectronSessionManager {
 		});
 		if (typeof sessionId === "number") await state.client.send("Page.screencastFrameAck", { sessionId });
 	}
+
+	private resolveNetworkState(target: BridgeTarget): ElectronNetworkCaptureState | undefined {
+		const resolved = this.resolveTarget(target);
+		return resolved ? this.networkCaptures.get(refScope(resolved.session.id, resolved.window.ref)) : undefined;
+	}
+
+	private emptyNetworkStats(target: BridgeTarget): ElectronNetworkCaptureStats {
+		const resolved = this.resolveTarget(target);
+		return {
+			tabId: -1,
+			active: false,
+			requestCount: 0,
+			storedBodyBytes: 0,
+			evictedRequests: 0,
+			sessionId: resolved?.session.id,
+			windowRef: resolved?.window.ref,
+		};
+	}
+
+	private networkStatsForState(state: ElectronNetworkCaptureState): ElectronNetworkCaptureStats {
+		return {
+			tabId: -1,
+			active: state.active,
+			requestCount: state.requests.size,
+			storedBodyBytes: state.storedBodyBytes,
+			evictedRequests: state.evictedRequests,
+			sessionId: state.sessionId,
+			windowRef: state.windowRef,
+		};
+	}
+
+	private handleNetworkEvent(
+		state: ElectronNetworkCaptureState,
+		kind: "request" | "response" | "failed",
+		payload: Record<string, unknown>,
+	): void {
+		if (kind === "request") {
+			this.upsertNetworkRequest(state, payload);
+		} else if (kind === "response") {
+			this.updateNetworkResponse(state, payload);
+		} else {
+			const item = state.requests.get(String(payload.requestId ?? ""));
+			if (item) {
+				item.endedAt = Date.now();
+				item.durationMs = item.endedAt - item.startedAt;
+			}
+		}
+	}
+
+	private upsertNetworkRequest(state: ElectronNetworkCaptureState, payload: Record<string, unknown>): void {
+		const requestId = String(payload.requestId ?? "");
+		if (!requestId) return;
+		const request = asRecord(payload.request);
+		const existing = state.requests.get(requestId);
+		const item: ElectronCapturedNetworkRequest = existing ?? {
+			requestId,
+			method: String(request?.method ?? "GET"),
+			url: String(request?.url ?? ""),
+			resourceType: typeof payload.type === "string" ? payload.type : undefined,
+			startedAt: Date.now(),
+			hasRequestBody: false,
+			hasResponseBody: false,
+			tabId: -1,
+			sessionId: state.sessionId,
+			windowRef: state.windowRef,
+		};
+		item.method = String(request?.method ?? item.method);
+		item.url = String(request?.url ?? item.url);
+		item.resourceType = typeof payload.type === "string" ? payload.type : item.resourceType;
+		item.requestHeaders = stringMapFrom(request?.headers);
+		const postData = typeof request?.postData === "string" ? request.postData : undefined;
+		const bounded = this.boundNetworkBody(state, postData);
+		item.requestBody = bounded.text;
+		item.requestBodyTruncated = bounded.truncated;
+		item.requestBodySize = sizeOfText(postData);
+		item.hasRequestBody = Boolean(postData);
+		if (!existing) state.order.push(requestId);
+		state.requests.set(requestId, item);
+		this.evictNetworkOverflow(state);
+	}
+
+	private updateNetworkResponse(state: ElectronNetworkCaptureState, payload: Record<string, unknown>): void {
+		const item = state.requests.get(String(payload.requestId ?? ""));
+		if (!item) return;
+		const response = asRecord(payload.response);
+		item.status = typeof response?.status === "number" ? response.status : item.status;
+		item.responseHeaders = stringMapFrom(response?.headers);
+		item.contentType = typeof response?.mimeType === "string" ? response.mimeType : item.contentType;
+	}
+
+	private async finishNetworkRequest(
+		state: ElectronNetworkCaptureState,
+		payload: Record<string, unknown>,
+	): Promise<void> {
+		const requestId = String(payload.requestId ?? "");
+		const item = state.requests.get(requestId);
+		if (!item) return;
+		item.endedAt = Date.now();
+		item.durationMs = item.endedAt - item.startedAt;
+		try {
+			const bodyResult = await state.client.send<{ body?: string; base64Encoded?: boolean }>(
+				"Network.getResponseBody",
+				{
+					requestId,
+				},
+			);
+			const body =
+				typeof bodyResult.body === "string" && bodyResult.base64Encoded !== true ? bodyResult.body : undefined;
+			const bounded = this.boundNetworkBody(state, body);
+			item.responseBody = bounded.text;
+			item.responseBodyTruncated = bounded.truncated;
+			item.responseBodySize = sizeOfText(body);
+			item.hasResponseBody = Boolean(body);
+		} catch {}
+	}
+
+	private boundNetworkBody(
+		state: ElectronNetworkCaptureState,
+		body: string | undefined,
+	): { text?: string; truncated: boolean } {
+		if (!body) return { text: undefined, truncated: false };
+		const size = sizeOfText(body);
+		if (size > state.maxBodyBytes) {
+			return {
+				text: body.slice(0, Math.max(0, Math.floor((state.maxBodyBytes / Math.max(1, size)) * body.length))),
+				truncated: true,
+			};
+		}
+		state.storedBodyBytes += size;
+		return { text: body, truncated: false };
+	}
+
+	private evictNetworkOverflow(state: ElectronNetworkCaptureState): void {
+		while (state.order.length > state.maxEntries) {
+			const oldestId = state.order.shift();
+			if (!oldestId) break;
+			const removed = state.requests.get(oldestId);
+			if (removed) {
+				state.storedBodyBytes -= sizeOfText(removed.requestBody) + sizeOfText(removed.responseBody);
+				state.requests.delete(oldestId);
+				state.evictedRequests += 1;
+			}
+		}
+	}
 }
 
 interface ElectronRefEntry {
@@ -796,9 +1124,80 @@ interface ElectronRecordingState {
 	removeCloseListener?: () => void;
 }
 
+interface ElectronNetworkCaptureState {
+	scope: string;
+	sessionId: string;
+	windowRef: string;
+	active: boolean;
+	maxEntries: number;
+	maxBodyBytes: number;
+	requests: Map<string, ElectronCapturedNetworkRequest>;
+	order: string[];
+	storedBodyBytes: number;
+	evictedRequests: number;
+	client: ElectronCdpClient;
+	removeListeners?: Array<() => void>;
+}
+
+interface ElectronCapturedNetworkRequest {
+	id?: string;
+	requestId: string;
+	method: string;
+	url: string;
+	status?: number;
+	resourceType?: string;
+	contentType?: string;
+	startedAt: number;
+	endedAt?: number;
+	durationMs?: number;
+	requestHeaders?: Record<string, string>;
+	responseHeaders?: Record<string, string>;
+	requestBody?: string;
+	responseBody?: string;
+	requestBodyTruncated?: boolean;
+	responseBodyTruncated?: boolean;
+	requestBodySize?: number;
+	responseBodySize?: number;
+	hasRequestBody: boolean;
+	hasResponseBody: boolean;
+	tabId: number;
+	sessionId: string;
+	windowRef: string;
+}
+
+interface ElectronNetworkCaptureStats {
+	tabId: number;
+	active: boolean;
+	requestCount: number;
+	storedBodyBytes: number;
+	evictedRequests: number;
+	sessionId?: string;
+	windowRef?: string;
+}
+
 function base64ByteLength(value: string): number {
 	const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
 	return Math.max(0, Math.floor((value.length * 3) / 4) - padding);
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+	return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : undefined;
+}
+
+function stringMapFrom(value: unknown): Record<string, string> | undefined {
+	const record = asRecord(value);
+	if (!record) return undefined;
+	const out: Record<string, string> = {};
+	for (const [key, entry] of Object.entries(record)) out[key] = String(entry);
+	return Object.keys(out).length > 0 ? out : undefined;
+}
+
+function sizeOfText(value: string | undefined): number {
+	return value ? new TextEncoder().encode(value).length : 0;
+}
+
+function shellEscape(value: string): string {
+	return `'${value.replaceAll("'", `'"'"'`)}'`;
 }
 
 interface ElectronSnapshotScriptEntry extends Omit<BridgeSnapshotEntry, "tabId" | "frameId"> {}
@@ -866,6 +1265,26 @@ async function waitForCdp(port: number, timeoutMs: number): Promise<CdpVersionRe
 	throw new Error(`No Electron CDP endpoint responded on port ${port}: ${lastError || "timed out"}`);
 }
 
+async function resolveInspectorEndpoint(port: number, timeoutMs: number): Promise<InspectorEndpoint> {
+	const version = await waitForCdp(port, timeoutMs);
+	if (version.webSocketDebuggerUrl) return version;
+	const targets = await listCdpTargets(port);
+	return {
+		Browser: version.Browser,
+		webSocketDebuggerUrl: targets.find((target) => target.webSocketDebuggerUrl)?.webSocketDebuggerUrl,
+	};
+}
+
+async function shouldDeleteSessionAfterChildExit(port: number, graceMs = 500): Promise<boolean> {
+	await new Promise((resolve) => setTimeout(resolve, graceMs));
+	try {
+		await waitForCdp(port, 500);
+		return false;
+	} catch {
+		return true;
+	}
+}
+
 function discoverPortForPid(pid: number): number | undefined {
 	try {
 		const cmdline = readFileSync(`/proc/${pid}/cmdline`, "utf-8").replaceAll("\0", " ");
@@ -915,6 +1334,8 @@ function parseRemoteDebuggingPort(command: string): number | undefined {
 
 export const electronSessionTestHooks = {
 	parseRemoteDebuggingPort,
+	resolveInspectorEndpoint,
+	shouldDeleteSessionAfterChildExit,
 };
 
 interface CdpTargetListEntry {
@@ -1047,15 +1468,24 @@ const ELECTRON_REF_ACTION_SCRIPT = `async function electronRefActionScript(optio
 }`;
 
 const ELECTRON_MAIN_INFO_SCRIPT = `function electronMainInfoScript() {
-	const electron = require("electron");
-	const app = electron.app;
-	const browserWindows = electron.BrowserWindow ? electron.BrowserWindow.getAllWindows() : [];
+	const nodeRequire =
+		typeof require === "function"
+			? require
+			: process.mainModule && typeof process.mainModule.require === "function"
+				? process.mainModule.require.bind(process.mainModule)
+				: undefined;
+	let electron;
+	try {
+		electron = nodeRequire ? nodeRequire("electron") : undefined;
+	} catch {}
+	const app = electron && electron.app;
+	const browserWindows = electron && electron.BrowserWindow ? electron.BrowserWindow.getAllWindows() : [];
 	let crashDirectory;
 	let crashFiles = [];
 	try {
-		crashDirectory = app.getPath("crashDumps");
-		const fs = require("fs");
-		crashFiles = fs.existsSync(crashDirectory) ? fs.readdirSync(crashDirectory).slice(0, 200) : [];
+		crashDirectory = app && app.getPath ? app.getPath("crashDumps") : undefined;
+		const fs = nodeRequire("fs");
+		crashFiles = crashDirectory && fs.existsSync(crashDirectory) ? fs.readdirSync(crashDirectory).slice(0, 200) : [];
 	} catch {}
 	return {
 		windows: browserWindows.map((window) => ({
@@ -1064,14 +1494,14 @@ const ELECTRON_MAIN_INFO_SCRIPT = `function electronMainInfoScript() {
 			url: window.webContents && window.webContents.getURL ? window.webContents.getURL() : undefined,
 		})),
 		paths: {
-			appPath: app.getAppPath ? app.getAppPath() : undefined,
-			userData: app.getPath ? app.getPath("userData") : undefined,
-			exe: app.getPath ? app.getPath("exe") : undefined,
-			temp: app.getPath ? app.getPath("temp") : undefined,
+			appPath: app && app.getAppPath ? app.getAppPath() : undefined,
+			userData: app && app.getPath ? app.getPath("userData") : undefined,
+			exe: app && app.getPath ? app.getPath("exe") : process.execPath,
+			temp: app && app.getPath ? app.getPath("temp") : undefined,
 		},
 		app: {
-			name: app.getName ? app.getName() : undefined,
-			version: app.getVersion ? app.getVersion() : undefined,
+			name: app && app.getName ? app.getName() : undefined,
+			version: app && app.getVersion ? app.getVersion() : undefined,
 			electronVersion: process.versions.electron,
 			chromeVersion: process.versions.chrome,
 			nodeVersion: process.versions.node,

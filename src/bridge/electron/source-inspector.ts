@@ -1,5 +1,16 @@
 import { constants as fsConstants } from "node:fs";
-import { access, copyFile, mkdir, readdir, readFile, readlink, stat, symlink, writeFile } from "node:fs/promises";
+import {
+	access,
+	copyFile,
+	mkdir,
+	readdir,
+	readFile,
+	readlink,
+	realpath,
+	stat,
+	symlink,
+	writeFile,
+} from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { resolveElectronApp, resolveExecutable } from "./app-registry.js";
 
@@ -64,20 +75,44 @@ function assertRelativePath(path: string): string {
 }
 
 async function resolveSourceRoot(ref: ElectronSourceRef): Promise<string> {
-	if (ref.sourcePath) return resolve(ref.sourcePath);
+	return (await resolveSourceRoots(ref))[0] ?? "";
+}
+
+async function resolveSourceRoots(ref: ElectronSourceRef): Promise<string[]> {
+	if (ref.sourcePath) return [resolve(ref.sourcePath)];
 	if (ref.appRef) {
 		const app = resolveElectronApp(ref.appRef);
 		if (!app)
 			throw new Error(`Unknown Electron app '${ref.appRef}'. Run 'shuvgeist electron list' to see known apps.`);
 		const executable = resolveExecutable(app);
 		if (!executable) throw new Error(`Electron app '${ref.appRef}' is not installed on this host.`);
-		return dirname(executable);
+		return uniquePaths([dirname(executable), ...(await inferExecutableSourceRoots(executable))]);
 	}
 	throw new Error("Usage: shuvgeist electron source <layout|list|read|extract> --source-path <path>");
 }
 
 export async function inspectElectronSourceLayout(ref: ElectronSourceRef): Promise<ElectronSourceLayout> {
-	const root = await resolveSourceRoot(ref);
+	const roots = await resolveSourceRoots(ref);
+	let lastUnsupported: ElectronSourceLayout | undefined;
+	const allowRootApp = Boolean(ref.sourcePath);
+	for (const root of roots) {
+		const layout = await inspectElectronSourceRoot(root, { allowRootApp });
+		if (layout.kind !== "unsupported") return layout;
+		lastUnsupported = layout;
+	}
+	return {
+		kind: "unsupported",
+		root: roots[0] ?? "",
+		message:
+			lastUnsupported?.message ??
+			`Unsupported or encrypted Electron source layout. Checked: ${roots.join(", ") || "none"}.`,
+	};
+}
+
+async function inspectElectronSourceRoot(
+	root: string,
+	options: { allowRootApp: boolean },
+): Promise<ElectronSourceLayout> {
 	const rootStat = await stat(root).catch(() => undefined);
 	if (!rootStat) {
 		return { kind: "unsupported", root, message: `Source root does not exist: ${root}` };
@@ -94,7 +129,9 @@ export async function inspectElectronSourceLayout(ref: ElectronSourceRef): Promi
 			};
 		}
 	}
-	const unpackedCandidates = rootStat.isDirectory() ? [join(root, "resources", "app"), join(root, "app"), root] : [];
+	const unpackedCandidates = rootStat.isDirectory()
+		? [join(root, "resources", "app"), join(root, "app"), ...(options.allowRootApp ? [root] : [])]
+		: [];
 	for (const appPath of unpackedCandidates) {
 		if ((await pathExists(join(appPath, "package.json"))) || (await pathExists(join(appPath, "src")))) {
 			return { kind: "unpacked", root, appPath };
@@ -103,9 +140,38 @@ export async function inspectElectronSourceLayout(ref: ElectronSourceRef): Promi
 	return {
 		kind: "unsupported",
 		root,
-		message: "Unsupported or encrypted Electron source layout. Expected resources/app.asar or resources/app.",
+		message: `Unsupported or encrypted Electron source layout at ${root}. Expected resources/app.asar or resources/app.`,
 	};
 }
+
+async function inferExecutableSourceRoots(executable: string): Promise<string[]> {
+	const roots: string[] = [];
+	try {
+		const resolvedExecutable = await realpath(executable);
+		roots.push(dirname(resolvedExecutable), dirname(dirname(resolvedExecutable)));
+	} catch {
+		// Keep source inspection best-effort for wrapper paths.
+	}
+	try {
+		const script = await readFile(executable, "utf-8");
+		const match = /^\s*exec\s+((?:"[^"]+"|'[^']+'|\S+))/m.exec(script);
+		const target = match?.[1]?.replace(/^["']|["']$/g, "");
+		if (target?.startsWith("/")) {
+			roots.push(dirname(target), dirname(dirname(target)));
+		}
+	} catch {
+		// Binary launchers are handled by their own path and realpath candidates.
+	}
+	return roots;
+}
+
+function uniquePaths(paths: string[]): string[] {
+	return [...new Set(paths.filter(Boolean).map((path) => resolve(path)))];
+}
+
+export const electronSourceInspectorTestHooks = {
+	inferExecutableSourceRoots,
+};
 
 function readPickleString(buffer: Buffer): string {
 	const payloadSize = buffer.readUInt32LE(0);

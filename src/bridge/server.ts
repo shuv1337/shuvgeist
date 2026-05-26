@@ -656,9 +656,7 @@ export class BridgeServer {
 					includeHidden: req.params?.includeHidden === true,
 				});
 			} else if (req.method === "page_assert") {
-				throw new Error(
-					"Electron target dispatch for 'page_assert' is not supported yet. Use Chrome targets for page assertions.",
-				);
+				result = await this.electronSessions.assert(target, req.params as never);
 			} else if (req.method === "locate_by_role") {
 				result = await this.electronSessions.locateByRole(target, req.params as never);
 			} else if (req.method === "locate_by_text") {
@@ -679,6 +677,28 @@ export class BridgeServer {
 				result = await this.electronSessions.recordStop(req.params as { recordingId?: string });
 			} else if (req.method === "record_status") {
 				result = this.electronSessions.recordStatus();
+			} else if (req.method === "network_start") {
+				result = await this.electronSessions.networkStart(target, req.params as never);
+			} else if (req.method === "network_stop") {
+				result = await this.electronSessions.networkStop(target);
+			} else if (req.method === "network_list") {
+				result = this.electronSessions.networkList(target, req.params as never);
+			} else if (req.method === "network_clear") {
+				result = this.electronSessions.networkClear(target);
+			} else if (req.method === "network_stats") {
+				result = this.electronSessions.networkStats(target);
+			} else if (req.method === "network_get") {
+				result = this.electronSessions.networkGet(target, req.params as never);
+			} else if (req.method === "network_body") {
+				result = this.electronSessions.networkBody(target, req.params as never);
+			} else if (req.method === "network_curl") {
+				result = this.electronSessions.networkCurl(target, req.params as never);
+			} else if (req.method === "perf_metrics") {
+				result = await this.electronSessions.perfMetrics(target, req.params as never);
+			} else if (req.method === "perf_trace_start" || req.method === "perf_trace_stop") {
+				throw new Error(
+					"Electron target dispatch for performance tracing is not implemented yet; use perf metrics.",
+				);
 			} else {
 				throw new Error(`Electron target dispatch for '${req.method}' is not implemented yet.`);
 			}

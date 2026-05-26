@@ -147,6 +147,8 @@ shuvgeist electron list --json
 shuvgeist electron allow vscode
 ```
 
+Known app aliases include `vscode`, `shuvscode`, `slack`, `legcord`, `signal`, `signal-desktop`, and `obsidian`.
+
 Attach to an already running CDP-enabled app, or launch a known app with a debugging port:
 
 ```bash

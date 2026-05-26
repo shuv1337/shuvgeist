@@ -1,0 +1,107 @@
+{
+  "stage": "interview",
+  "title": "Resolve open Shuvgeist GitHub issues",
+  "goalSlug": "resolve-open-github-issues",
+  "questions": [
+    {
+      "id": "scope",
+      "prompt": "What should this goal include?",
+      "description": "The live queue currently has issues #15 and #36-#42.",
+      "answerMode": "single-custom",
+      "recommendedAnswer": "Resolve all implementation-ready issues (#36-#41), resolve or re-triage human-decision issues (#15 and #42), and close each issue only after validation and a merged/pushed fix or explicit maintainer decision.",
+      "recommendedOptionIds": [
+        "all_open"
+      ],
+      "options": [
+        {
+          "id": "all_open",
+          "label": "All open issues"
+        },
+        {
+          "id": "agent_ready_first",
+          "label": "Agent-ready first"
+        },
+        {
+          "id": "electron_only",
+          "label": "Electron targets only"
+        }
+      ],
+      "required": true
+    },
+    {
+      "id": "blocked_human_issues",
+      "prompt": "How should blocked or human-decision issues be handled?",
+      "description": "Issue #15 is blocked/ready-for-human. Issue #42 asks for a trusted-input strategy decision before implementation.",
+      "answerMode": "single-custom",
+      "recommendedAnswer": "Do the research, write the recommendation, update the issue with the proposed decision, and proceed only when the implementation path is clear. Do not invent a native-input architecture without evidence.",
+      "recommendedOptionIds": [
+        "research_recommend_then_implement"
+      ],
+      "options": [
+        {
+          "id": "research_recommend_then_implement",
+          "label": "Research then implement"
+        },
+        {
+          "id": "leave_blocked",
+          "label": "Leave blocked"
+        },
+        {
+          "id": "decide_locally",
+          "label": "Agent decides"
+        }
+      ],
+      "required": true
+    },
+    {
+      "id": "execution_order",
+      "prompt": "What execution order should the plan optimize for?",
+      "description": "The Electron issues have natural dependencies: launch/attach and main inspector bugs unblock richer testing; renderer assertions/network/perf build on target dispatch.",
+      "answerMode": "single-custom",
+      "recommendedAnswer": "Fix foundational launch/attach and inspector correctness first (#36, #37, #38), then renderer command parity (#39-#41), then trusted input (#42), then revisit #15 against the clarified product direction.",
+      "recommendedOptionIds": [
+        "foundations_first"
+      ],
+      "options": [
+        {
+          "id": "foundations_first",
+          "label": "Foundations first"
+        },
+        {
+          "id": "quick_wins_first",
+          "label": "Quick wins first"
+        },
+        {
+          "id": "issue_number_order",
+          "label": "Issue number order"
+        }
+      ],
+      "required": true
+    },
+    {
+      "id": "done_condition",
+      "prompt": "What is the done condition for this goal?",
+      "description": "This controls whether the goal stops at local fixes, pushed commits, PRs, or closed issues.",
+      "answerMode": "single-custom",
+      "recommendedAnswer": "All open issues are either closed with validated fixes/decisions pushed to GitHub, or explicitly documented as still blocked with the current blocker and next human action.",
+      "recommendedOptionIds": [
+        "closed_or_documented_blocked"
+      ],
+      "options": [
+        {
+          "id": "closed_or_documented_blocked",
+          "label": "Closed or documented blocked"
+        },
+        {
+          "id": "all_closed_only",
+          "label": "All closed only"
+        },
+        {
+          "id": "plan_only",
+          "label": "Plan only"
+        }
+      ],
+      "required": true
+    }
+  ]
+}

@@ -1,0 +1,65 @@
+[
+  {
+    "id": "fact-1",
+    "text": "The goal covers every GitHub issue that is open in shuv1337/shuvgeist when execution begins.",
+    "comment": "",
+    "recommendedAutomatedVerification": true,
+    "automatedVerification": true
+  },
+  {
+    "id": "fact-2",
+    "text": "Implementation-ready Electron issues are resolved before higher-level product or human-decision issues.",
+    "comment": "",
+    "recommendedAutomatedVerification": false,
+    "automatedVerification": false
+  },
+  {
+    "id": "fact-3",
+    "text": "The first implementation batch fixes foundational Electron launch, attach, main-inspector, and source-root behavior.",
+    "comment": "",
+    "recommendedAutomatedVerification": true,
+    "automatedVerification": true
+  },
+  {
+    "id": "fact-4",
+    "text": "The second implementation batch adds Electron renderer parity for assertions, network capture, and performance metrics where CDP supports them.",
+    "comment": "",
+    "recommendedAutomatedVerification": true,
+    "automatedVerification": true
+  },
+  {
+    "id": "fact-5",
+    "text": "Human-decision issues are researched and updated with a recommendation before implementation proceeds.",
+    "comment": "",
+    "recommendedAutomatedVerification": false,
+    "automatedVerification": false
+  },
+  {
+    "id": "fact-6",
+    "text": "Issue #15 is revisited after Electron target capabilities are clarified, and is either closed as no longer needed, converted into narrower implementation work, or documented with a current blocker.",
+    "comment": "",
+    "recommendedAutomatedVerification": false,
+    "automatedVerification": false
+  },
+  {
+    "id": "fact-7",
+    "text": "Issue #42 produces a documented trusted-input strategy before any native or OS-level input implementation is attempted.",
+    "comment": "",
+    "recommendedAutomatedVerification": false,
+    "automatedVerification": false
+  },
+  {
+    "id": "fact-8",
+    "text": "Each resolved issue has validation evidence from focused tests, check scripts, or live Shuvgeist CLI testing appropriate to the change.",
+    "comment": "",
+    "recommendedAutomatedVerification": true,
+    "automatedVerification": true
+  },
+  {
+    "id": "fact-9",
+    "text": "The goal is done only when all open issues are either closed with pushed fixes or explicitly documented as still blocked with the current blocker and next human action.",
+    "comment": "",
+    "recommendedAutomatedVerification": true,
+    "automatedVerification": true
+  }
+]

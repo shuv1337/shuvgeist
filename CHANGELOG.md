@@ -2,8 +2,16 @@
 
 ## [Unreleased]
 
+### Added
+
+- Electron renderer targets now support `shuvgeist assert` for page assertions over raw CDP. (#39)
+- Electron renderer targets now support `shuvgeist network` capture commands over raw CDP. (#40)
+- Electron renderer targets now support `shuvgeist perf metrics` over raw CDP. (#41)
+
 ### Changed
 
+- Electron app registry now includes Legcord, Signal, Obsidian, and shuvscode as allowlistable launch/attach targets.
+- Electron source inspection now follows shell launcher wrappers to their packaged app roots, so alias-only commands can inspect wrapper-installed apps such as shuvscode. (#38)
 - Expanded README, CLI help, site, skill, and e2e CI documentation for deterministic assertions, workflow target pinning, native semantic refs, readiness checks, and exit codes.
 - Bridge protocol method, capability, sensitivity, route, write-lock, CLI command, and default-timeout metadata now derive from a shared command catalog module. (#30)
 - Bridge request target routing now goes through shared target-execution metadata and normalized target error helpers. (#31)
@@ -13,6 +21,8 @@
 
 ### Fixed
 
+- Electron launch sessions now stay attached when a short-lived launcher wrapper exits but the real CDP-enabled app process remains alive. (#36)
+- Electron main-process inspector detection now accepts Node inspector endpoints that expose their WebSocket URL from `/json/list`. (#37)
 - Semantic `ref fill` now selects `<select>` options by value or visible label, and `ref click --timeout` can wait for bounded same-tab page stability after async navigation. (#35)
 
 ## [1.1.15] - 2026-05-23

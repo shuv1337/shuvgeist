@@ -1,7 +1,8 @@
 import {
-	captureElectronWindowScreenshot,
-	evaluateElectronWindow,
-	type ElectronPageCdpClient,
+		captureElectronWindowScreenshot,
+		assertElectronWindow,
+		evaluateElectronWindow,
+		type ElectronPageCdpClient,
 } from "../../../src/bridge/electron/window-executor.js";
 
 function fakeClient(responses: unknown[]): ElectronPageCdpClient & { calls: Array<{ method: string; params?: unknown }> } {
@@ -70,5 +71,36 @@ describe("electron window executor", () => {
 			"Runtime.evaluate",
 			"Page.captureScreenshot",
 		]);
+	});
+
+	it("runs renderer assertions through Runtime.evaluate", async () => {
+		const client = fakeClient([{ result: { value: { ok: true, message: "Text assertion passed", actual: "Save" } } }]);
+
+		await expect(assertElectronWindow(client, { kind: "text", text: "Save", timeoutMs: 0 })).resolves.toMatchObject({
+			ok: true,
+			kind: "text",
+			message: "Text assertion passed",
+			actual: "Save",
+			tabId: -1,
+			frameId: 0,
+		});
+		expect(client.calls[0]).toMatchObject({
+			method: "Runtime.evaluate",
+			params: {
+				awaitPromise: true,
+				returnByValue: true,
+			},
+		});
+	});
+
+	it("returns failing renderer assertion results", async () => {
+		const client = fakeClient([{ result: { value: { ok: false, message: "Text missing", actual: 0, expected: 1 } } }]);
+
+		await expect(assertElectronWindow(client, { kind: "text", text: "Save", timeoutMs: 0 })).resolves.toMatchObject({
+			ok: false,
+			message: "Text missing",
+			actual: 0,
+			expected: 1,
+		});
 	});
 });

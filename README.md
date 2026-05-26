@@ -254,6 +254,8 @@ shuvgeist electron list --json
 shuvgeist electron allow vscode
 ```
 
+Known app aliases include `vscode`, `shuvscode`, `slack`, `legcord`, `signal`, `signal-desktop`, and `obsidian`.
+
 Use `launch` when Shuvgeist should start a known Electron app with a remote debugging port:
 
 ```bash
