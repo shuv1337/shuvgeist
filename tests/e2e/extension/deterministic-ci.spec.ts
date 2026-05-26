@@ -66,6 +66,74 @@ async function openBridgeSettings(page: Page): Promise<void> {
 
 async function createFixtureServer(): Promise<{ baseUrl: string; close: () => Promise<void> }> {
 	const server = createServer((req, res) => {
+		if (req.url === "/techmart") {
+			res.writeHead(200, { "Content-Type": "text/html" });
+			res.end(`<!doctype html>
+<html><head><title>TechMart</title></head>
+<body>
+  <h1>TechMart</h1>
+  <a href="/techmart/catalog">Browse Catalog</a>
+</body></html>`);
+			return;
+		}
+		if (req.url === "/techmart/catalog") {
+			res.writeHead(200, { "Content-Type": "text/html" });
+			res.end(`<!doctype html>
+<html>
+<head><title>TechMart Catalog</title></head>
+<body>
+  <h1>Catalog</h1>
+  <label for="category">Category</label>
+  <select id="category">
+    <option value="all">All Categories</option>
+    <option value="electronics">Electronics</option>
+    <option value="home">Home</option>
+  </select>
+  <label for="sort">Sort</label>
+  <select id="sort">
+    <option value="featured">Featured</option>
+    <option value="price-asc">Low to High</option>
+  </select>
+  <p id="count">Products: 8</p>
+  <p id="first">First product: Laptop Stand</p>
+  <button id="select-usb" type="button">Select USB-C Hub</button>
+  <script>
+    function updateCatalog() {
+      const category = document.querySelector("#category").value;
+      const sort = document.querySelector("#sort").value;
+      document.querySelector("#count").textContent = category === "electronics" ? "Products: 4" : "Products: 8";
+      document.querySelector("#first").textContent = sort === "price-asc" ? "First product: USB-C Hub" : "First product: Laptop Stand";
+    }
+    document.querySelector("#category").addEventListener("change", updateCatalog);
+    document.querySelector("#sort").addEventListener("change", updateCatalog);
+    document.querySelector("#select-usb").addEventListener("click", () => {
+      setTimeout(() => { window.location.href = "/techmart/checkout"; }, 100);
+    });
+  </script>
+</body>
+</html>`);
+			return;
+		}
+		if (req.url === "/techmart/checkout") {
+			res.writeHead(200, { "Content-Type": "text/html" });
+			res.end(`<!doctype html>
+<html><head><title>TechMart Checkout</title></head>
+<body>
+  <h1>Checkout</h1>
+  <label for="name">Name</label>
+  <input id="name" />
+  <label for="email">Email</label>
+  <input id="email" />
+  <button id="place-order" type="button">Place Order</button>
+  <p id="confirmation"></p>
+  <script>
+    document.querySelector("#place-order").addEventListener("click", () => {
+      setTimeout(() => { document.querySelector("#confirmation").textContent = "Order TM-57F23A8F"; }, 100);
+    });
+  </script>
+</body></html>`);
+			return;
+		}
 		if (req.url === "/frame") {
 			res.writeHead(200, { "Content-Type": "text/html" });
 			res.end(`<!doctype html>
@@ -369,6 +437,103 @@ test("bridge supports deterministic assertions, workflow pinning, and native ifr
 				params: { tabId, frameId: childFrame?.frameId, kind: "text", text: "Frame count: 1", timeoutMs: 2_000 },
 			});
 			expect(frameAssert.result).toMatchObject({ ok: true, kind: "text" });
+
+			const getFirstRef = async (id: number, method: string, params: Record<string, unknown>): Promise<string> => {
+				const response = await readResponseById<{ result?: Array<{ refId: string }> }>(cli.ws, { id, method, params });
+				const match = response.result?.[0]?.refId;
+				expect(match, JSON.stringify(response, null, 2)).toBeDefined();
+				return match ?? "";
+			};
+
+			const techmart = await readResponseById<{ result?: { tabId: number; finalUrl: string } }>(cli.ws, {
+				id: 220,
+				method: "navigate",
+				params: { url: `${fixture.baseUrl}/techmart`, newTab: true },
+			});
+			const techmartTabId = techmart.result?.tabId;
+			expect(techmartTabId).toBeDefined();
+
+			const browseRef = await getFirstRef(221, "locate_by_role", {
+				tabId: techmartTabId,
+				role: "link",
+				name: "Browse Catalog",
+			});
+			await expect(
+				readResponseById<{ result?: { ok: boolean; wait?: { finalUrl?: string; timedOut: boolean } } }>(cli.ws, {
+					id: 222,
+					method: "ref_click",
+					params: { tabId: techmartTabId, refId: browseRef, waitMs: 2_000 },
+				}),
+			).resolves.toMatchObject({ result: { ok: true, wait: { timedOut: false } } });
+
+			const categoryRef = await getFirstRef(223, "locate_by_label", { tabId: techmartTabId, label: "Category" });
+			await expect(
+				readResponseById(cli.ws, {
+					id: 224,
+					method: "ref_fill",
+					params: { tabId: techmartTabId, refId: categoryRef, value: "Electronics" },
+				}),
+			).resolves.toMatchObject({ result: { ok: true } });
+			await expect(
+				readResponseById(cli.ws, {
+					id: 225,
+					method: "page_assert",
+					params: { tabId: techmartTabId, kind: "text", text: "Products: 4", timeoutMs: 2_000 },
+				}),
+			).resolves.toMatchObject({ result: { ok: true } });
+
+			const sortRef = await getFirstRef(226, "locate_by_label", { tabId: techmartTabId, label: "Sort" });
+			await readResponseById(cli.ws, {
+				id: 227,
+				method: "ref_fill",
+				params: { tabId: techmartTabId, refId: sortRef, value: "Low to High" },
+			});
+			await expect(
+				readResponseById(cli.ws, {
+					id: 228,
+					method: "page_assert",
+					params: { tabId: techmartTabId, kind: "text", text: "First product: USB-C Hub", timeoutMs: 2_000 },
+				}),
+			).resolves.toMatchObject({ result: { ok: true } });
+
+			const selectRef = await getFirstRef(229, "locate_by_role", {
+				tabId: techmartTabId,
+				role: "button",
+				name: "Select USB-C Hub",
+			});
+			await expect(
+				readResponseById<{ result?: { ok: boolean; wait?: { finalUrl?: string; timedOut: boolean } } }>(cli.ws, {
+					id: 230,
+					method: "ref_click",
+					params: { tabId: techmartTabId, refId: selectRef, waitMs: 2_000 },
+				}),
+			).resolves.toMatchObject({ result: { ok: true, wait: { timedOut: false } } });
+
+			const nameRef = await getFirstRef(231, "locate_by_label", { tabId: techmartTabId, label: "Name" });
+			await readResponseById(cli.ws, {
+				id: 232,
+				method: "ref_fill",
+				params: { tabId: techmartTabId, refId: nameRef, value: "Ada Lovelace" },
+			});
+			const emailRef = await getFirstRef(233, "locate_by_label", { tabId: techmartTabId, label: "Email" });
+			await readResponseById(cli.ws, {
+				id: 234,
+				method: "ref_fill",
+				params: { tabId: techmartTabId, refId: emailRef, value: "ada@example.com" },
+			});
+			const orderRef = await getFirstRef(235, "locate_by_role", { tabId: techmartTabId, role: "button", name: "Place Order" });
+			await readResponseById(cli.ws, {
+				id: 236,
+				method: "ref_click",
+				params: { tabId: techmartTabId, refId: orderRef, waitMs: 500 },
+			});
+			await expect(
+				readResponseById(cli.ws, {
+					id: 237,
+					method: "page_assert",
+					params: { tabId: techmartTabId, kind: "text", text: "TM-57F23A8F", timeoutMs: 2_000 },
+				}),
+			).resolves.toMatchObject({ result: { ok: true } });
 		} finally {
 			cli.ws.close();
 		}

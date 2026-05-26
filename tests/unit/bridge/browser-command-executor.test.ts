@@ -119,7 +119,7 @@ vi.mock("../../../src/tools/repl/runtime-providers.js", () => ({
 
 declare global {
 	var chrome: {
-		tabs: { query: ReturnType<typeof vi.fn> };
+		tabs: { query: ReturnType<typeof vi.fn>; get: ReturnType<typeof vi.fn> };
 		runtime: { getURL: ReturnType<typeof vi.fn> };
 		webNavigation: { getAllFrames: ReturnType<typeof vi.fn> };
 		userScripts: { configureWorld: ReturnType<typeof vi.fn>; execute: ReturnType<typeof vi.fn> };
@@ -129,6 +129,7 @@ declare global {
 globalThis.chrome = {
 	tabs: {
 		query: vi.fn(),
+		get: vi.fn(),
 	},
 	runtime: {
 		getURL: vi.fn((value: string) => `chrome-extension://test/${value}`),
@@ -162,6 +163,7 @@ describe("BrowserCommandExecutor", () => {
 		nativeFillAt.mockReset();
 		nativeProviderOptions.mockReset();
 		chrome.tabs.query.mockReset();
+		chrome.tabs.get.mockReset();
 		chrome.runtime.getURL.mockClear();
 		chrome.webNavigation.getAllFrames.mockReset();
 		chrome.userScripts.configureWorld.mockReset();
@@ -480,6 +482,28 @@ describe("BrowserCommandExecutor", () => {
 			}),
 		);
 		expect(nativeClickAt).not.toHaveBeenCalled();
+	});
+
+	it("waits for bounded same-tab stability when requested after ref click", async () => {
+		const snapshot = buildRefSnapshot();
+		pageSnapshotExecute.mockResolvedValue({ details: snapshot });
+		capturePageSnapshot.mockResolvedValue(snapshot);
+		chrome.userScripts.execute.mockResolvedValue([{ result: { success: true, value: { ok: true }, console: [] } }]);
+		chrome.tabs.get.mockResolvedValue({ id: 42, url: "https://example.com/done", status: "complete" });
+		const executor = new BrowserCommandExecutor({ windowId: 7, sensitiveAccessEnabled: false });
+
+		await executor.pageSnapshot({ tabId: 42, frameId: 7 });
+		await expect(executor.refClick({ refId: "login-input", waitMs: 250 })).resolves.toMatchObject({
+			ok: true,
+			refId: "login-input",
+			wait: {
+				tabId: 42,
+				finalUrl: "https://example.com/done",
+				status: "complete",
+				timedOut: false,
+			},
+		});
+		expect(chrome.tabs.get).toHaveBeenCalledWith(42);
 	});
 
 	it("does not fall back to synthetic fill when native ref input fails", async () => {

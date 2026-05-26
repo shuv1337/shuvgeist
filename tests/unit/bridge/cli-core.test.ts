@@ -111,6 +111,12 @@ describe("cli-core", () => {
 			kind: "cookies",
 			defaultTimeoutMs: 120_000,
 		});
+		expect(createCommandPlan("ref", ["click", "checkout"], { timeout: "3s" }, readFileText)).toEqual({
+			kind: "one-shot",
+			method: "ref_click",
+			params: { refId: "checkout", waitMs: 3000 },
+			defaultTimeoutMs: 60_000,
+		});
 		expect(readFileText).toHaveBeenCalledWith("script.js");
 	});
 

@@ -236,6 +236,13 @@ shuvgeist locate label "Email" --json
 shuvgeist ref fill <refId> --value "user@example.com" --native
 ```
 
+`ref fill` also handles `<select>` controls by option value or visible label and dispatches bubbling input/change events. For clicks that trigger async same-tab navigation, pass a bounded wait:
+
+```bash
+shuvgeist ref fill <selectRefId> --value "Low to High" --json
+shuvgeist ref click <buttonRefId> --timeout 5s --json
+```
+
 Before treating a machine as CI-ready, verify that `shuvgeist launch --headless --json` produces a connected extension target, `status --json` advertises the `page_assert` capability, and the local fixture assertions pass. See [docs/e2e-ci.md](docs/e2e-ci.md) for the full checklist, assertion flags, workflow target modes, native ref caveats, and exit-code contract.
 
 ### Electron targets

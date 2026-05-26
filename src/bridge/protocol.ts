@@ -271,6 +271,7 @@ export interface LocateByLabelParams extends TargetedBridgeParams {
 export interface RefClickParams extends TargetedBridgeParams {
 	refId: string;
 	native?: boolean;
+	waitMs?: number;
 }
 
 export interface RefFillParams extends TargetedBridgeParams {

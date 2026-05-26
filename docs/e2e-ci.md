@@ -133,6 +133,13 @@ shuvgeist locate label "Email" --json
 shuvgeist ref fill <refId> --value "user@example.com"
 ```
 
+`ref fill` treats select elements as native selections by value or visible label and dispatches input/change events. Use `ref click --timeout <duration>` when a clicked ref performs delayed same-tab navigation and the next command needs the settled page:
+
+```bash
+shuvgeist ref fill <sortSelectRef> --value "Low to High" --json
+shuvgeist ref click <selectButtonRef> --timeout 5s --json
+```
+
 Add `--native` when the page requires trusted debugger-backed input:
 
 ```bash

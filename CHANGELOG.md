@@ -7,6 +7,10 @@
 - Expanded README, CLI help, site, skill, and e2e CI documentation for deterministic assertions, workflow target pinning, native semantic refs, readiness checks, and exit codes.
 - Bridge protocol method, capability, sensitivity, route, and write-lock metadata now derive from a shared command catalog module. (#30)
 
+### Fixed
+
+- Semantic `ref fill` now selects `<select>` options by value or visible label, and `ref click --timeout` can wait for bounded same-tab page stability after async navigation. (#35)
+
 ## [1.1.15] - 2026-05-23
 
 ### Added

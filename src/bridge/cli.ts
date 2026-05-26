@@ -1299,7 +1299,7 @@ Usage:
   shuvgeist snapshot [--tab-id N] [--frame-id N] [--max-entries N] [--json]
                     (snapshotIds are usable as refIds)
   shuvgeist locate <role|text|label> <query> [--tab-id N] [--frame-id N] [--json]
-  shuvgeist ref <click|fill> <refId> [--value text] [--native] [--tab-id N] [--frame-id N] [--json]
+  shuvgeist ref <click|fill> <refId> [--value text] [--native] [--tab-id N] [--frame-id N] [--timeout 5s] [--json]
   shuvgeist frame <list|tree> [--tab-id N] [--json]
   shuvgeist network <start|stop|list|get|body|curl|clear|stats> [...] [--json]
   shuvgeist device <emulate|reset> [...] [--json]
@@ -1365,6 +1365,7 @@ Global options:
   --visible           Require visible assertion target
   --enabled           Require enabled assertion target
   --native            Use trusted native ref input
+  --timeout <value>   For ref click, wait up to this long for same-tab page stability
   --count <N>         Assertion exact match count
   --min-count <N>     Assertion minimum match count
   --max-count <N>     Assertion maximum match count
@@ -1406,7 +1407,9 @@ Examples:
   shuvgeist assert expr 'window.__APP_STATE__.ready === true' --world main --json
   shuvgeist workflow run --file smoke.workflow.json --json
   shuvgeist locate label "Email" --json
+  shuvgeist ref fill <refId> --value "Low to High" --json
   shuvgeist ref fill <refId> --value "user@example.com" --native --json
+  shuvgeist ref click <refId> --timeout 5s --json
 
 Config file: ~/.shuvgeist/bridge.json
 Environment: SHUVGEIST_BRIDGE_URL, SHUVGEIST_BRIDGE_HOST,

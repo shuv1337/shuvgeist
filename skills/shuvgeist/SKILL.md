@@ -366,6 +366,8 @@ Operate on prior semantic matches without repeating the search. `<refId>` may be
 ```bash
 shuvgeist ref click <refId>
 shuvgeist ref fill <refId> --value "user@example.com"
+shuvgeist ref fill <refId> --value "Low to High"
+shuvgeist ref click <refId> --timeout 5s
 shuvgeist ref click <refId> --native
 shuvgeist ref fill <refId> --value "user@example.com" --native
 ```
@@ -376,6 +378,8 @@ Ref caveats:
 - refs are in-memory only
 - navigation invalidates refs
 - stale or ambiguous refs should fail instead of guessing
+- `ref fill` handles text inputs, textareas, and select controls; select values can be option values or visible labels
+- `ref click --timeout <duration>` waits for bounded same-tab page stability and reports the final URL in JSON output
 - `--native` uses trusted debugger-backed input and does not fall back to synthetic DOM events
 - native refs can target iframe refs when Shuvgeist can resolve frame coordinates; inaccessible frames fail clearly
 

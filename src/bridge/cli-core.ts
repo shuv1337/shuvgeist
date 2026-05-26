@@ -593,6 +593,8 @@ export function createCommandPlan(
 			applyTargetFlags(flags, params);
 			if (flags.native) params.native = true;
 			if (action === "click") {
+				const waitMs = parseTimeout(flags.timeout);
+				if (typeof waitMs === "number") params.waitMs = waitMs;
 				return {
 					kind: "one-shot",
 					method: "ref_click",

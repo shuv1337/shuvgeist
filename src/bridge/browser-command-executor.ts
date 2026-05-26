@@ -537,6 +537,7 @@ export class BrowserCommandExecutor {
 
 	async refClick(params: RefClickParams, signal?: AbortSignal): Promise<unknown> {
 		const resolution = await this.resolveReference(params.refId, params.tabId, params.frameId, signal);
+		let wait: Awaited<ReturnType<BrowserCommandExecutor["waitForRefClickStability"]>> | undefined;
 		if (params.native) {
 			const point = await this.resolveNativeRefPoint(resolution, signal);
 			const nativeInput = new NativeInputEventsRuntimeProvider({
@@ -547,6 +548,9 @@ export class BrowserCommandExecutor {
 				telemetry: this.telemetry,
 			});
 			await nativeInput.clickAt(point);
+			if (typeof params.waitMs === "number" && params.waitMs > 0) {
+				wait = await this.waitForRefClickStability(resolution.tabId, params.waitMs, signal);
+			}
 			return {
 				ok: true,
 				refId: params.refId,
@@ -555,15 +559,20 @@ export class BrowserCommandExecutor {
 				selector: resolution.selector,
 				native: true,
 				point,
+				...(wait ? { wait } : {}),
 			};
 		}
 		await this.executeRefDomAction(resolution.tabId, resolution.frameId, resolution.selector, refClickInPage);
+		if (typeof params.waitMs === "number" && params.waitMs > 0) {
+			wait = await this.waitForRefClickStability(resolution.tabId, params.waitMs, signal);
+		}
 		return {
 			ok: true,
 			refId: params.refId,
 			tabId: resolution.tabId,
 			frameId: resolution.frameId,
 			selector: resolution.selector,
+			...(wait ? { wait } : {}),
 		};
 	}
 
@@ -1063,6 +1072,38 @@ export class BrowserCommandExecutor {
 		return { x: execution.value.x + frameOffset.x, y: execution.value.y + frameOffset.y };
 	}
 
+	private async waitForRefClickStability(
+		tabId: number,
+		timeoutMs: number,
+		signal?: AbortSignal,
+	): Promise<{ tabId: number; finalUrl?: string; status?: string; waitedMs: number; timedOut: boolean }> {
+		const startedAt = Date.now();
+		const deadline = startedAt + timeoutMs;
+		let lastUrl: string | undefined;
+		let stableSince = 0;
+		let lastStatus: string | undefined;
+		while (Date.now() < deadline) {
+			if (signal?.aborted) throw new Error("Ref click wait aborted");
+			let tab: chrome.tabs.Tab | undefined;
+			try {
+				tab = await chrome.tabs.get(tabId);
+			} catch {
+				break;
+			}
+			const url = tab.url;
+			lastStatus = tab.status;
+			if (url !== lastUrl) {
+				lastUrl = url;
+				stableSince = Date.now();
+			}
+			if (tab.status === "complete" && Date.now() - stableSince >= 150) {
+				return { tabId, finalUrl: url, status: tab.status, waitedMs: Date.now() - startedAt, timedOut: false };
+			}
+			await new Promise((resolve) => setTimeout(resolve, Math.min(50, Math.max(0, deadline - Date.now()))));
+		}
+		return { tabId, finalUrl: lastUrl, status: lastStatus, waitedMs: Date.now() - startedAt, timedOut: true };
+	}
+
 	private async resolveFrameViewportOffset(
 		tabId: number,
 		frameId: number,
@@ -1229,7 +1270,17 @@ function refFillInPage(selector: string, value: string): { ok: true } {
 		throw new Error("Resolved ref target is not fillable");
 	}
 	el.focus();
-	el.value = value;
+	if (el instanceof HTMLSelectElement) {
+		const option = Array.from(el.options).find(
+			(candidate) => candidate.value === value || candidate.text.trim() === value.trim(),
+		);
+		if (!option) {
+			throw new Error(`Resolved select ref has no option matching '${value}'`);
+		}
+		el.value = option.value;
+	} else {
+		el.value = value;
+	}
 	el.dispatchEvent(new Event("input", { bubbles: true }));
 	el.dispatchEvent(new Event("change", { bubbles: true }));
 	return { ok: true };
