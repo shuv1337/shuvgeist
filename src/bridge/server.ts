@@ -41,13 +41,12 @@ import {
 	ErrorCodes,
 	formatBridgeProtocolMismatch,
 	isBridgeProtocolCompatible,
-	isServerLocalMethod,
-	isTargetDispatchedMethod,
 	isWriteMethod,
 	type RegistrationMessage,
 } from "./protocol.js";
 import { parseBridgeSkillSnapshot } from "./skill-snapshot.js";
-import { isChromeTarget, isElectronTarget, requestTarget, targetTeachingLabel } from "./target.js";
+import { isElectronTarget, requestTarget, targetTeachingLabel } from "./target.js";
+import { missingExtensionTargetError, resolveBridgeExecution } from "./target-execution.js";
 import { BridgeTelemetry, type BridgeTelemetrySpan, parseTraceparent, type TelemetryAttributes } from "./telemetry.js";
 
 // ---------------------------------------------------------------------------
@@ -519,37 +518,36 @@ export class BridgeServer {
 		}
 
 		const target = requestTarget(req);
-		if (isServerLocalMethod(req.method)) {
+		const execution = resolveBridgeExecution(req.method, target);
+		if (execution.adapter === "server-local") {
 			this.handleServerLocalRequest(client, req, span);
 			return;
 		}
 
-		if (isTargetDispatchedMethod(req.method) && isElectronTarget(target)) {
+		if (execution.adapter === "electron-target" && isElectronTarget(target)) {
 			void this.handleElectronTargetRequest(client, req, target, span, fields);
 			return;
 		}
 
-		if (!isChromeTarget(target)) {
+		if (execution.adapter === "unsupported-target" && execution.error) {
 			this.sendJson(client.ws, {
 				id: req.id,
-				error: {
-					code: ErrorCodes.INVALID_TARGET,
-					message: `Method '${req.method}' cannot be routed to target '${targetTeachingLabel(target)}'`,
-				},
+				error: execution.error,
 			});
 			return;
 		}
 
 		// Check extension target
 		if (!this.activeExtension || this.activeExtension.ws.readyState !== WebSocket.OPEN) {
+			const error = missingExtensionTargetError();
 			bridgeLog("warn", "no extension target", { ...fields, outcome: "error" });
-			span?.recordError(new Error("No active extension target connected"));
+			span?.recordError(new Error(error.message));
 			span?.setAttribute("bridge.outcome", "error");
 			span?.end("error");
 			void this.telemetry?.flush();
 			this.sendJson(client.ws, {
 				id: req.id,
-				error: { code: ErrorCodes.NO_EXTENSION_TARGET, message: "No active extension target connected" },
+				error,
 			});
 			return;
 		}
