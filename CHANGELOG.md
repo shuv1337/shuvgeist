@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+### Added
+
+### Changed
+
+### Fixed
+
+### Removed
+
+## [1.1.16] - 2026-05-26
+
 ### Added
 
 - Electron renderer targets now support `shuvgeist assert` for page assertions over raw CDP. (#39)
