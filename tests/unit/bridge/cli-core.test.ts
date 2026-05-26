@@ -8,6 +8,7 @@ import {
 	resolveBridgeUrl,
 	resolveConfig,
 } from "../../../src/bridge/cli-core.js";
+import { getBridgeCommandMetadata } from "../../../src/bridge/command-catalog.js";
 
 describe("cli-core", () => {
 	it("resolves bridge url by flag, env, and config precedence", () => {
@@ -118,6 +119,28 @@ describe("cli-core", () => {
 			defaultTimeoutMs: 60_000,
 		});
 		expect(readFileText).toHaveBeenCalledWith("script.js");
+	});
+
+	it("uses catalog timeout metadata for one-shot bridge command plans", () => {
+		const readFileText = vi.fn();
+		const plans = [
+			createCommandPlan("navigate", ["https://example.com"], {}, readFileText),
+			createCommandPlan("eval", ["document.title"], {}, readFileText),
+			createCommandPlan("select", ["Pick", "a", "button"], {}, readFileText),
+			createCommandPlan("snapshot", [], {}, readFileText),
+			createCommandPlan("electron", ["doctor"], {}, readFileText),
+			createCommandPlan("electron", ["source", "extract", "/tmp/out"], { sourcePath: "/tmp/app" }, readFileText),
+		];
+		for (const plan of plans) {
+			expect(plan.kind).toBe("one-shot");
+			if (plan.kind !== "one-shot") continue;
+			expect(getBridgeCommandMetadata(plan.method)?.defaultTimeout, plan.method).toBeDefined();
+			if (plan.method === "select_element") {
+				expect(plan.defaultTimeoutMs).toBeUndefined();
+			} else {
+				expect(plan.defaultTimeoutMs).toBeGreaterThan(0);
+			}
+		}
 	});
 
 	it("forwards target flags for repl and eval", () => {

@@ -5,7 +5,7 @@
 ### Changed
 
 - Expanded README, CLI help, site, skill, and e2e CI documentation for deterministic assertions, workflow target pinning, native semantic refs, readiness checks, and exit codes.
-- Bridge protocol method, capability, sensitivity, route, and write-lock metadata now derive from a shared command catalog module. (#30)
+- Bridge protocol method, capability, sensitivity, route, write-lock, CLI command, and default-timeout metadata now derive from a shared command catalog module. (#30)
 
 ### Fixed
 
