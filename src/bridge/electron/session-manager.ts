@@ -28,6 +28,7 @@ import type { BridgeTarget } from "../target.js";
 import { resolveElectronApp, resolveExecutable } from "./app-registry.js";
 import { ElectronCdpClient } from "./cdp-client.js";
 import { normalizeElectronConfig, readBridgeConfig } from "./config.js";
+import { ElectronSessionStore } from "./session-store.js";
 import { readSkillSnapshot } from "./skill-snapshot-store.js";
 import type {
 	ElectronIpcTap,
@@ -36,6 +37,7 @@ import type {
 	ElectronSessionSummary,
 	ElectronWindow,
 } from "./types.js";
+import { captureElectronWindowScreenshot, evaluateElectronWindow } from "./window-executor.js";
 
 interface CdpVersionResponse {
 	Browser?: string;
@@ -45,13 +47,12 @@ interface CdpVersionResponse {
 const execFileAsync = promisify(execFile);
 
 export class ElectronSessionManager {
-	private readonly sessions = new Map<string, ElectronSession>();
+	private readonly sessionStore = new ElectronSessionStore();
 	private readonly refs = new Map<string, Map<string, ElectronRefEntry>>();
 	private readonly recordings = new Map<string, ElectronRecordingState>();
-	private nextSessionNumber = 1;
 
 	list(): ElectronSessionSummary[] {
-		return Array.from(this.sessions.values()).map((session) => this.toSummary(session));
+		return this.sessionStore.summaries();
 	}
 
 	async launch(appRef: string, options: { inspectMain?: boolean } = {}): Promise<ElectronSessionSummary> {
@@ -87,8 +88,8 @@ export class ElectronSessionManager {
 			process: child,
 		});
 		await this.refreshWindows(session);
-		child.once("exit", () => this.sessions.delete(session.id));
-		return this.toSummary(session);
+		child.once("exit", () => this.sessionStore.delete(session.id));
+		return this.sessionStore.toSummary(session);
 	}
 
 	async attach(params: {
@@ -124,13 +125,13 @@ export class ElectronSessionManager {
 			launched: false,
 		});
 		await this.refreshWindows(session);
-		return this.toSummary(session);
+		return this.sessionStore.toSummary(session);
 	}
 
 	detach(sessionId: string): boolean {
-		const session = this.sessions.get(sessionId);
+		const session = this.sessionStore.get(sessionId);
 		if (!session) return false;
-		this.sessions.delete(sessionId);
+		this.sessionStore.delete(sessionId);
 		if (session.launched && session.process?.pid) {
 			try {
 				process.kill(session.process.pid, "SIGTERM");
@@ -157,13 +158,13 @@ export class ElectronSessionManager {
 		const sessions =
 			target?.kind === "electron-window"
 				? [this.resolveSession(target)].filter((session): session is ElectronSession => Boolean(session))
-				: Array.from(this.sessions.values());
+				: this.sessionStore.list();
 		for (const session of sessions) await this.refreshWindows(session);
-		return sessions.map((session) => this.toSummary(session));
+		return this.sessionStore.summaries(sessions);
 	}
 
 	async mainInfo(sessionId: string): Promise<ElectronMainInfoResult> {
-		const session = this.sessions.get(sessionId);
+		const session = this.sessionStore.get(sessionId);
 		const client = await this.connectToMainInspector(session, "main_inspect");
 		try {
 			const response = await client.send<{ result?: { value?: ElectronMainInfoResult } }>("Runtime.evaluate", {
@@ -180,7 +181,7 @@ export class ElectronSessionManager {
 	}
 
 	async startIpcTap(sessionId: string, options: { channel?: string } = {}): Promise<ElectronIpcTap> {
-		const session = this.sessions.get(sessionId);
+		const session = this.sessionStore.get(sessionId);
 		const client = await this.connectToMainInspector(session, "ipc_tap");
 		const channel = options.channel?.trim() || undefined;
 		try {
@@ -205,7 +206,7 @@ export class ElectronSessionManager {
 	}
 
 	async stopIpcTap(sessionId: string): Promise<{ ok: true; stopped: number; warning: string }> {
-		const session = this.sessions.get(sessionId);
+		const session = this.sessionStore.get(sessionId);
 		const client = await this.connectToMainInspector(session, "ipc_tap");
 		try {
 			await client.send("Runtime.evaluate", {
@@ -226,7 +227,7 @@ export class ElectronSessionManager {
 	}
 
 	async startMainNetworkTap(sessionId: string): Promise<ElectronMainNetworkTap> {
-		const session = this.sessions.get(sessionId);
+		const session = this.sessionStore.get(sessionId);
 		const client = await this.connectToMainInspector(session, "main_network_tap");
 		try {
 			await client.send("Runtime.evaluate", {
@@ -248,7 +249,7 @@ export class ElectronSessionManager {
 	}
 
 	async stopMainNetworkTap(sessionId: string): Promise<{ ok: true; stopped: number; source: "main" }> {
-		const session = this.sessions.get(sessionId);
+		const session = this.sessionStore.get(sessionId);
 		const client = await this.connectToMainInspector(session, "main_network_tap");
 		try {
 			await client.send("Runtime.evaluate", {
@@ -265,7 +266,7 @@ export class ElectronSessionManager {
 	}
 
 	async labelWindow(sessionId: string, windowRef: string, label: string): Promise<ElectronWindow> {
-		const session = this.sessions.get(sessionId);
+		const session = this.sessionStore.get(sessionId);
 		if (!session) throw new Error(`No Electron session attached for '${sessionId}'.`);
 		await this.refreshWindows(session);
 		const normalized = label.trim();
@@ -282,15 +283,7 @@ export class ElectronSessionManager {
 	}
 
 	private resolveSession(target: BridgeTarget): ElectronSession | undefined {
-		if (target.kind !== "electron-window") return undefined;
-		if (target.sessionId) return this.sessions.get(target.sessionId);
-		if (target.appRef) {
-			const app = resolveElectronApp(target.appRef);
-			return Array.from(this.sessions.values()).find(
-				(session) => session.appRef === target.appRef || (app && session.appId === app.id),
-			);
-		}
-		return Array.from(this.sessions.values())[0];
+		return this.sessionStore.resolveTargetSession(target);
 	}
 
 	private resolveWindow(session: ElectronSession, windowRef?: string): ElectronWindow | undefined {
@@ -319,28 +312,12 @@ export class ElectronSessionManager {
 				: [];
 			const skillLibrary =
 				matchingSkills.length > 0 ? `${matchingSkills.map((skill) => skill.library).join("\n\n")}\n\n` : "";
-			const response = await client.send<{
-				result?: { type?: string; value?: unknown; description?: string };
-				exceptionDetails?: { text?: string; exception?: { description?: string } };
-			}>("Runtime.evaluate", {
-				expression: `${skillLibrary}${code}`,
-				awaitPromise: true,
-				returnByValue: true,
+			return await evaluateElectronWindow(client, {
+				code,
+				skillLibrary,
+				skillsSnapshotStatus: status,
+				includeSkillsSnapshot: matchingSkills.length > 0 || status.state === "stale" || status.state === "invalid",
 			});
-			if (response.exceptionDetails) {
-				throw new Error(
-					response.exceptionDetails.exception?.description ??
-						response.exceptionDetails.text ??
-						"Evaluation failed",
-				);
-			}
-			const value = response.result?.value ?? response.result?.description ?? null;
-			return {
-				output: typeof value === "string" ? value : JSON.stringify(value),
-				result: value,
-				skillsSnapshot:
-					matchingSkills.length > 0 || status.state === "stale" || status.state === "invalid" ? status : undefined,
-			};
 		} finally {
 			client.close();
 		}
@@ -351,34 +328,7 @@ export class ElectronSessionManager {
 		if (!resolved) throw noSessionError(target);
 		const client = await this.connectToPage(resolved.window);
 		try {
-			await client.send("Page.enable");
-			const viewport = await client.send<{
-				result?: {
-					value?: { innerWidth?: number; innerHeight?: number; devicePixelRatio?: number };
-				};
-			}>("Runtime.evaluate", {
-				expression: "({ innerWidth, innerHeight, devicePixelRatio })",
-				returnByValue: true,
-			});
-			const cssWidth = viewport.result?.value?.innerWidth ?? 0;
-			const cssHeight = viewport.result?.value?.innerHeight ?? 0;
-			const devicePixelRatio = viewport.result?.value?.devicePixelRatio ?? 1;
-			const capture = await client.send<{ data: string }>("Page.captureScreenshot", {
-				format: "png",
-				captureBeyondViewport: false,
-			});
-			const imageWidth = maxWidth && cssWidth > maxWidth ? maxWidth : Math.round(cssWidth * devicePixelRatio);
-			const imageHeight = Math.round(cssHeight * (imageWidth / Math.max(cssWidth, 1)));
-			return {
-				mimeType: "image/png",
-				dataUrl: `data:image/png;base64,${capture.data}`,
-				cssWidth,
-				cssHeight,
-				imageWidth,
-				imageHeight,
-				devicePixelRatio,
-				scale: cssWidth > 0 ? imageWidth / cssWidth : 1,
-			};
+			return await captureElectronWindowScreenshot(client, maxWidth);
 		} finally {
 			client.close();
 		}
@@ -577,42 +527,7 @@ export class ElectronSessionManager {
 			"id" | "startedAt" | "nextWindowNumber" | "windows" | "ipcTaps" | "mainNetworkTaps"
 		>,
 	): ElectronSession {
-		const next: ElectronSession = {
-			...session,
-			id: `e${this.nextSessionNumber++}`,
-			startedAt: new Date().toISOString(),
-			nextWindowNumber: 1,
-			windows: [],
-			ipcTaps: [],
-			mainNetworkTaps: [],
-		};
-		this.sessions.set(next.id, next);
-		return next;
-	}
-
-	private toSummary(session: ElectronSession): ElectronSessionSummary {
-		return {
-			id: session.id,
-			appId: session.appId,
-			appRef: session.appRef,
-			pid: session.pid,
-			port: session.port,
-			browser: session.browser,
-			mainInspector: session.mainInspector,
-			launched: session.launched,
-			startedAt: session.startedAt,
-			windows: session.windows
-				.filter((window) => !window.closed)
-				.map((window) => ({
-					ref: window.ref,
-					label: window.label,
-					type: window.type,
-					title: window.title,
-					url: window.url,
-					isPrimary: window.isPrimary,
-					closed: window.closed,
-				})),
-		};
+		return this.sessionStore.create(session);
 	}
 
 	private assertAllowed(appId: string): void {

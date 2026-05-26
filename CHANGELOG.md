@@ -9,6 +9,7 @@
 - Bridge request target routing now goes through shared target-execution metadata and normalized target error helpers. (#31)
 - Sidepanel session model resolution, metadata, and bridge session runtime behavior now live behind tested sidepanel runtime helpers. (#32)
 - TTS provider fallback decisions and read-along session bookkeeping now run through a tested playback coordinator while background keeps Chrome/offscreen adapters. (#33)
+- Electron session storage and window evaluate/screenshot execution now live behind tested internal store and fake-CDP executor modules. (#34)
 
 ### Fixed
 
