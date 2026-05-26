@@ -162,6 +162,7 @@ CRITICAL: Use browserjs() and repl tool for DOM manipulation. Use this ONLY for 
 						{
 							expression: args.code,
 							returnByValue: true,
+							awaitPromise: true,
 						},
 						{ parent: traceContext },
 					);

@@ -1,0 +1,170 @@
+{
+  "stage": "interview",
+  "title": "Resolve Open Shuvgeist GitHub Issues",
+  "goalSlug": "resolve-open-gh-issues",
+  "questions": [
+    {
+      "id": "execution_scope",
+      "prompt": "What should the goal consider in scope while resolving the open issue queue?",
+      "description": "The live queue includes implementation tickets, architecture-deepening tickets, documentation tickets, one benchmark follow-up ticket, and at least one ready-for-human decision ticket.",
+      "answerMode": "multi-custom",
+      "recommendedAnswer": "Resolve every open issue that can be completed by an agent, while explicitly triaging or escalating ready-for-human/question issues instead of forcing them into implementation.",
+      "recommendedOptionIds": [
+        "ready_agent",
+        "blocked_unblock",
+        "docs_validation",
+        "architecture_plans",
+        "benchmark_followup",
+        "human_decisions"
+      ],
+      "options": [
+        {
+          "id": "ready_agent",
+          "label": "Ready-agent issues"
+        },
+        {
+          "id": "blocked_unblock",
+          "label": "Unblock dependencies"
+        },
+        {
+          "id": "docs_validation",
+          "label": "Docs/validation issues"
+        },
+        {
+          "id": "architecture_plans",
+          "label": "Architecture issues"
+        },
+        {
+          "id": "benchmark_followup",
+          "label": "Benchmark follow-up"
+        },
+        {
+          "id": "human_decisions",
+          "label": "Escalate HITL/question issues"
+        }
+      ],
+      "required": true
+    },
+    {
+      "id": "batching_strategy",
+      "prompt": "How should implementation work be batched?",
+      "description": "The current queue has natural dependency clusters: Electron target stack (#6-#20), deterministic e2e/bridge command stack (#21-#29 plus #35), and architecture deepening (#30-#34).",
+      "answerMode": "single-custom",
+      "recommendedAnswer": "Use small dependency-ordered PR batches: one coherent vertical slice at a time, with validation and issue closure per batch.",
+      "recommendedOptionIds": [
+        "small_vertical"
+      ],
+      "options": [
+        {
+          "id": "small_vertical",
+          "label": "Small vertical PR batches"
+        },
+        {
+          "id": "cluster_milestones",
+          "label": "Larger cluster milestones"
+        },
+        {
+          "id": "one_issue_at_time",
+          "label": "One issue at a time"
+        }
+      ],
+      "required": true
+    },
+    {
+      "id": "priority_order",
+      "prompt": "What priority order should the goal plan assume?",
+      "description": "The issue queue contains overlapping older implementation issues and newer architecture follow-ups.",
+      "answerMode": "single-custom",
+      "recommendedAnswer": "Start with the deterministic e2e / Web Agent benchmark path because it tightens validation for later work, then architecture deepening that reduces future friction, then Electron stack work in dependency order.",
+      "recommendedOptionIds": [
+        "e2e_first"
+      ],
+      "options": [
+        {
+          "id": "e2e_first",
+          "label": "E2E/benchmark first"
+        },
+        {
+          "id": "electron_first",
+          "label": "Electron stack first"
+        },
+        {
+          "id": "architecture_first",
+          "label": "Architecture first"
+        },
+        {
+          "id": "oldest_first",
+          "label": "Oldest issue first"
+        }
+      ],
+      "required": true
+    },
+    {
+      "id": "completion_policy",
+      "prompt": "What counts as done for each issue or batch?",
+      "description": "The repository has strict local rules for checks, builds, changelog/docs, GitNexus impact/change detection, and commits.",
+      "answerMode": "multi-custom",
+      "recommendedAnswer": "For each batch: implement only the scoped slice, run required impact analysis before symbol edits, run targeted tests during development, run full required checks/builds before commit, update docs/changelog when behavior changes, push, and close issues only after validation passes.",
+      "recommendedOptionIds": [
+        "impact",
+        "targeted_tests",
+        "full_checks",
+        "docs_changelog",
+        "commit_push",
+        "close_after_validation"
+      ],
+      "options": [
+        {
+          "id": "impact",
+          "label": "GitNexus before edits"
+        },
+        {
+          "id": "targeted_tests",
+          "label": "Targeted tests"
+        },
+        {
+          "id": "full_checks",
+          "label": "Full checks/builds"
+        },
+        {
+          "id": "docs_changelog",
+          "label": "Docs/changelog updates"
+        },
+        {
+          "id": "commit_push",
+          "label": "Commit and push"
+        },
+        {
+          "id": "close_after_validation",
+          "label": "Close after validation"
+        }
+      ],
+      "required": true
+    },
+    {
+      "id": "blocked_policy",
+      "prompt": "How should blocked, question, or ready-for-human issues be handled?",
+      "description": "Some open issues have blocked/question/ready-for-human labels or depend on other issues.",
+      "answerMode": "single-custom",
+      "recommendedAnswer": "Do not implement blocked/HITL issues until prerequisites or decisions are resolved; instead record the blocker, ask for the smallest needed decision, and continue with the next unblocked issue.",
+      "recommendedOptionIds": [
+        "strict_blockers"
+      ],
+      "options": [
+        {
+          "id": "strict_blockers",
+          "label": "Respect blockers strictly"
+        },
+        {
+          "id": "attempt_unblock",
+          "label": "Try to unblock first"
+        },
+        {
+          "id": "skip_human_only",
+          "label": "Skip HITL issues"
+        }
+      ],
+      "required": true
+    }
+  ]
+}

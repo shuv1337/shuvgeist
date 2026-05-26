@@ -522,7 +522,7 @@ export class BrowserCommandExecutor {
 				signal,
 				traceContext,
 			);
-			const evalValue = isRecord(evalResult) && Object.hasOwn(evalResult, "value") ? evalResult.value : evalResult;
+			const evalValue = unwrapDebuggerEvalValue(evalResult);
 			lastResult = isPageAssertCheckResult(evalValue)
 				? evalValue
 				: { ok: false, message: "Main-world expression assertion returned an invalid result", actual: evalValue };
@@ -1131,6 +1131,14 @@ export class BrowserCommandExecutor {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function unwrapDebuggerEvalValue(value: unknown): unknown {
+	const detailsValue = isRecord(value) && Object.hasOwn(value, "value") ? value.value : value;
+	if (!isRecord(detailsValue) || !isRecord(detailsValue.result) || !Object.hasOwn(detailsValue.result, "value")) {
+		return detailsValue;
+	}
+	return detailsValue.result.value;
 }
 
 function isPageAssertCheckResult(

@@ -1,10 +1,34 @@
 import { expect, type Page, test } from "@playwright/test";
+import { execFile as execFileCallback } from "node:child_process";
+import { mkdtemp, rm, stat } from "node:fs/promises";
 import { createServer } from "node:http";
 import { createServer as createTcpServer } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { promisify } from "node:util";
 import type { WebSocket } from "ws";
+import type { BridgeServerStatus, BridgeScreenshotResult, PageAssertResult } from "../../../src/bridge/protocol.js";
 import { BridgeServer } from "../../../src/bridge/server.js";
 import { openRegisteredClient, readMessage } from "../../helpers/ws-client.js";
 import { launchExtensionContext, openExtensionPage } from "../fixtures/extension.js";
+
+const execFile = promisify(execFileCallback);
+
+interface CliRunResult {
+	code: number;
+	stdout: string;
+	stderr: string;
+}
+
+interface ExecFileFailure extends Error {
+	code?: number | string | null;
+	stdout?: string;
+	stderr?: string;
+}
+
+function isExecFileFailure(error: unknown): error is ExecFileFailure {
+	return error instanceof Error;
+}
 
 async function getAvailablePort(): Promise<number> {
 	return new Promise((resolve, reject) => {
@@ -66,14 +90,23 @@ async function createFixtureServer(): Promise<{ baseUrl: string; close: () => Pr
 <html>
 <head><title>Shuvgeist CI Fixture</title></head>
 <body>
-  <h1>Welcome to Shuvgeist CI</h1>
-  <button id="continue" type="button">Continue</button>
-  <form>
-    <label for="email">Email</label>
-    <input id="email" name="email" aria-label="Email" />
-    <button type="submit">Submit</button>
-  </form>
-  <iframe title="Nested fixture" src="/frame"></iframe>
+	<h1>Welcome to Shuvgeist CI</h1>
+	<p id="delayed" hidden>Delayed ready</p>
+	<button id="continue" type="button">Continue</button>
+	<form>
+		<label for="email">Email</label>
+		<input id="email" name="email" aria-label="Email" />
+		<input id="hidden-code" value="hidden-value" hidden />
+		<button id="disabled-submit" type="submit" disabled>Disabled submit</button>
+		<button type="submit">Submit</button>
+	</form>
+	<iframe title="Nested fixture" src="/frame"></iframe>
+	<script>
+		setTimeout(() => {
+			const delayed = document.querySelector("#delayed");
+			delayed.hidden = false;
+		}, 250);
+	</script>
 </body>
 </html>`);
 	});
@@ -108,6 +141,35 @@ async function readResponseById<T>(ws: WebSocket, request: Record<string, unknow
 	}
 }
 
+async function runCli(bridgePort: number, args: string[]): Promise<CliRunResult> {
+	const cliPath = join(process.cwd(), "dist-cli", "shuvgeist.mjs");
+	const env = {
+		...process.env,
+		SHUVGEIST_BRIDGE_URL: `ws://127.0.0.1:${bridgePort}/ws`,
+		SHUVGEIST_BRIDGE_TOKEN: "playwright-token",
+	};
+	try {
+		const result = await execFile(process.execPath, [cliPath, ...args], {
+			env,
+			maxBuffer: 1024 * 1024,
+		});
+		return { code: 0, stdout: result.stdout, stderr: result.stderr };
+	} catch (error) {
+		if (!isExecFileFailure(error)) {
+			throw error;
+		}
+		return {
+			code: typeof error.code === "number" ? error.code : 1,
+			stdout: error.stdout ?? "",
+			stderr: error.stderr ?? "",
+		};
+	}
+}
+
+function parseCliJson<T>(result: CliRunResult): T {
+	return JSON.parse(result.stdout) as T;
+}
+
 test("bridge supports deterministic assertions, workflow pinning, and native iframe refs", async () => {
 	const bridgePort = await getAvailablePort();
 	const bridge = new BridgeServer({ host: "127.0.0.1", port: bridgePort, token: "playwright-token" });
@@ -122,15 +184,107 @@ test("bridge supports deterministic assertions, workflow pinning, and native ifr
 		const worker = context.serviceWorkers()[0] ?? (await context.waitForEvent("serviceworker"));
 		await worker.evaluate(async ({ port }) => {
 			await chrome.storage.local.set({
-				bridge_settings: {
-					enabled: true,
-					url: `ws://127.0.0.1:${port}/ws`,
-					token: "",
-					sensitiveAccessEnabled: false,
-				},
-			});
-		}, { port: bridgePort });
+					bridge_settings: {
+						enabled: true,
+						url: `ws://127.0.0.1:${port}/ws`,
+						token: "",
+						sensitiveAccessEnabled: true,
+					},
+				});
+			}, { port: bridgePort });
 		await expect(page.locator("bridge-tab").getByText("Connected")).toBeVisible({ timeout: 15_000 });
+
+		const statusResult = await runCli(bridgePort, ["status", "--json"]);
+		expect(statusResult.code, statusResult.stderr).toBe(0);
+		const status = parseCliJson<BridgeServerStatus>(statusResult);
+		expect(status.extension.connected).toBe(true);
+		if (!status.extension.connected) {
+			throw new Error(JSON.stringify(status, null, 2));
+		}
+		expect(status.extension.capabilities).toContain("page_assert");
+
+		const cliNavigate = await runCli(bridgePort, ["navigate", fixture.baseUrl, "--new-tab", "--json"]);
+		expect(cliNavigate.code, cliNavigate.stderr).toBe(0);
+		const cliTabId = parseCliJson<{ tabId: number }>(cliNavigate).tabId;
+		expect(cliTabId).toBeGreaterThan(0);
+
+		for (const args of [
+			["assert", "text", "Welcome to Shuvgeist CI", "--tab-id", String(cliTabId), "--timeout", "2s", "--json"],
+			[
+				"assert",
+				"role",
+				"button",
+				"--name",
+				"Continue",
+				"--visible",
+				"--tab-id",
+				String(cliTabId),
+				"--timeout",
+				"2s",
+				"--json",
+			],
+			[
+				"assert",
+				"expr",
+				"true",
+				"--world",
+				"main",
+				"--tab-id",
+				String(cliTabId),
+				"--timeout",
+				"2s",
+				"--json",
+			],
+			[
+				"assert",
+				"selector",
+				"#delayed",
+				"--visible",
+				"--tab-id",
+				String(cliTabId),
+				"--timeout",
+				"2s",
+				"--json",
+			],
+		]) {
+			const result = await runCli(bridgePort, args);
+			expect(result.code, `${args.join(" ")}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`).toBe(0);
+			expect(parseCliJson<PageAssertResult>(result).ok).toBe(true);
+		}
+
+		const failedAssert = await runCli(bridgePort, [
+			"assert",
+			"text",
+			"Missing deterministic text",
+			"--tab-id",
+			String(cliTabId),
+			"--timeout",
+			"250ms",
+			"--interval",
+			"50ms",
+			"--json",
+		]);
+		expect(failedAssert.code).toBe(1);
+		const failedAssertJson = parseCliJson<PageAssertResult>(failedAssert);
+		expect(failedAssertJson.ok).toBe(false);
+		expect(failedAssertJson.attempts).toBeGreaterThan(0);
+		expect(failedAssertJson.timeoutMs).toBe(250);
+
+		const screenshotDir = await mkdtemp(join(tmpdir(), "shuvgeist-deterministic-"));
+		const screenshotPath = join(screenshotDir, "page.webp");
+		const screenshot = await runCli(bridgePort, [
+			"screenshot",
+			"--tab-id",
+			String(cliTabId),
+			"--out",
+			screenshotPath,
+			"--json",
+		]);
+		expect(screenshot.code, screenshot.stderr).toBe(0);
+		expect(parseCliJson<BridgeScreenshotResult>(screenshot).imageWidth).toBeGreaterThan(0);
+		expect((await stat(screenshotPath)).size).toBeGreaterThan(0);
+		expect((await stat(join(screenshotDir, "viewport.json"))).size).toBeGreaterThan(0);
+		await rm(screenshotDir, { recursive: true, force: true });
 
 		const cli = await openRegisteredClient(`ws://127.0.0.1:${bridgePort}/ws`, "playwright-token", "cli", {
 			name: "deterministic-ci-playwright",
