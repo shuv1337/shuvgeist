@@ -77,6 +77,11 @@ import { registerUserMessageRenderer } from "./messages/UserMessageRenderer.js";
 import { createWelcomeMessage, registerWelcomeRenderer } from "./messages/WelcomeMessage.js";
 import { isOAuthCredentials, resolveApiKey } from "./oauth/index.js";
 import { SYSTEM_PROMPT } from "./prompts/prompts.js";
+import {
+	isProxxProviderName,
+	normalizeModelForRuntime,
+	resolveModelSpec as resolveModelSpecFromSources,
+} from "./sidepanel/model-resolution.js";
 import { ShuvgeistAppStorage } from "./storage/app-storage.js";
 import { registerAskUserWhichElementRenderer } from "./tools/ask-user-which-element-renderer.js";
 import { DebuggerTool } from "./tools/debugger.js";
@@ -235,25 +240,6 @@ const MINIMAX_EXTENSION_MODELS: Model<"anthropic-messages">[] = [
 
 registerModels(FIREWORKS_EXTENSION_MODELS);
 registerModels(MINIMAX_EXTENSION_MODELS);
-
-function isProxxProviderName(providerName: string): boolean {
-	return providerName.trim().toLowerCase() === "proxx";
-}
-
-function normalizeModelForRuntime(model: Model<any>): Model<any> {
-	if (!isProxxProviderName(model.provider)) return model;
-
-	const normalizedBaseUrl = model.baseUrl?.trim().replace(/\/+$/, "") || "";
-	const withoutProtocol = normalizedBaseUrl.replace(/^https?:\/\//i, "");
-	if (withoutProtocol === "127.0.0.1:8789/v1" || withoutProtocol === "localhost:8789/v1") {
-		return {
-			...model,
-			baseUrl: "http://shuvdev:8789/v1",
-		};
-	}
-
-	return model;
-}
 
 const DEFAULT_MODELS: Record<string, string> = {
 	"amazon-bedrock": "us.anthropic.claude-opus-4-6-v1",
@@ -715,41 +701,10 @@ const bridgeNewSession = async (params: SessionNewParams): Promise<SessionNewRes
  * into a Model object, checking built-in models and custom providers.
  */
 const resolveModelSpec = async (spec: string, providerHint?: string): Promise<Model<any>> => {
-	// Try "provider/modelId" format
-	if (spec.includes("/")) {
-		const [provider, ...rest] = spec.split("/");
-		const modelId = rest.join("/");
-
-		// Built-in model
-		const builtIn = getModel(provider as any, modelId);
-		if (builtIn) return builtIn;
-
-		// Custom provider model
-		const customProvider = await getCustomProviderByName(provider);
-		const customModel = customProvider?.models?.find((m) => m.id === modelId);
-		if (customModel) return customModel;
-
-		throw new Error(`Model not found: ${spec}`);
-	}
-
-	// Plain model ID — use provider hint or search all providers
-	if (providerHint) {
-		const builtIn = getModel(providerHint as any, spec);
-		if (builtIn) return builtIn;
-
-		const customProvider = await getCustomProviderByName(providerHint);
-		const customModel = customProvider?.models?.find((m) => m.id === spec);
-		if (customModel) return customModel;
-	}
-
-	// Search all custom providers for matching model ID
-	const allCustom = await storage.customProviders.getAll();
-	for (const cp of allCustom) {
-		const match = cp.models?.find((m) => m.id === spec);
-		if (match) return match;
-	}
-
-	throw new Error(`Model not found: ${spec}${providerHint ? ` (provider: ${providerHint})` : ""}`);
+	return resolveModelSpecFromSources(spec, providerHint, {
+		getCustomProviderByName,
+		getAllCustomProviders: () => storage.customProviders.getAll(),
+	});
 };
 
 const bridgeSetModel = async (params: SessionSetModelParams): Promise<SessionSetModelResult> => {
