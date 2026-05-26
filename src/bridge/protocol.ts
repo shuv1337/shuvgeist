@@ -9,6 +9,14 @@
 // Protocol versioning
 // ---------------------------------------------------------------------------
 
+import {
+	CatalogBridgeCapabilities,
+	CatalogBridgeMethods,
+	isCatalogServerLocalMethod,
+	isCatalogTargetDispatchedMethod,
+	isCatalogWriteMethod,
+	isSensitiveBridgeCapability,
+} from "./command-catalog.js";
 import type { BridgeTarget } from "./target.js";
 
 export const BRIDGE_PROTOCOL_VERSION = 3;
@@ -38,85 +46,15 @@ export function formatBridgeProtocolMismatch(
 // Capabilities
 // ---------------------------------------------------------------------------
 
-export const BridgeCapabilities = [
-	"navigate",
-	"tabs",
-	"repl",
-	"screenshot",
-	"eval",
-	"cookies",
-	"select_element",
-	"workflow_run",
-	"workflow_validate",
-	"page_snapshot",
-	"page_assert",
-	"locate_by_role",
-	"locate_by_text",
-	"locate_by_label",
-	"ref_click",
-	"ref_fill",
-	"frame_list",
-	"frame_tree",
-	"network_start",
-	"network_stop",
-	"network_list",
-	"network_clear",
-	"network_stats",
-	"network_get",
-	"network_body",
-	"network_curl",
-	"device_emulate",
-	"device_reset",
-	"perf_metrics",
-	"perf_trace_start",
-	"perf_trace_stop",
-	"record_start",
-	"record_stop",
-	"record_status",
-	"status",
-	"session_history",
-	"session_inject",
-	"session_new",
-	"session_set_model",
-	"session_artifacts",
-	"electron_list",
-	"electron_allow",
-	"electron_launch",
-	"electron_attach",
-	"electron_detach",
-	"electron_windows",
-	"electron_label",
-	"electron_main_info",
-	"electron_ipc_tap_start",
-	"electron_ipc_tap_stop",
-	"electron_main_network_start",
-	"electron_main_network_stop",
-	"electron_source_layout",
-	"electron_source_list",
-	"electron_source_read",
-	"electron_source_extract",
-	"electron_doctor",
-	"electron_auto_attach",
-	"skills_snapshot_status",
-] as const;
+export const BridgeCapabilities = CatalogBridgeCapabilities;
 export type BridgeCapability = (typeof BridgeCapabilities)[number];
 
 export function getBridgeCapabilities(sensitiveAccessEnabled: boolean): BridgeCapability[] {
-	const sensitiveCapabilities = new Set<BridgeCapability>([
-		"eval",
-		"cookies",
-		"network_get",
-		"network_body",
-		"network_curl",
-		"record_start",
-		"record_stop",
-		"record_status",
-	]);
-	return BridgeCapabilities.filter((capability) => sensitiveAccessEnabled || !sensitiveCapabilities.has(capability));
+	return BridgeCapabilities.filter((capability) => sensitiveAccessEnabled || !isSensitiveBridgeCapability(capability));
 }
 
 export function isWriteMethod(method: BridgeMethod): boolean {
-	return method === "session_inject" || method === "session_new" || method === "session_set_model";
+	return isCatalogWriteMethod(method);
 }
 
 // ---------------------------------------------------------------------------
@@ -155,66 +93,7 @@ export interface RegisterResult {
 // Requests / Responses
 // ---------------------------------------------------------------------------
 
-export const BridgeMethods = [
-	"status",
-	"navigate",
-	"repl",
-	"screenshot",
-	"eval",
-	"cookies",
-	"select_element",
-	"workflow_run",
-	"workflow_validate",
-	"page_snapshot",
-	"page_assert",
-	"locate_by_role",
-	"locate_by_text",
-	"locate_by_label",
-	"ref_click",
-	"ref_fill",
-	"frame_list",
-	"frame_tree",
-	"network_start",
-	"network_stop",
-	"network_list",
-	"network_clear",
-	"network_stats",
-	"network_get",
-	"network_body",
-	"network_curl",
-	"device_emulate",
-	"device_reset",
-	"perf_metrics",
-	"perf_trace_start",
-	"perf_trace_stop",
-	"record_start",
-	"record_stop",
-	"record_status",
-	"session_history",
-	"session_inject",
-	"session_new",
-	"session_set_model",
-	"session_artifacts",
-	"electron_list",
-	"electron_allow",
-	"electron_launch",
-	"electron_attach",
-	"electron_detach",
-	"electron_windows",
-	"electron_label",
-	"electron_main_info",
-	"electron_ipc_tap_start",
-	"electron_ipc_tap_stop",
-	"electron_main_network_start",
-	"electron_main_network_stop",
-	"electron_source_layout",
-	"electron_source_list",
-	"electron_source_read",
-	"electron_source_extract",
-	"electron_doctor",
-	"electron_auto_attach",
-	"skills_snapshot_status",
-] as const;
+export const BridgeMethods = CatalogBridgeMethods;
 export type BridgeMethod = (typeof BridgeMethods)[number];
 
 export interface BridgeRequest {
@@ -226,34 +105,12 @@ export interface BridgeRequest {
 	tracestate?: string;
 }
 
-const ServerLocalMethods = new Set<BridgeMethod>([
-	"electron_list",
-	"electron_allow",
-	"electron_launch",
-	"electron_attach",
-	"electron_detach",
-	"electron_windows",
-	"electron_label",
-	"electron_main_info",
-	"electron_ipc_tap_start",
-	"electron_ipc_tap_stop",
-	"electron_main_network_start",
-	"electron_main_network_stop",
-	"electron_source_layout",
-	"electron_source_list",
-	"electron_source_read",
-	"electron_source_extract",
-	"electron_doctor",
-	"electron_auto_attach",
-	"skills_snapshot_status",
-]);
-
 export function isServerLocalMethod(method: BridgeMethod): boolean {
-	return ServerLocalMethods.has(method);
+	return isCatalogServerLocalMethod(method);
 }
 
 export function isTargetDispatchedMethod(method: BridgeMethod): boolean {
-	return !method.startsWith("session_");
+	return isCatalogTargetDispatchedMethod(method);
 }
 
 export function isExtensionRelayedMethod(method: BridgeMethod): boolean {
