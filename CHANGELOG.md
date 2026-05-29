@@ -10,6 +10,8 @@
 
 ### Fixed
 
+- Loopback bridge reconnects now preflight the HTTP status endpoint before opening a WebSocket, and secondary extension target conflicts no longer emit repeated error-level registration logs.
+
 ### Removed
 
 ## [1.1.16] - 2026-05-26

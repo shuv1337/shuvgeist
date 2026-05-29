@@ -13,6 +13,7 @@ import type { CommandDispatcher } from "./command-dispatcher.js";
 import { bridgeLog, type LogFields } from "./logging.js";
 import type { AbortMessage, BridgeCapability, BridgeRequest, BridgeResponse, RegisterResult } from "./protocol.js";
 import { BRIDGE_PROTOCOL_VERSION, ErrorCodes, getBridgeCapabilities } from "./protocol.js";
+import { isLoopbackBridgeUrl } from "./settings.js";
 import type { BridgeTelemetry } from "./telemetry.js";
 import { parseTraceparent } from "./telemetry.js";
 
@@ -41,6 +42,7 @@ export class BridgeClient {
 	private executor: CommandDispatcher | null = null;
 	private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 	private reconnectAttempts = 0;
+	private connectionAttemptId = 0;
 	/**
 	 * Cap on the exponential backoff between reconnect attempts. 15 seconds is
 	 * short enough that a CLI invocation (which waits up to 30s) almost always
@@ -80,11 +82,12 @@ export class BridgeClient {
 		this.executor = options.executor;
 		this.telemetry = options.telemetry;
 		this.reconnectAttempts = 0;
-		this.doConnect();
+		void this.doConnect();
 	}
 
 	disconnect(): void {
 		this.enabled = false;
+		this.connectionAttemptId++;
 		if (this.reconnectTimer) {
 			clearTimeout(this.reconnectTimer);
 			this.reconnectTimer = null;
@@ -113,7 +116,7 @@ export class BridgeClient {
 			this.reconnectTimer = null;
 		}
 		this.reconnectAttempts = 0;
-		this.doConnect();
+		void this.doConnect();
 	}
 
 	/** Send an event to the bridge server (e.g. active_tab_changed). */
@@ -151,8 +154,9 @@ export class BridgeClient {
 		}
 	}
 
-	private doConnect(): void {
+	private async doConnect(): Promise<void> {
 		if (!this.enabled || !this.options) return;
+		const attemptId = ++this.connectionAttemptId;
 
 		// Close any orphaned WebSocket from a previous cycle to avoid two
 		// live connections racing against each other on the server.
@@ -168,15 +172,26 @@ export class BridgeClient {
 			url,
 		} as LogFields);
 
+		if (this.shouldPreflightBridge(url)) {
+			if (!(await this.isBridgeReachable(url))) {
+				if (!this.isCurrentAttempt(attemptId, url, token)) return;
+				this.setState("disconnected", "Bridge server unavailable");
+				this.scheduleReconnect();
+				return;
+			}
+			if (!this.isCurrentAttempt(attemptId, url, token)) return;
+		}
+
 		let ws: WebSocket;
 		try {
 			ws = new WebSocket(url);
-		} catch (err: any) {
+		} catch (err: unknown) {
+			const message = err instanceof Error ? err.message : String(err);
 			bridgeLog("error", "failed to create WebSocket", {
 				role: "extension",
-				error: err.message,
+				error: message,
 			});
-			this.setState("error", err.message);
+			this.setState("error", message);
 			this.scheduleReconnect();
 			return;
 		}
@@ -228,7 +243,7 @@ export class BridgeClient {
 
 		ws.onerror = () => {
 			if (this.ws !== ws) return;
-			bridgeLog("warn", "bridge connection error", { role: "extension" });
+			bridgeLog("debug", "bridge connection error", { role: "extension" });
 			if (this.state !== "error") {
 				this.setState("error", "Connection failed");
 			}
@@ -253,14 +268,13 @@ export class BridgeClient {
 					});
 				});
 			} else {
-				bridgeLog("error", "bridge registration rejected", {
+				const extensionConflict = reg.error === "Another extension target is already connected";
+				bridgeLog(extensionConflict ? "debug" : "error", "bridge registration rejected", {
 					role: "extension",
 					error: reg.error,
 				});
 				this.setState("error", reg.error || "Registration rejected");
-				if (reg.error === "Another extension target is already connected") {
-					this.scheduleReconnect();
-				} else {
+				if (!extensionConflict) {
 					this.enabled = false;
 				}
 			}
@@ -334,24 +348,28 @@ export class BridgeClient {
 			span?.setAttribute("bridge.outcome", "success");
 			span?.end("ok");
 			this.sendResponse(req.id, result);
-		} catch (err: any) {
+		} catch (err: unknown) {
 			const isAborted = controller.signal.aborted;
-			const code =
-				typeof err?.code === "number" ? err.code : isAborted ? ErrorCodes.ABORTED : ErrorCodes.EXECUTION_ERROR;
+			const errorCode =
+				typeof err === "object" && err !== null && "code" in err && typeof err.code === "number"
+					? err.code
+					: undefined;
+			const code = errorCode ?? (isAborted ? ErrorCodes.ABORTED : ErrorCodes.EXECUTION_ERROR);
+			const message = err instanceof Error ? err.message : String(err);
 			bridgeLog(isAborted ? "info" : "error", "command failed", {
 				role: "extension",
 				requestId: req.id,
 				method: req.method,
 				durationMs: Date.now() - startedAt,
 				outcome: isAborted ? "aborted" : "error",
-				error: err?.message,
+				error: message,
 			});
 			span?.setAttribute("bridge.outcome", isAborted ? "aborted" : "error");
-			span?.recordError(err);
+			span?.recordError(err instanceof Error ? err : new Error(message));
 			span?.end("error");
 			this.sendResponse(req.id, undefined, {
 				code,
-				message: err?.message || "Command execution failed",
+				message: message || "Command execution failed",
 			});
 		} finally {
 			this.pendingAborts.delete(req.id);
@@ -378,8 +396,47 @@ export class BridgeClient {
 		} as LogFields);
 		this.reconnectTimer = setTimeout(() => {
 			this.reconnectTimer = null;
-			this.doConnect();
+			void this.doConnect();
 		}, delay);
+	}
+
+	private isCurrentAttempt(attemptId: number, url: string, token: string): boolean {
+		return (
+			this.enabled &&
+			this.connectionAttemptId === attemptId &&
+			this.options?.url === url &&
+			this.options.token === token
+		);
+	}
+
+	private async isBridgeReachable(url: string): Promise<boolean> {
+		const controller = new AbortController();
+		const timeout = setTimeout(() => controller.abort(), 1500);
+		try {
+			const response = await fetch(this.toStatusUrl(url), {
+				method: "GET",
+				cache: "no-store",
+				signal: controller.signal,
+			});
+			return response.ok;
+		} catch {
+			return false;
+		} finally {
+			clearTimeout(timeout);
+		}
+	}
+
+	private shouldPreflightBridge(url: string): boolean {
+		return globalThis.location?.protocol === "chrome-extension:" && isLoopbackBridgeUrl(url);
+	}
+
+	private toStatusUrl(wsUrl: string): string {
+		const url = new URL(wsUrl);
+		url.protocol = url.protocol === "wss:" ? "https:" : "http:";
+		url.pathname = "/status";
+		url.search = "";
+		url.hash = "";
+		return url.toString();
 	}
 
 	private setState(state: BridgeConnectionState, detail?: string): void {

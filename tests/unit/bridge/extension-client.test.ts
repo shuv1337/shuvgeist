@@ -58,6 +58,9 @@ globalThis.chrome = {
 	},
 };
 
+const originalLocationDescriptor = Object.getOwnPropertyDescriptor(globalThis, "location");
+const originalFetch = globalThis.fetch;
+
 const { BridgeClient } = await import("../../../src/bridge/extension-client.js");
 const { BridgeTelemetry } = await import("../../../src/bridge/telemetry.js");
 
@@ -67,6 +70,16 @@ describe("BridgeClient", () => {
 		executorDispatch.mockReset();
 		bridgeLog.mockReset();
 		chrome.tabs.query.mockReset();
+		vi.useRealTimers();
+	});
+
+	afterEach(() => {
+		if (originalLocationDescriptor) {
+			Object.defineProperty(globalThis, "location", originalLocationDescriptor);
+		} else {
+			Reflect.deleteProperty(globalThis, "location");
+		}
+		globalThis.fetch = originalFetch;
 		vi.useRealTimers();
 	});
 
@@ -240,7 +253,7 @@ describe("BridgeClient", () => {
 		expect(onStateChange).toHaveBeenCalledWith("disabled", undefined);
 	});
 
-	it("retries transient extension target conflicts instead of disabling bridge", async () => {
+	it("keeps transient extension target conflicts quiet until keepalive nudges reconnect", async () => {
 		vi.useFakeTimers();
 		const onStateChange = vi.fn();
 		const client = new BridgeClient();
@@ -259,8 +272,15 @@ describe("BridgeClient", () => {
 		expect(client.connectionState).toBe("error");
 		expect(client.connectionDetail).toBe("Another extension target is already connected");
 		expect(onStateChange).toHaveBeenCalledWith("error", "Another extension target is already connected");
+		expect(bridgeLog).toHaveBeenCalledWith("debug", "bridge registration rejected", {
+			role: "extension",
+			error: "Another extension target is already connected",
+		});
+		expect(bridgeLog).not.toHaveBeenCalledWith("error", "bridge registration rejected", expect.anything());
 
 		await vi.advanceTimersByTimeAsync(1000);
+		expect(FakeWebSocket.instances).toHaveLength(1);
+		client.nudgeReconnect();
 		expect(FakeWebSocket.instances).toHaveLength(2);
 		const retrySocket = FakeWebSocket.instances.at(-1)!;
 		expect(retrySocket).not.toBe(socket);
@@ -275,6 +295,44 @@ describe("BridgeClient", () => {
 
 		client.disconnect();
 		vi.useRealTimers();
+	});
+
+	it("preflights loopback bridge reachability in the extension worker before opening a WebSocket", async () => {
+		vi.useFakeTimers();
+		Object.defineProperty(globalThis, "location", {
+			value: { protocol: "chrome-extension:" },
+			configurable: true,
+		});
+		globalThis.fetch = vi.fn(() => Promise.reject(new Error("down"))) as unknown as typeof fetch;
+		const onStateChange = vi.fn();
+		const client = new BridgeClient();
+
+		client.connect({
+			url: "ws://127.0.0.1:19285/ws",
+			token: "secret",
+			windowId: 12,
+			sensitiveAccessEnabled: false,
+			executor: mockExecutor,
+			onStateChange,
+		});
+
+		expect(client.connectionState).toBe("connecting");
+		expect(FakeWebSocket.instances).toHaveLength(0);
+
+		await Promise.resolve();
+		await Promise.resolve();
+
+		expect(globalThis.fetch).toHaveBeenCalledWith("http://127.0.0.1:19285/status", {
+			method: "GET",
+			cache: "no-store",
+			signal: expect.any(AbortSignal),
+		});
+		expect(FakeWebSocket.instances).toHaveLength(0);
+		expect(client.connectionState).toBe("disconnected");
+		expect(client.connectionDetail).toBe("Bridge server unavailable");
+		expect(onStateChange).toHaveBeenCalledWith("disconnected", "Bridge server unavailable");
+
+		client.disconnect();
 	});
 
 	it("falls back to currentWindow query when registered windowId is 0", async () => {
