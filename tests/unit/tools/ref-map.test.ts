@@ -149,6 +149,42 @@ describe("ref-map", () => {
 		});
 	});
 
+	it("rejects generation-stale refs before matching candidates", () => {
+		const refMap = new RefMap();
+		const ref = refMap.createRef({
+			refId: "ref_save",
+			tabId: 7,
+			frameId: 0,
+			navigationGeneration: 2,
+			locator: {
+				selectorCandidates: ["#save"],
+				semantic: { role: "button", name: "Save" },
+				tagName: "button",
+			},
+		});
+
+		expect(
+			refMap.resolveRef(
+				ref.refId,
+				[
+					{
+						candidateId: "same-node",
+						tabId: 7,
+						frameId: 0,
+						selectorCandidates: ["#save"],
+						role: "button",
+						name: "Save",
+					},
+				],
+				{ currentNavigationGeneration: 3 },
+			),
+		).toMatchObject({
+			ok: false,
+			reason: "stale_generation",
+			message: "Reference ref_save is stale after navigation",
+		});
+	});
+
 	it("ranks locator candidates for role, text, and label queries", () => {
 		const candidates = [
 			{

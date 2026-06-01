@@ -198,6 +198,7 @@ describe("sidepanel createAgent wiring", () => {
 			"replTool",
 			"skillTool",
 			"extractDocumentTool",
+			"pageSnapshotTool",
 			"extractImageTool",
 		]);
 

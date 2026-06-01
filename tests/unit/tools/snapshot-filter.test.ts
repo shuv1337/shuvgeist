@@ -63,4 +63,64 @@ describe("snapshot-filter", () => {
 		expect(filtered.entries.map((entry) => entry.snapshotId)).toEqual(["e1", "e2"]);
 		expect(snapshot.entries.map((entry) => entry.snapshotId)).toEqual(["e1", "e2", "e3"]);
 	});
+
+	it("keeps ancestor entries for selected descendants", () => {
+		const snapshot: PageSnapshotResult = {
+			tabId: 1,
+			frameId: 0,
+			url: "https://example.test",
+			title: "Example",
+			generatedAt: 1,
+			totalCandidates: 4,
+			truncated: false,
+			entries: [
+				{
+					snapshotId: "section",
+					tabId: 1,
+					frameId: 0,
+					tagName: "section",
+					role: "region",
+					name: "Account",
+					attributes: {},
+					selectorCandidates: ["section"],
+					ordinalPath: [0],
+					boundingBox: { x: 0, y: 0, width: 300, height: 200 },
+					interactive: false,
+					landmark: "region",
+				},
+				{
+					snapshotId: "save",
+					tabId: 1,
+					frameId: 0,
+					tagName: "button",
+					role: "button",
+					name: "Save billing settings",
+					text: "Save",
+					attributes: {},
+					selectorCandidates: ["#save"],
+					ordinalPath: [0, 1],
+					boundingBox: { x: 10, y: 20, width: 80, height: 30 },
+					interactive: true,
+				},
+				{
+					snapshotId: "cancel",
+					tabId: 1,
+					frameId: 0,
+					tagName: "button",
+					role: "button",
+					name: "Cancel",
+					text: "Cancel",
+					attributes: {},
+					selectorCandidates: ["#cancel"],
+					ordinalPath: [1],
+					boundingBox: { x: 10, y: 80, width: 80, height: 30 },
+					interactive: true,
+				},
+			],
+		};
+
+		const filtered = filterSnapshotByKeywords(snapshot, { query: "billing", limit: 1 });
+
+		expect(filtered.entries.map((entry) => entry.snapshotId)).toEqual(["section", "save"]);
+	});
 });

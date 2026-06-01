@@ -5,6 +5,7 @@ import { createServer } from "node:net";
 import { promisify } from "node:util";
 import type { RankedLocatorCandidate, SemanticLocatorCandidate } from "../../tools/helpers/ref-map.js";
 import { rankLocatorCandidates } from "../../tools/helpers/ref-map.js";
+import { filterSnapshotByKeywords } from "../../tools/helpers/snapshot-filter.js";
 import { SNAPSHOT_PAGE_SCRIPT } from "../../tools/helpers/snapshot-page-script.js";
 import type {
 	BridgeScreenshotResult,
@@ -848,7 +849,7 @@ export class ElectronSessionManager {
 				throw new Error(scriptResponse.error || "Electron snapshot script failed.");
 			}
 			const value = scriptResponse.result;
-			return {
+			const snapshot = {
 				tabId: -1,
 				frameId: 0,
 				...(options.query ? { query: options.query } : {}),
@@ -863,6 +864,7 @@ export class ElectronSessionManager {
 					frameId: 0,
 				})),
 			};
+			return filterSnapshotByKeywords(snapshot, { query: options.query, limit: options.maxEntries ?? 120 });
 		} finally {
 			client.close();
 		}

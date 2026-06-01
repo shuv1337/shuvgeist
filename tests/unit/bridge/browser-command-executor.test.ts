@@ -459,7 +459,7 @@ describe("BrowserCommandExecutor", () => {
 		expect(nativeFillAt).not.toHaveBeenCalled();
 	});
 
-	it("keeps synthetic ref click unchanged when native is not requested", async () => {
+		it("keeps synthetic ref click unchanged when native is not requested", async () => {
 		const snapshot = buildRefSnapshot();
 		pageSnapshotExecute.mockResolvedValue({ details: snapshot });
 		capturePageSnapshot.mockResolvedValue(snapshot);
@@ -481,8 +481,25 @@ describe("BrowserCommandExecutor", () => {
 				worldId: "shuvgeist-ref-action",
 			}),
 		);
-		expect(nativeClickAt).not.toHaveBeenCalled();
-	});
+			expect(nativeClickAt).not.toHaveBeenCalled();
+		});
+
+		it("invalidates stored refs after bridge-driven navigation before taking a new snapshot", async () => {
+			const snapshot = buildRefSnapshot();
+			pageSnapshotExecute.mockResolvedValue({ details: snapshot });
+			capturePageSnapshot.mockResolvedValue(snapshot);
+			navigateExecute.mockResolvedValue({ details: { finalUrl: "https://example.com/next", tabId: 42 } });
+			const executor = new BrowserCommandExecutor({ windowId: 7, sensitiveAccessEnabled: false });
+
+			await executor.pageSnapshot({ tabId: 42, frameId: 7 });
+			capturePageSnapshot.mockClear();
+			await executor.navigate({ url: "https://example.com/next", tabId: 42 });
+
+			await expect(executor.refClick({ refId: "login-input" })).rejects.toThrow(
+				"Reference login-input does not exist",
+			);
+			expect(capturePageSnapshot).not.toHaveBeenCalled();
+		});
 
 	it("waits for bounded same-tab stability when requested after ref click", async () => {
 		const snapshot = buildRefSnapshot();

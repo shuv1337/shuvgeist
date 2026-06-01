@@ -55,6 +55,10 @@ export class RefRegistry {
 		return this.refMap.invalidateOnNavigation(tabId, frameId);
 	}
 
+	markNavigated(tabId: number): number {
+		return this.refMap.markNavigated(tabId);
+	}
+
 	onNavigated(event: NavigationEvent): number {
 		return this.invalidateOnNavigation(event.tabId, event.frameId);
 	}

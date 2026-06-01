@@ -26,6 +26,7 @@ export interface RefEntry {
 	tabId: number;
 	frameId: number;
 	locator: RefLocatorBundle;
+	navigationGeneration?: number;
 	createdAt: number;
 	updatedAt: number;
 }
@@ -35,7 +36,8 @@ export type RefResolutionFailureReason =
 	| "frame_mismatch"
 	| "not_found"
 	| "ambiguous_match"
-	| "low_confidence";
+	| "low_confidence"
+	| "stale_generation";
 
 export interface RefResolutionCandidate {
 	candidateId: string;
@@ -74,6 +76,7 @@ export type RefResolutionResult =
 export interface ResolveRefOptions {
 	minScore?: number;
 	ambiguousDelta?: number;
+	currentNavigationGeneration?: number;
 }
 
 export interface CreateRefParams {
@@ -81,6 +84,7 @@ export interface CreateRefParams {
 	tabId: number;
 	frameId: number;
 	locator: RefLocatorBundle;
+	navigationGeneration?: number;
 }
 
 export interface ListRefOptions {
@@ -292,6 +296,7 @@ function scopeKey(tabId: number, frameId: number): string {
 export class RefMap {
 	private readonly refs = new Map<string, RefEntry>();
 	private readonly refsByScope = new Map<string, Set<string>>();
+	private readonly navigationGenerations = new Map<number, number>();
 
 	createRef(params: CreateRefParams): RefEntry {
 		const createdAt = now();
@@ -300,6 +305,7 @@ export class RefMap {
 			tabId: params.tabId,
 			frameId: params.frameId,
 			locator: normalizeLocator(params.locator),
+			navigationGeneration: params.navigationGeneration ?? this.navigationGenerations.get(params.tabId),
 			createdAt,
 			updatedAt: createdAt,
 		};
@@ -353,10 +359,17 @@ export class RefMap {
 	}
 
 	invalidateOnNavigation(tabId: number, frameId?: number): number {
+		this.markNavigated(tabId);
 		if (typeof frameId === "number" && frameId !== 0) {
 			return this.invalidateFrame(tabId, frameId);
 		}
 		return this.invalidateTab(tabId);
+	}
+
+	markNavigated(tabId: number): number {
+		const nextGeneration = (this.navigationGenerations.get(tabId) ?? 0) + 1;
+		this.navigationGenerations.set(tabId, nextGeneration);
+		return nextGeneration;
 	}
 
 	resolveRef(
@@ -370,6 +383,21 @@ export class RefMap {
 				ok: false,
 				reason: "missing_ref",
 				message: `Reference ${refId} does not exist`,
+			};
+		}
+
+		const currentNavigationGeneration =
+			options.currentNavigationGeneration ?? this.navigationGenerations.get(ref.tabId);
+		if (
+			typeof ref.navigationGeneration === "number" &&
+			typeof currentNavigationGeneration === "number" &&
+			currentNavigationGeneration > ref.navigationGeneration
+		) {
+			return {
+				ok: false,
+				ref: { ...ref, locator: normalizeLocator(ref.locator) },
+				reason: "stale_generation",
+				message: `Reference ${refId} is stale after navigation`,
 			};
 		}
 

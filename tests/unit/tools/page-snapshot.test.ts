@@ -119,6 +119,7 @@ describe("PageSnapshotTool", () => {
 
 	it("captures snapshot data through chrome.userScripts", async () => {
 		expect(SNAPSHOT_PAGE_SCRIPT.toString()).toContain("shuvgeistSnapshotPageScript");
+		expect(SNAPSHOT_PAGE_SCRIPT.toString()).toContain("setAttribute(primaryAttribute, generated)");
 		chrome.userScripts.execute.mockResolvedValue([
 			{
 				result: pageExecutionResult({
@@ -150,7 +151,7 @@ describe("PageSnapshotTool", () => {
 				}),
 			},
 		]);
-		await expect(capturePageSnapshot({ tabId: 55, query: "save" })).resolves.toEqual({
+			await expect(capturePageSnapshot({ tabId: 55, query: "save" })).resolves.toEqual({
 			tabId: 55,
 			frameId: 0,
 			query: "save",
@@ -184,7 +185,57 @@ describe("PageSnapshotTool", () => {
 			worldId: "shuvgeist-page-snapshot",
 			messaging: true,
 		});
-		expect(chrome.userScripts.execute).toHaveBeenCalled();
+			expect(chrome.userScripts.execute).toHaveBeenCalled();
+		});
+
+	it("filters query snapshots before returning them", async () => {
+		chrome.userScripts.execute.mockResolvedValue([
+			{
+				result: pageExecutionResult({
+					success: true,
+					result: {
+						url: "https://example.com",
+						title: "Example",
+						generatedAt: 10,
+						totalCandidates: 2,
+						truncated: false,
+						entries: [
+							{
+								snapshotId: "save",
+								frameId: 0,
+								tagName: "button",
+								role: "button",
+								name: "Save settings",
+								text: "Save",
+								attributes: {},
+								selectorCandidates: ["#save"],
+								ordinalPath: [0],
+								boundingBox: { x: 1, y: 2, width: 3, height: 4 },
+								interactive: true,
+							},
+							{
+								snapshotId: "cancel",
+								frameId: 0,
+								tagName: "button",
+								role: "button",
+								name: "Cancel",
+								text: "Cancel",
+								attributes: {},
+								selectorCandidates: ["#cancel"],
+								ordinalPath: [1],
+								boundingBox: { x: 1, y: 8, width: 3, height: 4 },
+								interactive: true,
+							},
+						],
+					},
+				}),
+			},
+		]);
+
+		await expect(capturePageSnapshot({ tabId: 55, query: "settings", maxEntries: 1 })).resolves.toMatchObject({
+			query: "settings",
+			entries: [{ snapshotId: "save" }],
+		});
 	});
 
 	it("resolves active tab fallback in tool execution", async () => {

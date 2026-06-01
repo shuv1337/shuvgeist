@@ -9,6 +9,7 @@ export interface SnapshotFilterEntry {
 	label?: string;
 	tagName?: string;
 	attributes?: Record<string, string>;
+	ordinalPath?: number[];
 }
 
 export interface SnapshotFilterOptions {
@@ -44,8 +45,19 @@ export function filterSnapshotByKeywords<TEntry extends SnapshotFilterEntry, TSn
 		},
 	);
 	const selectedIds = new Set(ranked.map((match) => match.candidate.candidateId));
+	const selectedPaths = snapshot.entries
+		.filter((entry) => selectedIds.has(entry.snapshotId))
+		.map((entry) => entry.ordinalPath)
+		.filter((path): path is number[] => Array.isArray(path));
 	return {
 		...snapshot,
-		entries: snapshot.entries.filter((entry) => selectedIds.has(entry.snapshotId)),
+		entries: snapshot.entries.filter((entry) => {
+			if (selectedIds.has(entry.snapshotId)) return true;
+			if (!entry.ordinalPath) return false;
+			return selectedPaths.some((path) => {
+				if (!entry.ordinalPath || entry.ordinalPath.length >= path.length) return false;
+				return entry.ordinalPath.every((part, index) => part === path[index]);
+			});
+		}),
 	};
 }

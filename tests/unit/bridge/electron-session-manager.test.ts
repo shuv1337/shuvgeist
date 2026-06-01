@@ -1,4 +1,7 @@
-import { electronSessionTestHooks } from "../../../src/bridge/electron/session-manager.js";
+import {
+	ElectronSessionManager,
+	electronSessionTestHooks,
+} from "../../../src/bridge/electron/session-manager.js";
 
 describe("electron session manager", () => {
 	afterEach(() => {
@@ -69,5 +72,85 @@ describe("electron session manager", () => {
 		vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("connection refused"));
 
 		await expect(electronSessionTestHooks.shouldDeleteSessionAfterChildExit(9330, 0)).resolves.toBe(true);
+	});
+
+	it("filters captured snapshots by query while preserving ancestors", async () => {
+		const close = vi.fn();
+		const send = vi.fn(async () => ({
+			result: {
+				value: {
+					success: true,
+					result: {
+						url: "app://settings",
+						title: "Settings",
+						generatedAt: 10,
+						totalCandidates: 3,
+						truncated: false,
+						entries: [
+							{
+								snapshotId: "panel",
+								frameId: 0,
+								tagName: "section",
+								role: "region",
+								name: "Account",
+								attributes: {},
+								selectorCandidates: ["section"],
+								ordinalPath: [0],
+								boundingBox: { x: 0, y: 0, width: 400, height: 200 },
+								interactive: false,
+							},
+							{
+								snapshotId: "save",
+								frameId: 0,
+								tagName: "button",
+								role: "button",
+								name: "Save billing settings",
+								text: "Save",
+								attributes: {},
+								selectorCandidates: ["#save"],
+								ordinalPath: [0, 0],
+								boundingBox: { x: 10, y: 20, width: 100, height: 32 },
+								interactive: true,
+							},
+							{
+								snapshotId: "cancel",
+								frameId: 0,
+								tagName: "button",
+								role: "button",
+								name: "Cancel",
+								text: "Cancel",
+								attributes: {},
+								selectorCandidates: ["#cancel"],
+								ordinalPath: [1],
+								boundingBox: { x: 10, y: 60, width: 100, height: 32 },
+								interactive: true,
+							},
+						],
+					},
+				},
+			},
+		}));
+		const manager = new ElectronSessionManager();
+		vi.spyOn(manager as unknown as { connectToPage: () => Promise<unknown> }, "connectToPage").mockResolvedValue({
+			send,
+			close,
+		});
+
+		const snapshot = await (
+			manager as unknown as {
+				captureSnapshot: (
+					resolved: {
+						session: { id: string };
+						window: { ref: string };
+					},
+					options: { query?: string; maxEntries?: number },
+				) => Promise<{ query?: string; entries: Array<{ snapshotId: string; tabId: number; frameId: number }> }>;
+			}
+		).captureSnapshot({ session: { id: "s1" }, window: { ref: "w1" } }, { query: "billing", maxEntries: 1 });
+
+		expect(snapshot.query).toBe("billing");
+		expect(snapshot.entries.map((entry) => entry.snapshotId)).toEqual(["panel", "save"]);
+		expect(snapshot.entries.every((entry) => entry.tabId === -1 && entry.frameId === 0)).toBe(true);
+		expect(close).toHaveBeenCalledOnce();
 	});
 });

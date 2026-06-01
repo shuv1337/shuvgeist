@@ -85,9 +85,11 @@ import { registerExtractImageRenderer } from "./tools/extract-image-renderer.js"
 import { isProtectedTabUrl, resolveTabTarget } from "./tools/helpers/browser-target.js";
 import { elementToAttachment } from "./tools/helpers/element-attachment.js";
 import { ElementPickCancelled, pickElement } from "./tools/helpers/element-picker.js";
+import { RefRegistry } from "./tools/helpers/ref-registry.js";
 import { AskUserWhichElementTool, skillTool } from "./tools/index.js";
 import { NativeInputEventsRuntimeProvider } from "./tools/NativeInputEventsRuntimeProvider.js";
 import { isToolNavigating, NavigateTool } from "./tools/navigate.js";
+import { capturePageSnapshot, type PageSnapshotResult, PageSnapshotTool } from "./tools/page-snapshot.js";
 import { createReplTool, executeJavaScript } from "./tools/repl/repl.js";
 import { registerReplRenderer } from "./tools/repl/repl-renderer.js";
 import { BrowserJsRuntimeProvider, NavigateRuntimeProvider } from "./tools/repl/runtime-providers.js";
@@ -140,6 +142,8 @@ let agent: Agent;
 let chatPanel: ChatPanel;
 let agentUnsubscribe: (() => void) | undefined;
 let currentWindowId: number;
+const sidepanelRefRegistry = new RefRegistry();
+const NAVIGATION_SNAPSHOT_MAX_ENTRIES = 60;
 
 /** Cached bridge connection state read from chrome.storage.session. */
 let cachedBridgeState: BridgeStateData = { state: "disabled" };
@@ -152,6 +156,25 @@ const sessionBridgeListeners = new Set<(event: SessionBridgeEventEnvelope) => vo
 
 // Cached auth type label for the current provider
 let authLabel = "";
+
+async function captureNavigationSnapshot(tabId?: number): Promise<PageSnapshotResult | undefined> {
+	if (typeof tabId !== "number") return undefined;
+	try {
+		return await capturePageSnapshot({ tabId, maxEntries: NAVIGATION_SNAPSHOT_MAX_ENTRIES });
+	} catch (error) {
+		console.warn("Failed to capture navigation snapshot:", error);
+		return undefined;
+	}
+}
+
+async function createSidepanelNavigationMessage(
+	url: string,
+	title: string,
+	favicon?: string,
+	tabId?: number,
+): Promise<NavigationMessage> {
+	return createNavigationMessage(url, title, favicon, tabId, await captureNavigationSnapshot(tabId));
+}
 
 // Fireworks is an OpenAI-completions-compatible provider. pi-ai has no built-in
 // KnownProvider for Fireworks, so we register models at runtime. This mirrors
@@ -937,7 +960,12 @@ const createAgent = async (options: SidepanelCreateAgentOptions = {}, shouldSave
 
 			// Only add if URL changed
 			if (!lastUrl || lastUrl !== tab.url) {
-				const navMessage = await createNavigationMessage(tab.url, tab.title || "Untitled", tab.favIconUrl, tab.id);
+				const navMessage = await createSidepanelNavigationMessage(
+					tab.url,
+					tab.title || "Untitled",
+					tab.favIconUrl,
+					tab.id,
+				);
 				agent.state.messages = [...agent.state.messages, navMessage];
 				emitSessionMessage(navMessage, agent.state.messages.length - 1);
 				emitSessionChanged();
@@ -977,6 +1005,8 @@ const createAgent = async (options: SidepanelCreateAgentOptions = {}, shouldSave
 
 			const extractImageTool = new ExtractImageTool();
 			extractImageTool.windowId = currentWindowId;
+			const pageSnapshotTool = new PageSnapshotTool();
+			pageSnapshotTool.windowId = currentWindowId;
 
 			const tools: AgentTool<any, any>[] = [
 				navigateTool as unknown as AgentTool<any, any>,
@@ -984,6 +1014,7 @@ const createAgent = async (options: SidepanelCreateAgentOptions = {}, shouldSave
 				replTool,
 				skillTool,
 				extractDocumentTool,
+				pageSnapshotTool as unknown as AgentTool<any, any>,
 				extractImageTool as unknown as AgentTool<any, any>,
 			];
 
@@ -1271,7 +1302,12 @@ chrome.tabs.onUpdated.addListener(async (_tabId, changeInfo, tab) => {
 		!tab.url.startsWith("moz-extension://") &&
 		!isToolNavigating()
 	) {
-		const navMessage = await createNavigationMessage(tab.url, tab.title || "Untitled", tab.favIconUrl, tab.id);
+		const navMessage = await createSidepanelNavigationMessage(
+			tab.url,
+			tab.title || "Untitled",
+			tab.favIconUrl,
+			tab.id,
+		);
 		agent.steer(navMessage);
 		console.log("Queued navigation message for tab switch to", tab.url);
 	}
@@ -1293,11 +1329,25 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
 		!tab.url.startsWith("moz-extension://") &&
 		!isToolNavigating()
 	) {
-		const navMessage = await createNavigationMessage(tab.url, tab.title || "Untitled", tab.favIconUrl, tab.id);
+		const navMessage = await createSidepanelNavigationMessage(
+			tab.url,
+			tab.title || "Untitled",
+			tab.favIconUrl,
+			tab.id,
+		);
 		agent.steer(navMessage);
 		console.log("Queued navigation message for tab switch to", tab.url);
 	}
 });
+
+if (chrome.webNavigation?.onCommitted) {
+	chrome.webNavigation.onCommitted.addListener((details) => {
+		sidepanelRefRegistry.onNavigated({
+			tabId: details.tabId,
+			frameId: details.frameId === 0 ? undefined : details.frameId,
+		});
+	});
+}
 
 // ============================================================================
 // KEYBOARD SHORTCUTS

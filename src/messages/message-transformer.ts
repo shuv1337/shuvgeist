@@ -1,6 +1,7 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ImageContent, Message, TextContent } from "@mariozechner/pi-ai";
 import { convertAttachments, isUserMessageWithAttachments } from "@mariozechner/pi-web-ui";
+import type { PageSnapshotEntry, PageSnapshotResult } from "../tools/page-snapshot.js";
 import type { NavigationMessage } from "./NavigationMessage.js";
 
 // Helper: Check if a message has toolCall blocks
@@ -73,6 +74,46 @@ function reorderMessages(messages: Message[]): Message[] {
 	return result;
 }
 
+function truncateSnapshotText(text: string | undefined, maxLength = 120): string | undefined {
+	const normalized = text?.replace(/\s+/g, " ").trim();
+	if (!normalized) return undefined;
+	return normalized.length <= maxLength ? normalized : `${normalized.slice(0, maxLength - 1)}...`;
+}
+
+function formatSnapshotEntry(entry: PageSnapshotEntry): string {
+	const label = truncateSnapshotText(entry.label);
+	const name = truncateSnapshotText(entry.name);
+	const text = truncateSnapshotText(entry.text);
+	const selectors = entry.selectorCandidates.slice(0, 2).join(", ");
+	const stableId = entry.stableElementId ? ` stable=${entry.stableElementId}` : "";
+	const role = entry.role ? ` role=${entry.role}` : "";
+	const heading = entry.headingLevel ? ` heading=${entry.headingLevel}` : "";
+	const landmark = entry.landmark ? ` landmark=${entry.landmark}` : "";
+	const content = [
+		name ? `name="${name}"` : undefined,
+		label ? `label="${label}"` : undefined,
+		text ? `text="${text}"` : undefined,
+		selectors ? `selectors="${selectors}"` : undefined,
+	]
+		.filter((part): part is string => Boolean(part))
+		.join(" ");
+	const bbox = `bbox=${Math.round(entry.boundingBox.x)},${Math.round(entry.boundingBox.y)},${Math.round(
+		entry.boundingBox.width,
+	)}x${Math.round(entry.boundingBox.height)}`;
+	return `- ref=${entry.snapshotId}${stableId}${role}${heading}${landmark} tag=${entry.tagName} interactive=${entry.interactive} ${bbox}${content ? ` ${content}` : ""}`;
+}
+
+function formatNavigationSnapshot(snapshot: PageSnapshotResult | undefined): string {
+	if (!snapshot) return "";
+	const entries = snapshot.entries.map(formatSnapshotEntry).join("\n");
+	const query = snapshot.query ? ` query="${snapshot.query}"` : "";
+	return `
+<page-snapshot tab-id="${snapshot.tabId}" frame-id="${snapshot.frameId}" generated-at="${snapshot.generatedAt}" total-candidates="${snapshot.totalCandidates}" returned="${snapshot.entries.length}" truncated="${snapshot.truncated}"${query}>
+${entries}
+</page-snapshot>
+`;
+}
+
 // Custom message transformer for browser extension
 // Handles navigation messages and app-specific message types
 export async function browserMessageTransformer(messages: AgentMessage[]): Promise<Message[]> {
@@ -98,6 +139,7 @@ export async function browserMessageTransformer(messages: AgentMessage[]): Promi
 		if (m.role === "navigation") {
 			const nav = m as NavigationMessage;
 			const tabInfo = nav.tabId !== undefined ? ` (tab id: ${nav.tabId})` : "";
+			const snapshotInfo = formatNavigationSnapshot(nav.snapshot);
 
 			// Use cached skills output (formatted at message creation time)
 			const skillsInfo = nav.skillsOutput;
@@ -107,6 +149,7 @@ export async function browserMessageTransformer(messages: AgentMessage[]): Promi
 				content: `<browser-context>
 ✓ Navigation succeeded: ${nav.title}${tabInfo}
 ✓ URL: ${nav.url}
+${snapshotInfo}
 </browser-context>
 
 <skills>

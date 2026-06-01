@@ -332,6 +332,9 @@ export class BrowserCommandExecutor {
 
 	async navigate(params: NavigateParams, signal?: AbortSignal): Promise<unknown> {
 		const result = await this.getNavigateTool().execute("bridge", params, signal);
+		if (typeof result.details.tabId === "number") {
+			this.refRegistry.onNavigated({ tabId: result.details.tabId });
+		}
 		return result.details;
 	}
 
@@ -966,12 +969,14 @@ export class BrowserCommandExecutor {
 
 	private storeSnapshotRefs(snapshot: { tabId: number; frameId: number; entries: PageSnapshotEntry[] }): void {
 		this.refRegistry.invalidateOnNavigation(snapshot.tabId, snapshot.frameId);
+		const navigationGeneration = this.debuggerManager.cdpSession(snapshot.tabId).navigationGeneration;
 		for (const entry of snapshot.entries) {
 			this.refRegistry.createRef({
 				refId: entry.snapshotId,
 				tabId: snapshot.tabId,
 				frameId: snapshot.frameId,
 				locator: buildRefLocatorBundle(entry),
+				navigationGeneration,
 			});
 		}
 	}
@@ -1006,6 +1011,10 @@ export class BrowserCommandExecutor {
 		}
 		const targetTabId = tabId ?? ref.tabId;
 		const targetFrameId = frameId ?? ref.frameId;
+		const currentNavigationGeneration = this.debuggerManager.cdpSession(targetTabId).navigationGeneration;
+		if (typeof ref.navigationGeneration === "number" && currentNavigationGeneration > ref.navigationGeneration) {
+			throw new Error(`Reference ${refId} is stale after navigation`);
+		}
 		const snapshot = await capturePageSnapshot({
 			tabId: targetTabId,
 			frameId: targetFrameId,
@@ -1024,7 +1033,7 @@ export class BrowserCommandExecutor {
 			ordinalPath: entry.ordinalPath,
 			boundingBox: entry.boundingBox,
 		}));
-		const resolution = this.refRegistry.resolveRef(refId, candidates);
+		const resolution = this.refRegistry.resolveRef(refId, candidates, { currentNavigationGeneration });
 		if (!resolution.ok) {
 			throw new Error(resolution.message);
 		}

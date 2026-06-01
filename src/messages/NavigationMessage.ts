@@ -5,6 +5,7 @@ import { customElement, property, state } from "lit/decorators.js";
 import { SkillPill } from "../components/SkillPill.js";
 import { getShuvgeistStorage } from "../storage/app-storage.js";
 import type { Skill } from "../storage/stores/skills-store.js";
+import type { PageSnapshotResult } from "../tools/page-snapshot.js";
 import { formatSkills } from "../utils/format-skills.js";
 
 // ============================================================================
@@ -17,6 +18,7 @@ export interface NavigationMessage {
 	title: string;
 	favicon?: string;
 	tabId?: number;
+	snapshot?: PageSnapshotResult;
 	skillsOutput: string; // Frozen formatted skills text (shown to LLM)
 }
 
@@ -122,6 +124,7 @@ export async function createNavigationMessage(
 	title: string,
 	favicon?: string,
 	tabId?: number,
+	snapshot?: PageSnapshotResult,
 ): Promise<NavigationMessage> {
 	// Get skills for this URL and format them
 	const skillsRepo = getShuvgeistStorage().skills;
@@ -134,6 +137,7 @@ export async function createNavigationMessage(
 		title,
 		favicon,
 		tabId,
+		snapshot,
 		skillsOutput,
 	};
 }

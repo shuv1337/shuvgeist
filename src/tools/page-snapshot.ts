@@ -4,6 +4,7 @@ import { isUsableWindowId } from "./helpers/browser-target.js";
 import { executePageFunction } from "./helpers/page-execution.js";
 import type { RefLocatorBundle, SemanticLocatorCandidate } from "./helpers/ref-map.js";
 import { rankLocatorCandidates } from "./helpers/ref-map.js";
+import { filterSnapshotByKeywords } from "./helpers/snapshot-filter.js";
 import { SNAPSHOT_PAGE_SCRIPT, shuvgeistSnapshotPageScript } from "./helpers/snapshot-page-script.js";
 
 export { SNAPSHOT_PAGE_SCRIPT };
@@ -272,7 +273,7 @@ export async function capturePageSnapshot(options: CapturePageSnapshotOptions): 
 		throw new Error(response.error || "Page snapshot script failed");
 	}
 
-	return {
+	const snapshot = {
 		tabId: options.tabId,
 		frameId,
 		...(options.query ? { query: options.query } : {}),
@@ -283,6 +284,7 @@ export async function capturePageSnapshot(options: CapturePageSnapshotOptions): 
 		truncated: response.result.truncated,
 		entries: response.result.entries.map((entry) => normalizeSnapshotEntry(entry, options.tabId)),
 	};
+	return filterSnapshotByKeywords(snapshot, { query: options.query, limit: maxEntries });
 }
 
 export class PageSnapshotTool implements AgentTool<typeof pageSnapshotSchema, PageSnapshotResult> {

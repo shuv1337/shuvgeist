@@ -32,6 +32,7 @@ interface SnapshotHTMLElement {
 	children: ArrayLike<SnapshotHTMLElement>;
 	textContent: string | null;
 	getAttribute(name: string): string | null;
+	setAttribute(name: string, value: string): void;
 	getBoundingClientRect(): { x: number; y: number; width: number; height: number };
 }
 
@@ -224,10 +225,28 @@ export function shuvgeistSnapshotPageScript(config: SnapshotPageScriptConfig) {
 		return config.snapshotIdPrefix ? config.snapshotIdPrefix + ":ref" + ordinal : "e" + ordinal;
 	};
 
-	const stableElementIdFor = (element: SnapshotHTMLElement): string | undefined => {
+	const stableElementIdFor = (element: SnapshotHTMLElement, ordinal: number): string | undefined => {
 		const primaryAttribute = config.stableElementIdAttribute || "data-shuvgeist-stable-id";
 		const value = element.getAttribute(primaryAttribute) || element.getAttribute("data-shuvgeist-id");
-		return normalize(value || "", 180) || undefined;
+		const existing = normalize(value || "", 180);
+		if (existing) return existing;
+		const tagName = element.tagName.toLowerCase();
+		const semanticParts = [
+			element.getAttribute("id"),
+			element.getAttribute("data-testid"),
+			element.getAttribute("name"),
+			element.getAttribute("aria-label"),
+			String(ordinal),
+		]
+			.filter((part): part is string => Boolean(part))
+			.join("-")
+			.toLowerCase()
+			.replace(/[^a-z0-9_-]+/g, "-")
+			.replace(/^-+|-+$/g, "")
+			.slice(0, 96);
+		const generated = `sg-${tagName}-${semanticParts || ordinal}`;
+		element.setAttribute(primaryAttribute, generated);
+		return generated;
 	};
 
 	const relevant = Array.from(document.querySelectorAll(selector));
@@ -265,7 +284,7 @@ export function shuvgeistSnapshotPageScript(config: SnapshotPageScriptConfig) {
 		const ordinal = out.length + 1;
 		out.push({
 			snapshotId: snapshotIdFor(ordinal),
-			stableElementId: stableElementIdFor(element),
+			stableElementId: stableElementIdFor(element, ordinal),
 			frameId: config.frameId,
 			tagName,
 			role: role || undefined,
