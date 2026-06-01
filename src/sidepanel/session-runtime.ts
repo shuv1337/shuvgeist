@@ -1,5 +1,11 @@
-import type { Agent, AgentMessage, AgentState } from "@mariozechner/pi-agent-core";
+import type { Agent, AgentMessage } from "@mariozechner/pi-agent-core";
 import type { Model } from "@mariozechner/pi-ai";
+import {
+	type AgentRuntimeHooks,
+	type AgentRuntimeInitialState,
+	type AgentRuntimeThinkingLevel,
+	DEFAULT_AGENT_THINKING_LEVEL,
+} from "../agent/runtime.js";
 import {
 	ErrorCodes,
 	type SessionArtifactsResult,
@@ -30,7 +36,7 @@ export interface SidepanelSessionRuntimeDeps {
 	emitSessionChanged(): void;
 	emitSessionMessage(message: AgentMessage, messageIndex?: number): void;
 	updateUrl(sessionId: string): void;
-	createAgent(initialState?: Partial<AgentState>): Promise<void>;
+	createAgent(options?: SidepanelCreateAgentOptions): Promise<void>;
 	resolveModelSpec(spec: string, providerHint?: string): Promise<Model<any>>;
 	normalizeModelForRuntime(model: Model<any>): Model<any>;
 	requestModelUiUpdate(): void;
@@ -39,6 +45,12 @@ export interface SidepanelSessionRuntimeDeps {
 	getArtifactsResult(): SessionArtifactsResult;
 	logSessionIdleWait(durationMs: number): void;
 	createSessionId(): string;
+}
+
+export interface SidepanelCreateAgentOptions extends AgentRuntimeHooks {
+	initialState?: AgentRuntimeInitialState;
+	model?: Model<any>;
+	thinkingLevel?: AgentRuntimeThinkingLevel;
 }
 
 export class SidepanelSessionRuntime implements Omit<SessionBridgeAdapter, "subscribe"> {
@@ -148,11 +160,8 @@ export class SidepanelSessionRuntime implements Omit<SessionBridgeAdapter, "subs
 		await this.deps.createAgent(
 			model
 				? {
-						systemPrompt: this.deps.systemPrompt,
 						model,
-						thinkingLevel: "medium",
-						messages: [],
-						tools: [],
+						thinkingLevel: DEFAULT_AGENT_THINKING_LEVEL,
 					}
 				: undefined,
 		);

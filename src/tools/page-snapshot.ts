@@ -4,6 +4,9 @@ import { isUsableWindowId } from "./helpers/browser-target.js";
 import { executePageFunction } from "./helpers/page-execution.js";
 import type { RefLocatorBundle, SemanticLocatorCandidate } from "./helpers/ref-map.js";
 import { rankLocatorCandidates } from "./helpers/ref-map.js";
+import { SNAPSHOT_PAGE_SCRIPT, shuvgeistSnapshotPageScript } from "./helpers/snapshot-page-script.js";
+
+export { SNAPSHOT_PAGE_SCRIPT };
 
 const SNAPSHOT_WORLD_ID = "shuvgeist-page-snapshot";
 const DEFAULT_MAX_ENTRIES = 120;
@@ -17,6 +20,7 @@ export interface SnapshotBoundingBox {
 
 export interface PageSnapshotEntry {
 	snapshotId: string;
+	stableElementId?: string;
 	tabId: number;
 	frameId: number;
 	tagName: string;
@@ -36,6 +40,7 @@ export interface PageSnapshotEntry {
 export interface PageSnapshotResult {
 	tabId: number;
 	frameId: number;
+	query?: string;
 	url: string;
 	title: string;
 	generatedAt: number;
@@ -49,6 +54,7 @@ export interface CapturePageSnapshotOptions {
 	frameId?: number;
 	maxEntries?: number;
 	includeHidden?: boolean;
+	query?: string;
 }
 
 const pageSnapshotSchema = Type.Object({
@@ -62,12 +68,14 @@ const pageSnapshotSchema = Type.Object({
 		}),
 	),
 	includeHidden: Type.Optional(Type.Boolean({ description: "Include hidden elements if true." })),
+	query: Type.Optional(Type.String({ description: "Optional keyword query reserved for snapshot filtering." })),
 });
 
 export type PageSnapshotParams = Static<typeof pageSnapshotSchema>;
 
-interface SnapshotScriptEntry {
+export interface SnapshotScriptEntry {
 	snapshotId: string;
+	stableElementId?: string;
 	frameId: number;
 	tagName: string;
 	role?: string;
@@ -83,7 +91,7 @@ interface SnapshotScriptEntry {
 	landmark?: string;
 }
 
-interface SnapshotScriptResult {
+export interface SnapshotScriptResult {
 	url: string;
 	title: string;
 	generatedAt: number;
@@ -92,10 +100,18 @@ interface SnapshotScriptResult {
 	entries: SnapshotScriptEntry[];
 }
 
-interface SnapshotScriptResponse {
+export interface SnapshotScriptResponse {
 	success: boolean;
 	error?: string;
 	result?: SnapshotScriptResult;
+}
+
+export interface SnapshotScriptConfig {
+	frameId: number;
+	maxEntries: number;
+	includeHidden: boolean;
+	snapshotIdPrefix?: string;
+	stableElementIdAttribute?: string;
 }
 
 export interface LocateByRoleOptions {
@@ -131,6 +147,7 @@ function trimText(text: string | undefined, maxLength = 180): string | undefined
 function normalizeSnapshotEntry(entry: SnapshotScriptEntry, tabId: number): PageSnapshotEntry {
 	return {
 		snapshotId: entry.snapshotId,
+		...(entry.stableElementId ? { stableElementId: entry.stableElementId } : {}),
 		tabId,
 		frameId: entry.frameId,
 		tagName: entry.tagName,
@@ -221,232 +238,6 @@ export function buildRefLocatorBundle(entry: PageSnapshotEntry): RefLocatorBundl
 	};
 }
 
-function snapshotInPage(config: {
-	frameId: number;
-	maxEntries: number;
-	includeHidden: boolean;
-}): SnapshotScriptResponse {
-	const selector = [
-		"a[href]",
-		"button",
-		"input",
-		"select",
-		"textarea",
-		"summary",
-		"[role]",
-		"[tabindex]",
-		'[contenteditable="true"]',
-		"label",
-		"h1,h2,h3,h4,h5,h6",
-		"main,nav,header,footer,aside,article,section",
-	].join(",");
-	const landmarkRoles = new Set(["main", "navigation", "banner", "contentinfo", "complementary", "region", "search"]);
-	const interactiveRoles = new Set([
-		"button",
-		"link",
-		"textbox",
-		"checkbox",
-		"radio",
-		"switch",
-		"combobox",
-		"listbox",
-		"menuitem",
-		"tab",
-		"slider",
-		"spinbutton",
-		"option",
-	]);
-
-	const normalize = (value: unknown, maxLen: number): string => {
-		if (typeof value !== "string") return "";
-		const text = value.replace(/\s+/g, " ").trim();
-		if (!text) return "";
-		return text.length <= maxLen ? text : `${text.slice(0, Math.max(0, maxLen - 1))}...`;
-	};
-
-	const isVisible = (element: Element): boolean => {
-		const style = window.getComputedStyle(element);
-		if (style.display === "none" || style.visibility === "hidden" || style.visibility === "collapse") return false;
-		const rect = element.getBoundingClientRect();
-		return rect.width > 0 && rect.height > 0;
-	};
-
-	const safeEscape = (input: string): string => {
-		if (window.CSS && typeof window.CSS.escape === "function") return window.CSS.escape(input);
-		return input.replace(/[^a-zA-Z0-9_-]/g, "\\$&");
-	};
-
-	const implicitRole = (element: Element): string => {
-		const tag = element.tagName.toLowerCase();
-		if (tag === "a" && element.getAttribute("href")) return "link";
-		if (tag === "button") return "button";
-		if (tag === "select") return "combobox";
-		if (tag === "textarea") return "textbox";
-		if (tag === "summary") return "button";
-		if (tag === "input") {
-			const type = (element.getAttribute("type") || "text").toLowerCase();
-			if (type === "checkbox") return "checkbox";
-			if (type === "radio") return "radio";
-			if (type === "range") return "slider";
-			if (type === "number") return "spinbutton";
-			if (type === "button" || type === "submit" || type === "reset") return "button";
-			return "textbox";
-		}
-		if (tag === "main") return "main";
-		if (tag === "nav") return "navigation";
-		if (tag === "header") return "banner";
-		if (tag === "footer") return "contentinfo";
-		if (tag === "aside") return "complementary";
-		if (tag === "section" && (element.getAttribute("aria-label") || element.getAttribute("aria-labelledby"))) {
-			return "region";
-		}
-		return "";
-	};
-
-	const elementName = (element: Element): string => {
-		const ariaLabel = element.getAttribute("aria-label");
-		if (ariaLabel) return normalize(ariaLabel, 120);
-		const title = element.getAttribute("title");
-		if (title) return normalize(title, 120);
-		if (element instanceof HTMLInputElement && element.value) return normalize(element.value, 120);
-		const alt = element.getAttribute("alt");
-		if (alt) return normalize(alt, 120);
-		return normalize(element.textContent || "", 120);
-	};
-
-	const elementLabel = (element: Element): string => {
-		const ariaLabelledBy = element.getAttribute("aria-labelledby");
-		if (ariaLabelledBy) {
-			const parts = ariaLabelledBy
-				.split(/\s+/)
-				.filter(Boolean)
-				.map((id) => document.getElementById(id))
-				.filter((node): node is HTMLElement => node !== null)
-				.map((node) => normalize(node.textContent || "", 120))
-				.filter(Boolean);
-			if (parts.length > 0) return parts.join(" ");
-		}
-		if (
-			element instanceof HTMLInputElement ||
-			element instanceof HTMLTextAreaElement ||
-			element instanceof HTMLSelectElement
-		) {
-			if (element.labels && element.labels.length > 0) {
-				return normalize(element.labels[0].textContent || "", 120);
-			}
-			const id = element.getAttribute("id");
-			if (id) {
-				const label = document.querySelector(`label[for="${safeEscape(id)}"]`);
-				if (label) return normalize(label.textContent || "", 120);
-			}
-		}
-		return "";
-	};
-
-	const selectorCandidates = (element: Element): string[] => {
-		const out: string[] = [];
-		const tag = element.tagName.toLowerCase();
-		const id = element.getAttribute("id");
-		if (id) out.push(`#${safeEscape(id)}`);
-		const dataTestId = element.getAttribute("data-testid");
-		if (dataTestId) out.push(`[data-testid="${safeEscape(dataTestId)}"]`);
-		const name = element.getAttribute("name");
-		if (name) out.push(`${tag}[name="${safeEscape(name)}"]`);
-		const classes = (element.getAttribute("class") || "")
-			.split(/\s+/)
-			.filter(Boolean)
-			.filter((namePart) => !namePart.startsWith("shuvgeist-"))
-			.slice(0, 2);
-		if (classes.length > 0) out.push(`${tag}.${classes.map((item) => safeEscape(item)).join(".")}`);
-		if (element.parentElement) {
-			const sameTag = Array.from(element.parentElement.children).filter(
-				(child) => child.tagName === element.tagName,
-			);
-			const index = sameTag.indexOf(element) + 1;
-			if (index > 0) out.push(`${tag}:nth-of-type(${index})`);
-		}
-		out.push(tag);
-		return Array.from(new Set(out)).slice(0, 5);
-	};
-
-	const ordinalPath = (element: Element): number[] => {
-		const path: number[] = [];
-		let node: Element = element;
-		while (node && node !== document.body && node.parentElement) {
-			path.unshift(Array.prototype.indexOf.call(node.parentElement.children, node) as number);
-			node = node.parentElement;
-		}
-		return path;
-	};
-
-	const relevant = Array.from(document.querySelectorAll(selector));
-	const seen = new Set<Element>();
-	const out: SnapshotScriptEntry[] = [];
-	let totalCandidates = 0;
-
-	for (const element of relevant) {
-		if (!(element instanceof HTMLElement)) continue;
-		if (seen.has(element)) continue;
-		seen.add(element);
-
-		const visible = isVisible(element);
-		if (!config.includeHidden && !visible) continue;
-
-		const tagName = element.tagName.toLowerCase();
-		const explicitRole = element.getAttribute("role") || "";
-		const role = explicitRole || implicitRole(element);
-		const headingLevel = /^h[1-6]$/.test(tagName) ? Number.parseInt(tagName.slice(1), 10) : undefined;
-		const landmark = landmarkRoles.has(role) ? role : undefined;
-		const interactive = interactiveRoles.has(role) || element.tabIndex >= 0 || element.isContentEditable;
-		if (!interactive && !headingLevel && !landmark) continue;
-
-		totalCandidates++;
-		if (out.length >= config.maxEntries) continue;
-
-		const rect = element.getBoundingClientRect();
-		const label = elementLabel(element);
-		const attrs: Record<string, string> = {};
-		for (const key of ["id", "name", "type", "href", "placeholder", "aria-label", "data-testid", "title"]) {
-			const value = element.getAttribute(key);
-			if (value) attrs[key] = normalize(value, 120);
-		}
-
-		out.push({
-			snapshotId: `e${out.length + 1}`,
-			frameId: config.frameId,
-			tagName,
-			role: role || undefined,
-			name: elementName(element) || undefined,
-			text: normalize(element.textContent || "", 180) || undefined,
-			label: label || undefined,
-			attributes: attrs,
-			selectorCandidates: selectorCandidates(element),
-			ordinalPath: ordinalPath(element),
-			boundingBox: {
-				x: rect.x,
-				y: rect.y,
-				width: rect.width,
-				height: rect.height,
-			},
-			interactive,
-			headingLevel,
-			landmark,
-		});
-	}
-
-	return {
-		success: true,
-		result: {
-			url: location.href,
-			title: document.title || "",
-			generatedAt: Date.now(),
-			totalCandidates,
-			truncated: totalCandidates > out.length,
-			entries: out,
-		},
-	};
-}
-
 async function resolveSnapshotTabId(tabId: number | undefined, windowId: number | undefined): Promise<number> {
 	if (typeof tabId === "number") return tabId;
 	const query: chrome.tabs.QueryInfo = isUsableWindowId(windowId)
@@ -469,7 +260,7 @@ export async function capturePageSnapshot(options: CapturePageSnapshotOptions): 
 	};
 	const execution = await executePageFunction<SnapshotScriptResponse>(
 		{ tabId: options.tabId, frameId },
-		snapshotInPage,
+		shuvgeistSnapshotPageScript,
 		{ worldId: SNAPSHOT_WORLD_ID, args: [config] },
 	);
 	if (!execution.success) {
@@ -484,6 +275,7 @@ export async function capturePageSnapshot(options: CapturePageSnapshotOptions): 
 	return {
 		tabId: options.tabId,
 		frameId,
+		...(options.query ? { query: options.query } : {}),
 		url: response.result.url,
 		title: response.result.title,
 		generatedAt: response.result.generatedAt,
@@ -515,6 +307,7 @@ export class PageSnapshotTool implements AgentTool<typeof pageSnapshotSchema, Pa
 			frameId: args.frameId,
 			maxEntries: args.maxEntries,
 			includeHidden: args.includeHidden,
+			query: args.query,
 		});
 		return {
 			content: [

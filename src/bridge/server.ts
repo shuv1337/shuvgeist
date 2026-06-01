@@ -44,6 +44,7 @@ import {
 	isWriteMethod,
 	type RegistrationMessage,
 } from "./protocol.js";
+import { SessionRegistry } from "./session-registry.js";
 import { parseBridgeSkillSnapshot } from "./skill-snapshot.js";
 import { isElectronTarget, requestTarget, targetTeachingLabel } from "./target.js";
 import { missingExtensionTargetError, resolveBridgeExecution } from "./target-execution.js";
@@ -80,6 +81,7 @@ interface PendingRequest {
 	cliWs: WebSocket;
 	method: string;
 	startedAt: number;
+	targetHandleKey?: string;
 	span?: BridgeTelemetrySpan;
 }
 
@@ -88,6 +90,7 @@ interface ActiveRecordingLease {
 	recordingId: string;
 	tabId: number;
 	startedAt: number;
+	targetHandleKey?: string;
 }
 
 function electronTargetTelemetryAttributes(target: ReturnType<typeof requestTarget>): TelemetryAttributes {
@@ -143,12 +146,10 @@ export class BridgeServer {
 	private readonly config: BridgeServerConfig;
 	private readonly clients = new Map<WebSocket, ClientInfo>();
 	private readonly telemetry?: BridgeTelemetry;
-	private activeExtension: ClientInfo | null = null;
+	private readonly sessionRegistry = new SessionRegistry<ClientInfo>();
 	private readonly pendingRequests = new Map<number, PendingRequest>();
 	private readonly rejectedBootstrapCounts = new Map<string, number>();
 	private nextRelayRequestId = 1;
-	private writerCliConnectionId?: string;
-	private writerSessionId?: string;
 	private readonly electronSessions = new ElectronSessionManager();
 	private readonly activeRecordingLeases = new Map<string, ActiveRecordingLease>();
 	private httpServer?: ReturnType<typeof createServer>;
@@ -303,11 +304,9 @@ export class BridgeServer {
 			client.ws.close();
 		}
 		this.clients.clear();
-		this.activeExtension = null;
+		this.sessionRegistry.clear();
 		this.pendingRequests.clear();
 		this.activeRecordingLeases.clear();
-		this.writerCliConnectionId = undefined;
-		this.writerSessionId = undefined;
 
 		if (this.wss) {
 			await new Promise<void>((resolve, reject) => {
@@ -360,7 +359,7 @@ export class BridgeServer {
 		} else if (client.role === "extension" && typeof msg.id === "number" && ("result" in msg || "error" in msg)) {
 			this.handleExtensionResponse(msg as unknown as BridgeResponse);
 		} else if (client.role === "extension" && msg.type === "event") {
-			this.handleExtensionEvent(msg as unknown as BridgeEvent);
+			this.handleExtensionEvent(client, msg as unknown as BridgeEvent);
 		} else {
 			bridgeLog("debug", "unhandled message type", {
 				connectionId: client.connectionId,
@@ -415,23 +414,25 @@ export class BridgeServer {
 
 		if (msg.role === "extension") {
 			// Handle existing extension connection
-			if (this.activeExtension && this.activeExtension.ws.readyState === WebSocket.OPEN) {
-				if (this.activeExtension.windowId === msg.windowId) {
+			const activeHandle = this.sessionRegistry.activeHandle;
+			if (activeHandle && activeHandle.connection.ws.readyState === WebSocket.OPEN) {
+				if (activeHandle.windowId === msg.windowId) {
 					// Same window reconnecting (sidepanel reload, settings change, etc.)
 					// — replace the old connection gracefully
 					bridgeLog("info", "replacing existing extension connection (same windowId)", {
 						...fields,
 						windowId: msg.windowId,
 					});
-					const oldWs = this.activeExtension.ws;
+					const oldWs = activeHandle.connection.ws;
 					this.clients.delete(oldWs);
+					this.sessionRegistry.unregisterByConnection(activeHandle.connection);
 					oldWs.close(4008, "Replaced by new connection from same window");
 				} else {
 					// Different window — reject (single active target constraint)
 					bridgeLog("warn", "extension already connected — rejecting new registration", {
 						...fields,
 						outcome: "rejected",
-						existingWindowId: this.activeExtension.windowId,
+						existingWindowId: activeHandle.windowId,
 						newWindowId: msg.windowId,
 					});
 					this.sendJson(client.ws, {
@@ -451,7 +452,16 @@ export class BridgeServer {
 			client.capabilities = msg.capabilities;
 			client.protocolVersion = msg.protocolVersion;
 			client.appVersion = msg.appVersion;
-			this.activeExtension = client;
+			this.sessionRegistry.register({
+				kind: "chrome-tab",
+				connection: client,
+				windowId: msg.windowId,
+				sessionId: msg.sessionId,
+				capabilities: msg.capabilities,
+				protocolVersion: msg.protocolVersion,
+				appVersion: msg.appVersion,
+				remoteAddress: client.remoteAddress,
+			});
 
 			bridgeLog("info", "extension registered", {
 				...fields,
@@ -538,7 +548,8 @@ export class BridgeServer {
 		}
 
 		// Check extension target
-		if (!this.activeExtension || this.activeExtension.ws.readyState !== WebSocket.OPEN) {
+		const targetHandle = this.sessionRegistry.resolve(target);
+		if (!targetHandle || targetHandle.connection.ws.readyState !== WebSocket.OPEN) {
 			const error = missingExtensionTargetError();
 			bridgeLog("warn", "no extension target", { ...fields, outcome: "error" });
 			span?.recordError(new Error(error.message));
@@ -552,11 +563,11 @@ export class BridgeServer {
 			return;
 		}
 
-		if (this.activeExtension.capabilities && !this.activeExtension.capabilities.includes(req.method)) {
+		if (targetHandle.capabilities && !targetHandle.capabilities.includes(req.method)) {
 			bridgeLog("warn", "capability disabled on active extension", {
 				...fields,
 				outcome: "rejected",
-				capabilities: this.activeExtension.capabilities,
+				capabilities: targetHandle.capabilities,
 			});
 			span?.recordError(new Error(`Method '${req.method}' is disabled on the active extension target`));
 			span?.setAttribute("bridge.outcome", "rejected");
@@ -573,12 +584,15 @@ export class BridgeServer {
 		}
 
 		if (isWriteMethod(req.method)) {
-			if (this.writerCliConnectionId && this.writerCliConnectionId !== client.connectionId) {
+			const expectedSessionId =
+				req.params && typeof req.params.expectedSessionId === "string" ? req.params.expectedSessionId : undefined;
+			const lease = targetHandle.writeLock.acquire(client.connectionId, expectedSessionId);
+			if (!lease.ok) {
 				bridgeLog("warn", "session inject rejected due to active writer lock", {
 					...fields,
 					outcome: "rejected",
-					writerCliConnectionId: this.writerCliConnectionId,
-					writerSessionId: this.writerSessionId,
+					writerCliConnectionId: lease.holder.cliConnectionId,
+					writerSessionId: lease.holder.sessionId,
 				});
 				span?.recordError(new Error("Another CLI currently holds the session write lock"));
 				span?.setAttribute("bridge.outcome", "rejected");
@@ -593,10 +607,6 @@ export class BridgeServer {
 				});
 				return;
 			}
-			this.writerCliConnectionId = client.connectionId;
-			const expectedSessionId =
-				req.params && typeof req.params.expectedSessionId === "string" ? req.params.expectedSessionId : undefined;
-			this.writerSessionId = expectedSessionId;
 			bridgeLog("info", "session writer lease acquired", {
 				...fields,
 				sessionId: expectedSessionId,
@@ -612,6 +622,7 @@ export class BridgeServer {
 			cliWs: client.ws,
 			method: req.method,
 			startedAt: Date.now(),
+			targetHandleKey: targetHandle.key,
 			span,
 		});
 
@@ -620,7 +631,7 @@ export class BridgeServer {
 			relayRequestId,
 		});
 
-		this.sendJson(this.activeExtension.ws, {
+		this.sendJson(targetHandle.connection.ws, {
 			...req,
 			id: relayRequestId,
 			target,
@@ -654,6 +665,7 @@ export class BridgeServer {
 				result = await this.electronSessions.snapshot(target, {
 					maxEntries: typeof req.params?.maxEntries === "number" ? req.params.maxEntries : undefined,
 					includeHidden: req.params?.includeHidden === true,
+					query: typeof req.params?.query === "string" ? req.params.query : undefined,
 				});
 			} else if (req.method === "page_assert") {
 				result = await this.electronSessions.assert(target, req.params as never);
@@ -1001,13 +1013,14 @@ export class BridgeServer {
 		for (const [recordingId, lease] of this.activeRecordingLeases) {
 			if (lease.cliConnectionId !== cliConnectionId) continue;
 			this.activeRecordingLeases.delete(recordingId);
-			if (this.activeExtension && this.activeExtension.ws.readyState === WebSocket.OPEN) {
+			const targetHandle = this.sessionRegistry.get(lease.targetHandleKey) ?? this.sessionRegistry.activeHandle;
+			if (targetHandle?.connection.ws.readyState === WebSocket.OPEN) {
 				const syntheticStop: BridgeRequest = {
 					id: this.nextRelayRequestId++,
 					method: "record_stop",
 					params: { tabId: lease.tabId },
 				};
-				this.sendJson(this.activeExtension.ws, syntheticStop);
+				this.sendJson(targetHandle.connection.ws, syntheticStop);
 			}
 			bridgeLog("info", "sent synthetic record_stop for disconnected cli", {
 				role: "server",
@@ -1028,6 +1041,7 @@ export class BridgeServer {
 					recordingId: result.recordingId,
 					tabId: result.tabId,
 					startedAt: Date.now(),
+					targetHandleKey: pending.targetHandleKey,
 				});
 			}
 			return;
@@ -1044,14 +1058,15 @@ export class BridgeServer {
 	// Extension events → all CLIs
 	// -----------------------------------------------------------------------
 
-	private handleExtensionEvent(event: BridgeEvent): void {
+	private handleExtensionEvent(client: ClientInfo, event: BridgeEvent): void {
 		bridgeLog("debug", "extension event", {
 			role: "server",
 			event: event.event,
 		} as LogFields);
+		const targetHandle = this.sessionRegistry.findByConnection(client);
 		if (
 			(event.event === "record_frame" || event.event === "record_chunk") &&
-			!this.activeExtension?.capabilities?.includes("record_start")
+			!targetHandle?.capabilities?.includes("record_start")
 		) {
 			bridgeLog("warn", "recording event rejected because recording capability is disabled", {
 				role: "server",
@@ -1070,15 +1085,14 @@ export class BridgeServer {
 		if (event.event === "session_changed") {
 			const sessionId =
 				event.data && typeof event.data.sessionId === "string" ? (event.data.sessionId as string) : undefined;
-			if (this.writerSessionId && this.writerSessionId !== sessionId) {
+			const released = targetHandle?.writeLock.releaseForSessionChange(sessionId);
+			if (released) {
 				bridgeLog("info", "releasing session writer lease due to session change", {
 					role: "server",
-					writerCliConnectionId: this.writerCliConnectionId,
-					writerSessionId: this.writerSessionId,
+					writerCliConnectionId: released.cliConnectionId,
+					writerSessionId: released.sessionId,
 					sessionId,
 				});
-				this.writerCliConnectionId = undefined;
-				this.writerSessionId = undefined;
 			}
 		}
 		this.broadcastToRole("cli", event);
@@ -1097,10 +1111,9 @@ export class BridgeServer {
 
 		this.clients.delete(client.ws);
 
-		if (client.role === "extension" && this.activeExtension === client) {
-			this.activeExtension = null;
-			this.writerCliConnectionId = undefined;
-			this.writerSessionId = undefined;
+		const disconnectedTargetHandle =
+			client.role === "extension" ? this.sessionRegistry.unregisterByConnection(client) : undefined;
+		if (client.role === "extension" && disconnectedTargetHandle) {
 			this.activeRecordingLeases.clear();
 			bridgeLog("info", "extension disconnected", { ...fields, windowId: client.windowId });
 
@@ -1127,13 +1140,12 @@ export class BridgeServer {
 				event: "extension_disconnected",
 			});
 		} else if (client.role === "cli") {
-			if (this.writerCliConnectionId === client.connectionId) {
+			const releasedLocks = this.sessionRegistry.releaseLocksForCli(client.connectionId);
+			for (const releasedLock of releasedLocks) {
 				bridgeLog("info", "releasing session writer lease due to cli disconnect", {
 					...fields,
-					sessionId: this.writerSessionId,
+					sessionId: releasedLock.sessionId,
 				});
-				this.writerCliConnectionId = undefined;
-				this.writerSessionId = undefined;
 			}
 			bridgeLog("info", "cli disconnected", { ...fields, name: client.name });
 
@@ -1146,9 +1158,11 @@ export class BridgeServer {
 					pending.span?.setAttribute("bridge.outcome", "aborted");
 					pending.span?.end("error");
 
-					if (this.activeExtension && this.activeExtension.ws.readyState === WebSocket.OPEN) {
+					const targetHandle =
+						this.sessionRegistry.get(pending.targetHandleKey) ?? this.sessionRegistry.activeHandle;
+					if (targetHandle?.connection.ws.readyState === WebSocket.OPEN) {
 						const abort: AbortMessage = { type: "abort", id: relayRequestId };
-						this.sendJson(this.activeExtension.ws, abort);
+						this.sendJson(targetHandle.connection.ws, abort);
 					}
 
 					bridgeLog("info", "aborted pending request (cli disconnected)", {
@@ -1245,7 +1259,7 @@ export class BridgeServer {
 	}
 
 	private handleStatusRequest(res: ServerResponse): void {
-		const ext = this.activeExtension;
+		const ext = this.sessionRegistry.activeHandle;
 		const status: BridgeServerStatus = {
 			ok: true,
 			protocolVersion: BRIDGE_PROTOCOL_VERSION,
@@ -1256,7 +1270,7 @@ export class BridgeServer {
 						connected: true,
 						windowId: ext.windowId,
 						sessionId: ext.sessionId,
-						capabilities: ext.capabilities,
+						capabilities: ext.capabilities ? [...ext.capabilities] : undefined,
 						remoteAddress: ext.remoteAddress,
 						protocolVersion: ext.protocolVersion,
 						appVersion: ext.appVersion,

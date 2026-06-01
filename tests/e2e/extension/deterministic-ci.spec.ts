@@ -419,7 +419,9 @@ test("bridge supports deterministic assertions, workflow pinning, and native ifr
 				params: { tabId, frameId: childFrame?.frameId, role: "button", name: "Increment frame counter" },
 			});
 			const refId = located.result?.[0]?.refId;
-			expect(refId).toBeDefined();
+			if (!refId) {
+				throw new Error(JSON.stringify(located, null, 2));
+			}
 
 			const clicked = await readResponseById<{ result?: { ok: boolean; native?: boolean } }>(cli.ws, {
 				id: 207,

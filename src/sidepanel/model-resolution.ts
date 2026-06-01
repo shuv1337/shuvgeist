@@ -1,17 +1,31 @@
-import { getModel, type Model } from "@mariozechner/pi-ai";
+import { type Api, getModel, getModels, type Model } from "@mariozechner/pi-ai";
 import type { CustomProvider } from "@mariozechner/pi-web-ui/storage/stores/custom-providers-store.js";
+import { getProviderCredentialStorageKey, getProviderDefaultModelId } from "../providers/catalog.js";
 
 export interface ModelResolutionSources {
 	getCustomProviderByName(providerName: string): Promise<CustomProvider | undefined>;
 	getAllCustomProviders(): Promise<CustomProvider[]>;
-	getBuiltInModel?: (provider: string, modelId: string) => Model<any> | undefined;
+	getBuiltInModel?: (provider: string, modelId: string) => Model<Api> | undefined;
+	getBuiltInModels?: (provider: string) => Model<Api>[];
+}
+
+export interface ProviderCredentialResolutionSources {
+	getStoredProviderKey(providerName: string): Promise<string | undefined>;
+	getCustomProviderByName(providerName: string): Promise<CustomProvider | undefined>;
+	resolveStoredCredential(storedValue: string, providerName: string): Promise<string>;
+}
+
+export interface ResolvedProviderCredential {
+	apiKey: string;
+	providerName: string;
+	source: "stored" | "custom";
 }
 
 export function isProxxProviderName(providerName: string): boolean {
 	return providerName.trim().toLowerCase() === "proxx";
 }
 
-export function normalizeModelForRuntime(model: Model<any>): Model<any> {
+export function normalizeModelForRuntime(model: Model<Api>): Model<Api> {
 	if (!isProxxProviderName(model.provider)) return model;
 
 	const normalizedBaseUrl = model.baseUrl?.trim().replace(/\/+$/, "") || "";
@@ -26,12 +40,87 @@ export function normalizeModelForRuntime(model: Model<any>): Model<any> {
 	return model;
 }
 
+function defaultBuiltInModel(provider: string, modelId: string): Model<Api> | undefined {
+	return getModel(provider as never, modelId as never) as Model<Api> | undefined;
+}
+
+function defaultBuiltInModels(provider: string): Model<Api>[] {
+	return getModels(provider as never) as Model<Api>[];
+}
+
+export async function resolveProviderCredential(
+	providerName: string,
+	sources: ProviderCredentialResolutionSources,
+): Promise<ResolvedProviderCredential | undefined> {
+	const storageKey = getProviderCredentialStorageKey(providerName);
+	const stored = await sources.getStoredProviderKey(storageKey);
+	if (stored) {
+		return {
+			apiKey: await sources.resolveStoredCredential(stored, storageKey),
+			providerName: storageKey,
+			source: "stored",
+		};
+	}
+
+	const customProvider = await sources.getCustomProviderByName(providerName);
+	if (customProvider?.apiKey) {
+		return {
+			apiKey: customProvider.apiKey,
+			providerName,
+			source: "custom",
+		};
+	}
+
+	const proxxStorageKey = getProviderCredentialStorageKey("proxx");
+	if (isProxxProviderName(providerName) && storageKey !== proxxStorageKey) {
+		const proxxStored = await sources.getStoredProviderKey(proxxStorageKey);
+		if (proxxStored) {
+			return {
+				apiKey: await sources.resolveStoredCredential(proxxStored, proxxStorageKey),
+				providerName: proxxStorageKey,
+				source: "stored",
+			};
+		}
+	}
+
+	return undefined;
+}
+
+export async function resolveDefaultModel(
+	providerNames: readonly string[],
+	sources: ModelResolutionSources,
+): Promise<Model<Api> | undefined> {
+	const getBuiltInModel = sources.getBuiltInModel ?? defaultBuiltInModel;
+	const getBuiltInModels = sources.getBuiltInModels ?? defaultBuiltInModels;
+
+	for (const provider of providerNames) {
+		const modelId = getProviderDefaultModelId(provider);
+		if (!modelId) continue;
+
+		const model = getBuiltInModel(provider, modelId);
+		if (model) return model;
+	}
+
+	for (const provider of providerNames) {
+		const builtInModels = getBuiltInModels(provider);
+		if (builtInModels.length > 0) {
+			return builtInModels[0];
+		}
+
+		const customProvider = await sources.getCustomProviderByName(provider);
+		const customModel = customProvider?.models?.[0];
+		if (customModel) return customModel;
+	}
+
+	return undefined;
+}
+
 export async function resolveModelSpec(
 	spec: string,
 	providerHint: string | undefined,
 	sources: ModelResolutionSources,
 ): Promise<Model<any>> {
-	const getBuiltInModel = sources.getBuiltInModel ?? ((provider, modelId) => getModel(provider as any, modelId));
+	const getBuiltInModel = sources.getBuiltInModel ?? defaultBuiltInModel;
 	if (spec.includes("/")) {
 		const [provider, ...rest] = spec.split("/");
 		const modelId = rest.join("/");

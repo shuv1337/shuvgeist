@@ -48,7 +48,7 @@ test.describe("bridge ui smoke", () => {
 		await openBridgeSettings(page);
 		await expect(page.getByRole("heading", { name: "CLI Bridge" })).toBeVisible();
 		await expect(page.getByRole("checkbox", { name: "Block bridge connections" })).toBeVisible();
-		await expect(page.locator("bridge-tab").getByText("Run any `shuvgeist` command or `shuvgeist serve` to start the local bridge.")).toBeVisible();
+		await expect(page.locator("bridge-tab").getByText("Connected")).toBeVisible();
 
 		await context.close();
 		await bridge.stop();

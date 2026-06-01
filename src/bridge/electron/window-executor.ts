@@ -1,3 +1,4 @@
+import type { CdpSessionDomain, CdpSessionEnsureDomainOptions } from "../../tools/helpers/cdp-session.js";
 import type { BridgeScreenshotResult, PageAssertParams, PageAssertResult } from "../protocol.js";
 import type { BridgeSkillSnapshotStatus } from "../skill-snapshot.js";
 
@@ -10,6 +11,7 @@ interface PageAssertCheckResult {
 
 export interface ElectronPageCdpClient {
 	send<T = unknown>(method: string, params?: Record<string, unknown>): Promise<T>;
+	ensureDomain?(domain: CdpSessionDomain, options?: CdpSessionEnsureDomainOptions): Promise<void>;
 	close(): void;
 }
 
@@ -46,7 +48,7 @@ export async function captureElectronWindowScreenshot(
 	client: ElectronPageCdpClient,
 	maxWidth?: number,
 ): Promise<BridgeScreenshotResult> {
-	await client.send("Page.enable");
+	await ensureElectronCdpDomain(client, "Page");
 	const viewport = await client.send<{
 		result?: {
 			value?: { innerWidth?: number; innerHeight?: number; devicePixelRatio?: number };
@@ -74,6 +76,14 @@ export async function captureElectronWindowScreenshot(
 		devicePixelRatio,
 		scale: cssWidth > 0 ? imageWidth / cssWidth : 1,
 	};
+}
+
+async function ensureElectronCdpDomain(client: ElectronPageCdpClient, domain: CdpSessionDomain): Promise<void> {
+	if (client.ensureDomain) {
+		await client.ensureDomain(domain);
+		return;
+	}
+	await client.send(domain + ".enable");
 }
 
 export async function assertElectronWindow(

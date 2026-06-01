@@ -2,6 +2,7 @@ import type { SandboxRuntimeProvider } from "@mariozechner/pi-web-ui/sandbox/San
 import type { BridgeTelemetry, TraceContext } from "../bridge/telemetry.js";
 import { NATIVE_INPUT_EVENTS_DESCRIPTION } from "../prompts/prompts.js";
 import { resolveTabTarget } from "./helpers/browser-target.js";
+import { type CdpSession, ChromeDebuggerSession } from "./helpers/cdp-session.js";
 import { type DebuggerManager, getSharedDebuggerManager } from "./helpers/debugger-manager.js";
 
 export interface NativeInputPoint {
@@ -14,6 +15,11 @@ export interface NativeInputActionResult {
 	x: number;
 	y: number;
 	textLength?: number;
+}
+
+interface RuntimeEvaluateResponse<T = unknown> {
+	result?: { value?: T };
+	exceptionDetails?: { text?: string; exception?: { description?: string } };
 }
 
 /**
@@ -69,16 +75,21 @@ export class NativeInputEventsRuntimeProvider implements SandboxRuntimeProvider 
 		return tabId;
 	}
 
+	private createCdpSession(tabId: number): CdpSession {
+		return new ChromeDebuggerSession({ tabId, manager: this.debuggerManager });
+	}
+
 	async clickAt(point: NativeInputPoint): Promise<NativeInputActionResult> {
 		this.validatePoint(point);
 		const tabId = await this.getTargetTabId();
 		const owner = `native-input-ref-click:${tabId}`;
-		await this.debuggerManager.acquireWithTrace(tabId, owner, { parent: this.traceContext });
+		const cdpSession = this.createCdpSession(tabId);
+		await cdpSession.acquire(owner, { parent: this.traceContext });
 		try {
-			await this.dispatchMouseClick(tabId, point);
+			await this.dispatchMouseClick(cdpSession, point);
 			return { success: true, x: point.x, y: point.y };
 		} finally {
-			await this.debuggerManager.releaseWithTrace(tabId, owner, { parent: this.traceContext });
+			await cdpSession.release(owner, { parent: this.traceContext });
 		}
 	}
 
@@ -86,16 +97,16 @@ export class NativeInputEventsRuntimeProvider implements SandboxRuntimeProvider 
 		this.validatePoint(point);
 		const tabId = await this.getTargetTabId();
 		const owner = `native-input-ref-fill:${tabId}`;
-		await this.debuggerManager.acquireWithTrace(tabId, owner, { parent: this.traceContext });
+		const cdpSession = this.createCdpSession(tabId);
+		await cdpSession.acquire(owner, { parent: this.traceContext });
 		try {
-			await this.dispatchMouseClick(tabId, point);
-			await this.dispatchKeyDown(tabId, "Control");
-			await this.dispatchKeyPress(tabId, "a");
-			await this.dispatchKeyUp(tabId, "Control");
-			await this.dispatchKeyPress(tabId, "Backspace");
+			await this.dispatchMouseClick(cdpSession, point);
+			await this.dispatchKeyDown(cdpSession, "Control");
+			await this.dispatchKeyPress(cdpSession, "a");
+			await this.dispatchKeyUp(cdpSession, "Control");
+			await this.dispatchKeyPress(cdpSession, "Backspace");
 			for (const char of text) {
-				await this.debuggerManager.sendCommandWithTrace(
-					tabId,
+				await cdpSession.send(
 					"Input.dispatchKeyEvent",
 					{
 						type: "keyDown",
@@ -103,8 +114,7 @@ export class NativeInputEventsRuntimeProvider implements SandboxRuntimeProvider 
 					},
 					{ parent: this.traceContext },
 				);
-				await this.debuggerManager.sendCommandWithTrace(
-					tabId,
+				await cdpSession.send(
 					"Input.dispatchKeyEvent",
 					{
 						type: "keyUp",
@@ -115,7 +125,7 @@ export class NativeInputEventsRuntimeProvider implements SandboxRuntimeProvider 
 			}
 			return { success: true, x: point.x, y: point.y, textLength: text.length };
 		} finally {
-			await this.debuggerManager.releaseWithTrace(tabId, owner, { parent: this.traceContext });
+			await cdpSession.release(owner, { parent: this.traceContext });
 		}
 	}
 
@@ -125,9 +135,8 @@ export class NativeInputEventsRuntimeProvider implements SandboxRuntimeProvider 
 		}
 	}
 
-	private async dispatchMouseClick(tabId: number, point: NativeInputPoint): Promise<void> {
-		await this.debuggerManager.sendCommandWithTrace(
-			tabId,
+	private async dispatchMouseClick(cdpSession: CdpSession, point: NativeInputPoint): Promise<void> {
+		await cdpSession.send(
 			"Input.dispatchMouseEvent",
 			{
 				type: "mousePressed",
@@ -138,8 +147,7 @@ export class NativeInputEventsRuntimeProvider implements SandboxRuntimeProvider 
 			},
 			{ parent: this.traceContext },
 		);
-		await this.debuggerManager.sendCommandWithTrace(
-			tabId,
+		await cdpSession.send(
 			"Input.dispatchMouseEvent",
 			{
 				type: "mouseReleased",
@@ -152,19 +160,18 @@ export class NativeInputEventsRuntimeProvider implements SandboxRuntimeProvider 
 		);
 	}
 
-	private async dispatchKeyPress(tabId: number, key: string): Promise<void> {
-		await this.dispatchKeyDown(tabId, key);
-		await this.dispatchKeyUp(tabId, key);
+	private async dispatchKeyPress(cdpSession: CdpSession, key: string): Promise<void> {
+		await this.dispatchKeyDown(cdpSession, key);
+		await this.dispatchKeyUp(cdpSession, key);
 	}
 
-	private async dispatchKeyDown(tabId: number, key: string): Promise<void> {
+	private async dispatchKeyDown(cdpSession: CdpSession, key: string): Promise<void> {
 		const keyInfo = this.getKeyInfo(key);
 		if (key === "Alt") this.modifiers |= this.MODIFIER_ALT;
 		if (key === "Control") this.modifiers |= this.MODIFIER_CTRL;
 		if (key === "Meta") this.modifiers |= this.MODIFIER_META;
 		if (key === "Shift") this.modifiers |= this.MODIFIER_SHIFT;
-		await this.debuggerManager.sendCommandWithTrace(
-			tabId,
+		await cdpSession.send(
 			"Input.dispatchKeyEvent",
 			{
 				type: "keyDown",
@@ -178,10 +185,9 @@ export class NativeInputEventsRuntimeProvider implements SandboxRuntimeProvider 
 		);
 	}
 
-	private async dispatchKeyUp(tabId: number, key: string): Promise<void> {
+	private async dispatchKeyUp(cdpSession: CdpSession, key: string): Promise<void> {
 		const keyInfo = this.getKeyInfo(key);
-		await this.debuggerManager.sendCommandWithTrace(
-			tabId,
+		await cdpSession.send(
 			"Input.dispatchKeyEvent",
 			{
 				type: "keyUp",
@@ -351,6 +357,7 @@ export class NativeInputEventsRuntimeProvider implements SandboxRuntimeProvider 
 		const tabId = await this.getTargetTabId();
 
 		const owner = `native-input:${tabId}`;
+		const cdpSession = this.createCdpSession(tabId);
 		const span = this.telemetry?.startSpan(`native_input.${String(message.action || "unknown")}`, {
 			parent: this.traceContext,
 			attributes: {
@@ -359,35 +366,40 @@ export class NativeInputEventsRuntimeProvider implements SandboxRuntimeProvider 
 			},
 		});
 		try {
-			await this.debuggerManager.acquireWithTrace(tabId, owner, { parent: this.traceContext });
-			await this.debuggerManager.ensureDomainWithTrace(tabId, "Runtime", { parent: this.traceContext });
+			await cdpSession.acquire(owner, { parent: this.traceContext });
+			await cdpSession.ensureDomain("Runtime", { trace: { parent: this.traceContext } });
 
 			if (message.action === "click") {
 				console.log("[NativeInput] Finding element:", message.selector);
 
 				// Find element and get its center coordinates
-				const result = (await chrome.debugger.sendCommand({ tabId: tabId }, "Runtime.evaluate", {
-					expression: `(() => {
+				const result = await cdpSession.send<RuntimeEvaluateResponse<{ x: number; y: number }>>(
+					"Runtime.evaluate",
+					{
+						expression: `(() => {
 							const el = document.querySelector(${JSON.stringify(message.selector)});
 							if (!el) throw new Error('Selector not found: ${message.selector}');
 							const rect = el.getBoundingClientRect();
 							return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
 						})()`,
-					returnByValue: true,
-				})) as any;
+						returnByValue: true,
+					},
+				);
 
 				console.log("[NativeInput] Element eval result:", result);
 
 				if (result?.exceptionDetails) {
 					console.error("[NativeInput] Element not found:", result.exceptionDetails);
-					throw new Error(result.exceptionDetails.exception.description || "Element not found");
+					throw new Error(result.exceptionDetails.exception?.description || "Element not found");
 				}
 
-				const { x, y } = result.result.value;
+				const coordinates = result.result?.value;
+				if (!coordinates) throw new Error("Element coordinate evaluation returned no value");
+				const { x, y } = coordinates;
 				console.log("[NativeInput] Clicking at coordinates:", { x, y });
 
 				// Dispatch trusted mouse events
-				const pressResult = await chrome.debugger.sendCommand({ tabId: tabId }, "Input.dispatchMouseEvent", {
+				const pressResult = await cdpSession.send("Input.dispatchMouseEvent", {
 					type: "mousePressed",
 					x,
 					y,
@@ -396,7 +408,7 @@ export class NativeInputEventsRuntimeProvider implements SandboxRuntimeProvider 
 				});
 				console.log("[NativeInput] Mouse pressed result:", pressResult);
 
-				const releaseResult = await chrome.debugger.sendCommand({ tabId: tabId }, "Input.dispatchMouseEvent", {
+				const releaseResult = await cdpSession.send("Input.dispatchMouseEvent", {
 					type: "mouseReleased",
 					x,
 					y,
@@ -411,7 +423,7 @@ export class NativeInputEventsRuntimeProvider implements SandboxRuntimeProvider 
 				console.log("[NativeInput] Typing text:", message.text, "into:", message.selector);
 
 				// Focus element first
-				const focusResult = (await chrome.debugger.sendCommand({ tabId: tabId }, "Runtime.evaluate", {
+				const focusResult = await cdpSession.send<RuntimeEvaluateResponse<boolean>>("Runtime.evaluate", {
 					expression: `(() => {
 							const el = document.querySelector(${JSON.stringify(message.selector)});
 							if (!el) throw new Error('Selector not found: ${message.selector}');
@@ -419,23 +431,23 @@ export class NativeInputEventsRuntimeProvider implements SandboxRuntimeProvider 
 							return true;
 						})()`,
 					returnByValue: true,
-				})) as any;
+				});
 
 				console.log("[NativeInput] Focus result:", focusResult);
 
 				if (focusResult?.exceptionDetails) {
 					console.error("[NativeInput] Element not found for typing:", focusResult.exceptionDetails);
-					throw new Error(focusResult.exceptionDetails.exception.description || "Element not found");
+					throw new Error(focusResult.exceptionDetails.exception?.description || "Element not found");
 				}
 
 				// Type each character
 				for (const char of message.text) {
-					await chrome.debugger.sendCommand({ tabId: tabId }, "Input.dispatchKeyEvent", {
+					await cdpSession.send("Input.dispatchKeyEvent", {
 						type: "keyDown",
 						text: char,
 					});
 
-					await chrome.debugger.sendCommand({ tabId: tabId }, "Input.dispatchKeyEvent", {
+					await cdpSession.send("Input.dispatchKeyEvent", {
 						type: "keyUp",
 						text: char,
 					});
@@ -449,7 +461,7 @@ export class NativeInputEventsRuntimeProvider implements SandboxRuntimeProvider 
 				const keyInfo = this.getKeyInfo(message.key);
 
 				// Press single key with proper CDP parameters
-				const keyDownResult = await chrome.debugger.sendCommand({ tabId: tabId }, "Input.dispatchKeyEvent", {
+				const keyDownResult = await cdpSession.send("Input.dispatchKeyEvent", {
 					type: "keyDown",
 					key: keyInfo.key,
 					code: keyInfo.code,
@@ -458,7 +470,7 @@ export class NativeInputEventsRuntimeProvider implements SandboxRuntimeProvider 
 				});
 				console.log("[NativeInput] Key down result:", keyDownResult);
 
-				const keyUpResult = await chrome.debugger.sendCommand({ tabId: tabId }, "Input.dispatchKeyEvent", {
+				const keyUpResult = await cdpSession.send("Input.dispatchKeyEvent", {
 					type: "keyUp",
 					key: keyInfo.key,
 					code: keyInfo.code,
@@ -480,7 +492,7 @@ export class NativeInputEventsRuntimeProvider implements SandboxRuntimeProvider 
 				if (message.key === "Meta") this.modifiers |= this.MODIFIER_META;
 				if (message.key === "Shift") this.modifiers |= this.MODIFIER_SHIFT;
 
-				const keyDownResult = await chrome.debugger.sendCommand({ tabId: tabId }, "Input.dispatchKeyEvent", {
+				const keyDownResult = await cdpSession.send("Input.dispatchKeyEvent", {
 					type: "keyDown",
 					key: keyInfo.key,
 					code: keyInfo.code,
@@ -497,7 +509,7 @@ export class NativeInputEventsRuntimeProvider implements SandboxRuntimeProvider 
 
 				const keyInfo = this.getKeyInfo(message.key);
 
-				const keyUpResult = await chrome.debugger.sendCommand({ tabId: tabId }, "Input.dispatchKeyEvent", {
+				const keyUpResult = await cdpSession.send("Input.dispatchKeyEvent", {
 					type: "keyUp",
 					key: keyInfo.key,
 					code: keyInfo.code,
@@ -527,7 +539,7 @@ export class NativeInputEventsRuntimeProvider implements SandboxRuntimeProvider 
 			respond({ success: false, error: error instanceof Error ? error.message : String(error) });
 		} finally {
 			try {
-				await this.debuggerManager.releaseWithTrace(tabId, owner, { parent: this.traceContext });
+				await cdpSession.release(owner, { parent: this.traceContext });
 			} catch (detachError) {
 				console.warn("[NativeInput] Detach warning:", detachError);
 			}

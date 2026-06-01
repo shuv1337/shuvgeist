@@ -1,14 +1,8 @@
 import { icon } from "@mariozechner/mini-lit";
 import { Button } from "@mariozechner/mini-lit/dist/Button.js";
 import { Input } from "@mariozechner/mini-lit/dist/Input.js";
-import {
-	Agent,
-	type AgentEvent,
-	type AgentMessage,
-	type AgentState,
-	type AgentTool,
-} from "@mariozechner/pi-agent-core";
-import { getModel, getModels, type Model, registerModels } from "@mariozechner/pi-ai";
+import type { Agent, AgentEvent, AgentMessage, AgentTool } from "@mariozechner/pi-agent-core";
+import { getModel, type Model, registerModels } from "@mariozechner/pi-ai";
 import {
 	ChatPanel,
 	createExtractDocumentTool,
@@ -76,12 +70,13 @@ import { createWelcomeMessage, registerWelcomeRenderer } from "./messages/Welcom
 import { isOAuthCredentials, resolveApiKey } from "./oauth/index.js";
 import { SYSTEM_PROMPT } from "./prompts/prompts.js";
 import {
-	isProxxProviderName,
 	normalizeModelForRuntime,
+	resolveDefaultModel,
 	resolveModelSpec as resolveModelSpecFromSources,
+	resolveProviderCredential,
 } from "./sidepanel/model-resolution.js";
 import { buildSessionMetadata, generateSessionTitle, shouldSaveSession } from "./sidepanel/session-metadata.js";
-import { SidepanelSessionRuntime } from "./sidepanel/session-runtime.js";
+import { type SidepanelCreateAgentOptions, SidepanelSessionRuntime } from "./sidepanel/session-runtime.js";
 import { ShuvgeistAppStorage } from "./storage/app-storage.js";
 import { registerAskUserWhichElementRenderer } from "./tools/ask-user-which-element-renderer.js";
 import { DebuggerTool } from "./tools/debugger.js";
@@ -102,6 +97,7 @@ import * as port from "./utils/port.js";
 import { clearShownSkills } from "./utils/shown-skills.js";
 import "./utils/i18n-extension.js";
 import "./utils/live-reload.js";
+import { type AgentRuntimeInitialState, createAgentRuntime, DEFAULT_AGENT_THINKING_LEVEL } from "./agent/runtime.js";
 import { tutorials } from "./tutorials.js";
 
 // Register custom tool renderers
@@ -241,36 +237,16 @@ const MINIMAX_EXTENSION_MODELS: Model<"anthropic-messages">[] = [
 registerModels(FIREWORKS_EXTENSION_MODELS);
 registerModels(MINIMAX_EXTENSION_MODELS);
 
-const DEFAULT_MODELS: Record<string, string> = {
-	"amazon-bedrock": "us.anthropic.claude-opus-4-6-v1",
-	anthropic: "claude-sonnet-4-6",
-	"azure-openai-responses": "gpt-5.2",
-	cerebras: "zai-glm-4.6",
-	fireworks: "accounts/fireworks/routers/kimi-k2p5-turbo",
-	"github-copilot": "gpt-4o",
-	google: "gemini-2.5-flash",
-	"google-antigravity": "gemini-3.1-pro-high",
-	"google-gemini-cli": "gemini-2.5-pro",
-	"google-vertex": "gemini-3-pro-preview",
-	groq: "openai/gpt-oss-20b",
-	huggingface: "moonshotai/Kimi-K2.5",
-	"kimi-coding": "kimi-k2-thinking",
-	minimax: "MiniMax-M2.7",
-	"minimax-cn": "MiniMax-M2.1",
-	mistral: "devstral-medium-latest",
-	openai: "gpt-4o-mini",
-	"openai-codex": "gpt-5.1-codex-mini",
-	opencode: "claude-opus-4-6",
-	"opencode-go": "kimi-k2.5",
-	openrouter: "openai/gpt-5.1-codex",
-	"vercel-ai-gateway": "anthropic/claude-opus-4-6",
-	xai: "grok-4-fast-non-reasoning",
-	zai: "glm-4.6",
-};
-
 async function getCustomProviderByName(providerName: string) {
 	const customProviders = await storage.customProviders.getAll();
 	return customProviders.find((provider) => provider.name === providerName);
+}
+
+function getModelResolutionSources() {
+	return {
+		getCustomProviderByName,
+		getAllCustomProviders: () => storage.customProviders.getAll(),
+	};
 }
 
 async function getAvailableProviderNames(): Promise<string[]> {
@@ -293,72 +269,28 @@ async function getAvailableProviderNames(): Promise<string[]> {
 }
 
 async function getApiKeyForProvider(providerName: string): Promise<string | undefined> {
-	const stored = await storage.providerKeys.get(providerName);
-	if (stored) {
-		const proxyEnabled = await storage.settings.get<boolean>("proxy.enabled");
-		const proxyUrl = proxyEnabled ? (await storage.settings.get<string>("proxy.url")) || undefined : undefined;
-		return resolveApiKey(stored, providerName, storage.providerKeys, proxyUrl);
-	}
-
-	const customProvider = await getCustomProviderByName(providerName);
-	if (customProvider?.apiKey) {
-		return customProvider.apiKey;
-	}
-
-	const builtInAlias = isProxxProviderName(providerName) ? await storage.providerKeys.get("proxx") : null;
-	if (builtInAlias) {
-		const proxyEnabled = await storage.settings.get<boolean>("proxy.enabled");
-		const proxyUrl = proxyEnabled ? (await storage.settings.get<string>("proxy.url")) || undefined : undefined;
-		return resolveApiKey(builtInAlias, "proxx", storage.providerKeys, proxyUrl);
-	}
-
-	return undefined;
+	const credential = await resolveProviderCredential(providerName, {
+		getStoredProviderKey: async (provider) => (await storage.providerKeys.get(provider)) || undefined,
+		getCustomProviderByName,
+		resolveStoredCredential: async (stored, provider) => {
+			const proxyEnabled = await storage.settings.get<boolean>("proxy.enabled");
+			const proxyUrl = proxyEnabled ? (await storage.settings.get<string>("proxy.url")) || undefined : undefined;
+			return resolveApiKey(stored, provider, storage.providerKeys, proxyUrl);
+		},
+	});
+	return credential?.apiKey;
 }
 
 async function selectDefaultModelForAvailableProvider() {
 	const providers = await getAvailableProviderNames();
 	if (providers.length === 0 || !agent) return;
 
-	// Try each provider with keys and find a default model
-	for (const provider of providers) {
-		const modelId = DEFAULT_MODELS[provider];
-		if (modelId) {
-			const model = getModel(provider as any, modelId);
-			if (model) {
-				agent.state.model = model;
-				await storage.settings.set("lastUsedModel", model);
-				await updateAuthLabel();
-				renderApp();
-				return;
-			}
-		}
-	}
-
-	// If no default found, try the first model for the first available provider
-	for (const provider of providers) {
-		const models = getModels(provider as any);
-		if (models.length > 0) {
-			agent.state.model = models[0];
-			await storage.settings.set("lastUsedModel", models[0]);
-			await updateAuthLabel();
-			renderApp();
-			return;
-		}
-
-		const customProvider = await getCustomProviderByName(provider);
-		const customModel = customProvider?.models?.[0];
-		if (customModel) {
-			agent.state.model = customModel;
-			await storage.settings.set("lastUsedModel", customModel);
-			await updateAuthLabel();
-			renderApp();
-			return;
-		}
-	}
-}
-
-async function getProvidersWithKeys(): Promise<string[]> {
-	return getAvailableProviderNames();
+	const model = await resolveDefaultModel(providers, getModelResolutionSources());
+	if (!model) return;
+	agent.state.model = model;
+	await storage.settings.set("lastUsedModel", model);
+	await updateAuthLabel();
+	renderApp();
 }
 
 async function hasAnyApiKey(): Promise<boolean> {
@@ -532,7 +464,7 @@ function getSessionRuntime(): SidepanelSessionRuntime {
 			emitSessionChanged,
 			emitSessionMessage,
 			updateUrl,
-			createAgent: async (initialState) => createAgent(initialState),
+			createAgent: async (options) => createAgent(options),
 			resolveModelSpec,
 			normalizeModelForRuntime,
 			requestModelUiUpdate: () => chatPanel.agentInterface?.requestUpdate(),
@@ -753,7 +685,8 @@ setInterval(async () => {
 	}
 }, 2000);
 
-const createAgent = async (initialState?: Partial<AgentState>, shouldSave = true) => {
+const createAgent = async (options: SidepanelCreateAgentOptions = {}, shouldSave = true) => {
+	const initialState = options.initialState;
 	if (agentUnsubscribe) {
 		agentUnsubscribe();
 	}
@@ -780,29 +713,18 @@ const createAgent = async (initialState?: Partial<AgentState>, shouldSave = true
 	const corsProxyUrl = await storage.settings.get<string>("proxy.url");
 
 	// Determine default model: saved > default for a provider with key > gemini flash fallback
-	let defaultModel: Model<any> | undefined;
-	if (!initialState?.model) {
+	let runtimeModel: Model<any> | undefined = options.model ? normalizeModelForRuntime(options.model) : undefined;
+	if (!initialState?.model && !runtimeModel) {
 		const savedModel = await storage.settings.get<Model<any>>("lastUsedModel");
 		if (savedModel) {
-			defaultModel = normalizeModelForRuntime(savedModel);
+			runtimeModel = normalizeModelForRuntime(savedModel);
 		} else {
-			// Try to find a default model for a provider the user already has a key for
-			const providersWithKeys = await getProvidersWithKeys();
-			for (const provider of providersWithKeys) {
-				const modelId = DEFAULT_MODELS[provider];
-				if (modelId) {
-					const model = getModel(provider as any, modelId);
-					if (model) {
-						defaultModel = model;
-						break;
-					}
-				}
-			}
+			runtimeModel = await resolveDefaultModel(await getAvailableProviderNames(), getModelResolutionSources());
 		}
 	}
 	// Final fallback
-	if (!defaultModel && !initialState?.model) {
-		defaultModel = getModel("anthropic", "claude-sonnet-4-6");
+	if (!runtimeModel && !initialState?.model) {
+		runtimeModel = await resolveDefaultModel(["anthropic"], getModelResolutionSources());
 	}
 
 	const normalizedInitialState = initialState
@@ -812,14 +734,11 @@ const createAgent = async (initialState?: Partial<AgentState>, shouldSave = true
 			}
 		: initialState;
 
-	agent = new Agent({
-		initialState: normalizedInitialState || {
-			systemPrompt: SYSTEM_PROMPT,
-			model: defaultModel,
-			thinkingLevel: "medium",
-			messages: [],
-			tools: [],
-		},
+	const agentSessionContext = createAgentRuntime({
+		initialState: normalizedInitialState,
+		systemPrompt: SYSTEM_PROMPT,
+		model: runtimeModel,
+		thinkingLevel: options.thinkingLevel ?? DEFAULT_AGENT_THINKING_LEVEL,
 		convertToLlm: browserMessageTransformer,
 		toolExecution: "sequential",
 		streamFn: createStreamFn(async () => {
@@ -830,7 +749,13 @@ const createAgent = async (initialState?: Partial<AgentState>, shouldSave = true
 		getApiKey: async (provider: string) => {
 			return getApiKeyForProvider(provider);
 		},
+		transformContext: options.transformContext,
+		beforeToolCall: options.beforeToolCall,
+		afterToolCall: options.afterToolCall,
+		shouldStopAfterTurn: options.shouldStopAfterTurn,
+		prepareNextTurn: options.prepareNextTurn,
 	});
+	agent = agentSessionContext.agent;
 
 	await updateAuthLabel();
 
@@ -1421,7 +1346,7 @@ async function testSteps(): Promise<boolean> {
 		const testSteps = JSON.parse(decodeURIComponent(testStepsParam)) as string[];
 
 		// Set model if specified
-		let initialState: Partial<AgentState> | undefined;
+		let initialState: AgentRuntimeInitialState | undefined;
 		if (testProvider && testModel) {
 			const model = getModel(testProvider as any, testModel);
 			if (model) {
@@ -1432,7 +1357,7 @@ async function testSteps(): Promise<boolean> {
 			}
 		}
 
-		await createAgent(initialState, false);
+		await createAgent({ initialState }, false);
 		renderApp();
 
 		// Wait for UI to render
@@ -1594,11 +1519,13 @@ async function initApp() {
 			emitSessionChanged();
 
 			await createAgent({
-				systemPrompt: SYSTEM_PROMPT,
-				model: sessionData.model,
-				thinkingLevel: sessionData.thinkingLevel,
-				messages: sessionData.messages,
-				tools: [],
+				initialState: {
+					systemPrompt: SYSTEM_PROMPT,
+					model: sessionData.model,
+					thinkingLevel: sessionData.thinkingLevel,
+					messages: sessionData.messages,
+					tools: [],
+				},
 			});
 
 			renderApp();

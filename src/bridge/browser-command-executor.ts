@@ -14,7 +14,8 @@ import { resolveTabTarget } from "../tools/helpers/browser-target.js";
 import { getSharedDebuggerManager } from "../tools/helpers/debugger-manager.js";
 import { buildFrameTree, listFrames } from "../tools/helpers/frame-resolver.js";
 import { executePageFunction, type PageExecutionFunction } from "../tools/helpers/page-execution.js";
-import { type RefBoundingBox, RefMap, type RefResolutionCandidate } from "../tools/helpers/ref-map.js";
+import type { RefBoundingBox, RefResolutionCandidate } from "../tools/helpers/ref-map.js";
+import { RefRegistry } from "../tools/helpers/ref-registry.js";
 import { NativeInputEventsRuntimeProvider, type NativeInputPoint } from "../tools/NativeInputEventsRuntimeProvider.js";
 import { NavigateTool } from "../tools/navigate.js";
 import { NetworkCaptureEngine } from "../tools/network-capture.js";
@@ -141,7 +142,7 @@ export class BrowserCommandExecutor {
 	private readonly recordingRouter?: RecordingRouter;
 	private readonly telemetry?: BridgeTelemetry;
 	private readonly debuggerManager = getSharedDebuggerManager();
-	private readonly refMap = new RefMap();
+	private readonly refRegistry = new RefRegistry();
 
 	constructor(options: BrowserCommandExecutorOptions) {
 		this.windowId = options.windowId;
@@ -945,7 +946,7 @@ export class BrowserCommandExecutor {
 	}
 
 	private async captureSnapshotForTarget(
-		params: { tabId?: number; frameId?: number; maxEntries?: number; includeHidden?: boolean },
+		params: { tabId?: number; frameId?: number; maxEntries?: number; includeHidden?: boolean; query?: string },
 		signal?: AbortSignal,
 	) {
 		if (signal?.aborted) {
@@ -957,15 +958,16 @@ export class BrowserCommandExecutor {
 			frameId: params.frameId,
 			maxEntries: params.maxEntries,
 			includeHidden: params.includeHidden,
+			query: params.query,
 		});
 		this.storeSnapshotRefs(snapshot);
 		return snapshot;
 	}
 
 	private storeSnapshotRefs(snapshot: { tabId: number; frameId: number; entries: PageSnapshotEntry[] }): void {
-		this.refMap.invalidateOnNavigation(snapshot.tabId, snapshot.frameId);
+		this.refRegistry.invalidateOnNavigation(snapshot.tabId, snapshot.frameId);
 		for (const entry of snapshot.entries) {
-			this.refMap.createRef({
+			this.refRegistry.createRef({
 				refId: entry.snapshotId,
 				tabId: snapshot.tabId,
 				frameId: snapshot.frameId,
@@ -978,7 +980,7 @@ export class BrowserCommandExecutor {
 		matches: Array<{ entry: PageSnapshotEntry; score: number; reasons: string[] }>,
 	): Array<{ refId: string; score: number; reasons: string[]; entry: PageSnapshotEntry }> {
 		return matches.map((match) => {
-			const ref = this.refMap.createRef({
+			const ref = this.refRegistry.createRef({
 				refId: match.entry.snapshotId,
 				tabId: match.entry.tabId,
 				frameId: match.entry.frameId,
@@ -998,7 +1000,7 @@ export class BrowserCommandExecutor {
 			throw new Error("Reference resolution aborted");
 		}
 
-		const ref = this.refMap.getRef(refId);
+		const ref = this.refRegistry.getRef(refId);
 		if (!ref) {
 			throw new Error(`Reference ${refId} does not exist`);
 		}
@@ -1022,7 +1024,7 @@ export class BrowserCommandExecutor {
 			ordinalPath: entry.ordinalPath,
 			boundingBox: entry.boundingBox,
 		}));
-		const resolution = this.refMap.resolveRef(refId, candidates);
+		const resolution = this.refRegistry.resolveRef(refId, candidates);
 		if (!resolution.ok) {
 			throw new Error(resolution.message);
 		}

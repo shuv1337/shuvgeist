@@ -11,15 +11,7 @@ import {
 	serializeOAuthCredentials,
 } from "../oauth/index.js";
 import type { OAuthCredentials } from "../oauth/types.js";
-
-const OAUTH_PROVIDERS: OAuthProviderId[] = ["anthropic", "openai-codex", "github-copilot", "google-gemini-cli"];
-
-const PROVIDER_KEY_MAP: Record<OAuthProviderId, string> = {
-	anthropic: "anthropic",
-	"openai-codex": "openai-codex",
-	"github-copilot": "github-copilot",
-	"google-gemini-cli": "google-gemini-cli",
-};
+import { getProviderCredentialStorageKey, OAUTH_PROVIDER_IDS } from "../providers/catalog.js";
 
 export class ApiKeysOAuthTab extends SettingsTab {
 	private oauthStatuses: Record<
@@ -43,8 +35,8 @@ export class ApiKeysOAuthTab extends SettingsTab {
 
 	private async loadOAuthStatuses() {
 		const storage = getAppStorage();
-		for (const provider of OAUTH_PROVIDERS) {
-			const key = PROVIDER_KEY_MAP[provider];
+		for (const provider of OAUTH_PROVIDER_IDS) {
+			const key = getProviderCredentialStorageKey(provider);
 			const stored = await storage.providerKeys.get(key);
 			if (stored && isOAuthCredentials(stored)) {
 				const creds = parseOAuthCredentials(stored);
@@ -146,7 +138,7 @@ export class ApiKeysOAuthTab extends SettingsTab {
 		}
 
 		const storage = getAppStorage();
-		const key = PROVIDER_KEY_MAP[provider];
+		const key = getProviderCredentialStorageKey(provider);
 		await storage.providerKeys.set(key, serializeOAuthCredentials(creds));
 		this.oauthStatuses[provider] = "logged-in";
 		this.pasteTokenInput = "";
@@ -185,7 +177,7 @@ export class ApiKeysOAuthTab extends SettingsTab {
 				anthropicCodeCallback,
 			);
 
-			const key = PROVIDER_KEY_MAP[provider];
+			const key = getProviderCredentialStorageKey(provider);
 			await storage.providerKeys.set(key, serializeOAuthCredentials(credentials));
 
 			this.oauthStatuses[provider] = "logged-in";
@@ -202,7 +194,7 @@ export class ApiKeysOAuthTab extends SettingsTab {
 
 	private async handleLogout(provider: OAuthProviderId) {
 		const storage = getAppStorage();
-		const key = PROVIDER_KEY_MAP[provider];
+		const key = getProviderCredentialStorageKey(provider);
 		await storage.providerKeys.delete(key);
 		this.oauthStatuses[provider] = "none";
 		this.oauthErrors[provider] = "";
@@ -382,7 +374,7 @@ export class ApiKeysOAuthTab extends SettingsTab {
 				</div>
 
 				<div class="flex flex-col gap-3">
-					${OAUTH_PROVIDERS.map((p) => this.renderOAuthProvider(p))}
+					${OAUTH_PROVIDER_IDS.map((p) => this.renderOAuthProvider(p))}
 				</div>
 			</div>
 		`;

@@ -1,5 +1,6 @@
 export type BridgeCommandRoute = "extension" | "server-local";
 export type BridgeCommandTimeout = "request" | "slow" | "workflow" | "trace" | "none";
+export type BridgeCommandTargetKind = "chrome-tab" | "electron-window";
 
 export interface BridgeCommandMetadata {
 	method: string;
@@ -454,7 +455,11 @@ export function isCatalogServerLocalMethod(method: string): boolean {
 	return getBridgeCommandMetadata(method)?.route === "server-local";
 }
 
-export function isCatalogTargetDispatchedMethod(method: string): boolean {
+export function isCatalogTargetDispatchedMethod(
+	method: string,
+	targetKind: BridgeCommandTargetKind = "chrome-tab",
+): boolean {
+	if (targetKind === "electron-window" && isCatalogServerLocalMethod(method)) return false;
 	return !method.startsWith("session_");
 }
 

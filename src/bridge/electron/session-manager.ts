@@ -5,9 +5,9 @@ import { createServer } from "node:net";
 import { promisify } from "node:util";
 import type { RankedLocatorCandidate, SemanticLocatorCandidate } from "../../tools/helpers/ref-map.js";
 import { rankLocatorCandidates } from "../../tools/helpers/ref-map.js";
+import { SNAPSHOT_PAGE_SCRIPT } from "../../tools/helpers/snapshot-page-script.js";
 import type {
 	BridgeScreenshotResult,
-	BridgeSnapshotEntry,
 	LocateByLabelParams,
 	LocateByRoleParams,
 	LocateByTextParams,
@@ -33,7 +33,7 @@ import { BridgeDefaults } from "../protocol.js";
 import { matchSnapshotSkillsForApp } from "../skill-snapshot.js";
 import type { BridgeTarget } from "../target.js";
 import { resolveElectronApp, resolveExecutable } from "./app-registry.js";
-import { ElectronCdpClient } from "./cdp-client.js";
+import { ElectronWsCdpSession } from "./cdp-client.js";
 import { normalizeElectronConfig, readBridgeConfig } from "./config.js";
 import { ElectronSessionStore } from "./session-store.js";
 import { readSkillSnapshot } from "./skill-snapshot-store.js";
@@ -514,7 +514,7 @@ export class ElectronSessionManager {
 
 	async snapshot(
 		target: BridgeTarget,
-		options: { maxEntries?: number; includeHidden?: boolean },
+		options: { maxEntries?: number; includeHidden?: boolean; query?: string },
 	): Promise<PageSnapshotBridgeResult> {
 		const resolved = this.resolveTarget(target);
 		if (!resolved) throw noSessionError(target);
@@ -746,7 +746,7 @@ export class ElectronSessionManager {
 	private connectToMainInspector(
 		session: ElectronSession | undefined,
 		capability: "main_inspect" | "ipc_tap" | "main_network_tap",
-	): Promise<ElectronCdpClient> {
+	): Promise<ElectronWsCdpSession> {
 		if (!session) throw new Error("No Electron session attached for the requested session.");
 		const app = session.appRef
 			? resolveElectronApp(session.appRef)
@@ -764,7 +764,7 @@ export class ElectronSessionManager {
 				`No main-process inspector attached for '${session.id}'. Launch with --inspect-main or attach with --inspect-port <port>.`,
 			);
 		}
-		return ElectronCdpClient.connect(session.mainInspector.webSocketDebuggerUrl);
+		return ElectronWsCdpSession.connect(session.mainInspector.webSocketDebuggerUrl, session.id + ":main");
 	}
 
 	private assertCapabilityAllowed(
@@ -780,8 +780,8 @@ export class ElectronSessionManager {
 		}
 	}
 
-	private async connectToPage(window: ElectronWindow): Promise<ElectronCdpClient> {
-		return ElectronCdpClient.connect(window.webSocketDebuggerUrl);
+	private async connectToPage(window: ElectronWindow): Promise<ElectronWsCdpSession> {
+		return ElectronWsCdpSession.connect(window.webSocketDebuggerUrl, window.ref);
 	}
 
 	private async refreshWindows(session: ElectronSession): Promise<void> {
@@ -826,23 +826,32 @@ export class ElectronSessionManager {
 
 	private async captureSnapshot(
 		resolved: { session: ElectronSession; window: ElectronWindow },
-		options: { maxEntries?: number; includeHidden?: boolean },
+		options: { maxEntries?: number; includeHidden?: boolean; query?: string },
 	): Promise<PageSnapshotBridgeResult> {
 		const client = await this.connectToPage(resolved.window);
 		try {
-			const response = await client.send<{ result?: { value?: ElectronSnapshotScriptResult } }>("Runtime.evaluate", {
-				expression: `(${ELECTRON_SNAPSHOT_SCRIPT})(${JSON.stringify({
-					maxEntries: options.maxEntries ?? 120,
-					includeHidden: Boolean(options.includeHidden),
-					prefix: `${resolved.session.id}:${resolved.window.ref}`,
-				})})`,
-				returnByValue: true,
-			});
-			const value = response.result?.value;
-			if (!value) throw new Error("Electron snapshot did not return a serializable result.");
+			const response = await client.send<{ result?: { value?: ElectronSnapshotScriptResponse } }>(
+				"Runtime.evaluate",
+				{
+					expression: `(${SNAPSHOT_PAGE_SCRIPT.toString()})(${JSON.stringify({
+						frameId: 0,
+						maxEntries: options.maxEntries ?? 120,
+						includeHidden: Boolean(options.includeHidden),
+						snapshotIdPrefix: `${resolved.session.id}:${resolved.window.ref}`,
+					})})`,
+					returnByValue: true,
+				},
+			);
+			const scriptResponse = response.result?.value;
+			if (!scriptResponse) throw new Error("Electron snapshot did not return a serializable result.");
+			if (!scriptResponse.success || !scriptResponse.result) {
+				throw new Error(scriptResponse.error || "Electron snapshot script failed.");
+			}
+			const value = scriptResponse.result;
 			return {
 				tabId: -1,
 				frameId: 0,
+				...(options.query ? { query: options.query } : {}),
 				url: value.url,
 				title: value.title,
 				generatedAt: value.generatedAt,
@@ -1117,7 +1126,7 @@ interface ElectronRecordingState {
 	sourceBytes: number;
 	frameCount: number;
 	lastError?: string;
-	client: ElectronCdpClient;
+	client: ElectronWsCdpSession;
 	emit: (event: RecordFrameEventData) => void;
 	maxDurationTimer?: ReturnType<typeof setTimeout>;
 	removeFrameListener?: () => void;
@@ -1135,7 +1144,7 @@ interface ElectronNetworkCaptureState {
 	order: string[];
 	storedBodyBytes: number;
 	evictedRequests: number;
-	client: ElectronCdpClient;
+	client: ElectronWsCdpSession;
 	removeListeners?: Array<() => void>;
 }
 
@@ -1175,6 +1184,12 @@ interface ElectronNetworkCaptureStats {
 	windowRef?: string;
 }
 
+interface ElectronSnapshotScriptResponse {
+	success: boolean;
+	error?: string;
+	result?: Omit<PageSnapshotBridgeResult, "tabId" | "frameId" | "query">;
+}
+
 function base64ByteLength(value: string): number {
 	const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
 	return Math.max(0, Math.floor((value.length * 3) / 4) - padding);
@@ -1198,17 +1213,6 @@ function sizeOfText(value: string | undefined): number {
 
 function shellEscape(value: string): string {
 	return `'${value.replaceAll("'", `'"'"'`)}'`;
-}
-
-interface ElectronSnapshotScriptEntry extends Omit<BridgeSnapshotEntry, "tabId" | "frameId"> {}
-
-interface ElectronSnapshotScriptResult {
-	url: string;
-	title: string;
-	generatedAt: number;
-	totalCandidates: number;
-	truncated: boolean;
-	entries: ElectronSnapshotScriptEntry[];
 }
 
 interface ElectronMainInfoResult {
@@ -1371,82 +1375,6 @@ function noSessionError(target: BridgeTarget): Error {
 	const ref = target.kind === "electron-window" ? (target.appRef ?? target.sessionId ?? "unknown") : "unknown";
 	return new Error(`No Electron session attached for '${ref}'; run 'shuvgeist electron attach ${ref}' first`);
 }
-
-const ELECTRON_SNAPSHOT_SCRIPT = String.raw`function electronSnapshotScript(options) {
-	function cssEscape(value) { return String(value).replace(/["\\]/g, "\\$&"); }
-	function roleFor(element) {
-		const explicit = element.getAttribute("role");
-		if (explicit) return explicit;
-		const tag = element.tagName.toLowerCase();
-		if (tag === "button") return "button";
-		if (tag === "a" && element.getAttribute("href")) return "link";
-		if (tag === "input") {
-			const type = (element.getAttribute("type") || "text").toLowerCase();
-			if (type === "button" || type === "submit") return "button";
-			return "textbox";
-		}
-		if (tag === "textarea") return "textbox";
-		if (/^h[1-6]$/.test(tag)) return "heading";
-	}
-	function textOf(element) {
-		const text = (element.textContent || "").replace(/\s+/g, " ").trim();
-		return text ? text.slice(0, 180) : undefined;
-	}
-	function labelOf(element) {
-		const aria = element.getAttribute("aria-label");
-		if (aria) return aria;
-		const id = element.getAttribute("id");
-		if (!id) return undefined;
-		const label = document.querySelector('label[for="' + cssEscape(id) + '"]');
-		const text = label && label.textContent ? label.textContent.replace(/\s+/g, " ").trim() : "";
-		return text ? text.slice(0, 180) : undefined;
-	}
-	function selectorsFor(element) {
-		const selectors = [];
-		const id = element.getAttribute("id");
-		if (id) selectors.push("#" + cssEscape(id));
-		for (const attr of ["data-testid", "data-test", "name", "aria-label"]) {
-			const value = element.getAttribute(attr);
-			if (value) selectors.push(element.tagName.toLowerCase() + "[" + attr + '="' + cssEscape(value) + '"]');
-		}
-		selectors.push(element.tagName.toLowerCase());
-		return selectors;
-	}
-	function ordinalPath(element) {
-		const path = [];
-		let current = element;
-		while (current && current.parentElement) {
-			path.unshift(Array.from(current.parentElement.children).indexOf(current));
-			current = current.parentElement;
-		}
-		return path;
-	}
-	const all = Array.from(document.querySelectorAll("button,a,input,textarea,select,[role],[aria-label],[data-testid]"));
-	const entries = [];
-	let ordinal = 0;
-	for (const element of all) {
-		const rect = element.getBoundingClientRect();
-		const visible = rect.width > 0 && rect.height > 0;
-		if (!options.includeHidden && !visible) continue;
-		const label = labelOf(element);
-		const text = textOf(element);
-		entries.push({
-			snapshotId: options.prefix + ":ref" + (++ordinal),
-			tagName: element.tagName.toLowerCase(),
-			role: roleFor(element),
-			name: label || text || element.getAttribute("title") || undefined,
-			text,
-			label,
-			attributes: Object.fromEntries(Array.from(element.attributes).map((attr) => [attr.name, attr.value])),
-			selectorCandidates: selectorsFor(element),
-			ordinalPath: ordinalPath(element),
-			boundingBox: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
-			interactive: ["button", "a", "input", "textarea", "select"].includes(element.tagName.toLowerCase())
-		});
-		if (entries.length >= options.maxEntries) break;
-	}
-	return { url: location.href, title: document.title, generatedAt: Date.now(), totalCandidates: all.length, truncated: entries.length < all.length, entries };
-}`;
 
 const ELECTRON_REF_ACTION_SCRIPT = `async function electronRefActionScript(options) {
 	for (const selector of options.selectors) {

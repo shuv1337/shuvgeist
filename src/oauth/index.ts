@@ -6,6 +6,7 @@
  * refreshes the token if expired, and returns the access token.
  */
 
+import { getOAuthProviderDisplayName, isOAuthProviderId, type OAuthProviderId } from "../providers/catalog.js";
 import { type AnthropicCodeCallback, loginAnthropic, refreshAnthropic } from "./anthropic.js";
 import { loginGitHubCopilot, refreshGitHubCopilot } from "./github-copilot.js";
 import { loginGeminiCli, refreshGeminiCli } from "./google-gemini-cli.js";
@@ -13,33 +14,34 @@ import { loginOpenAICodex, refreshOpenAICodex } from "./openai-codex.js";
 import {
 	isOAuthCredentials,
 	type OAuthCredentials,
+	type ProviderCredential,
 	parseOAuthCredentials,
+	parseProviderCredential,
 	serializeOAuthCredentials,
 } from "./types.js";
 
-export { type OAuthCredentials, isOAuthCredentials, parseOAuthCredentials, serializeOAuthCredentials };
-
-export type OAuthProviderId = "anthropic" | "openai-codex" | "github-copilot" | "google-gemini-cli";
-
-const OAUTH_PROVIDERS: Record<OAuthProviderId, { name: string }> = {
-	anthropic: { name: "Anthropic (Claude Pro/Max)" },
-	"openai-codex": { name: "ChatGPT Plus/Pro" },
-	"github-copilot": { name: "GitHub Copilot" },
-	"google-gemini-cli": { name: "Google Gemini" },
+export {
+	type OAuthCredentials,
+	isOAuthCredentials,
+	parseOAuthCredentials,
+	parseProviderCredential,
+	type ProviderCredential,
+	serializeOAuthCredentials,
 };
+export type { OAuthProviderId };
 
 /**
  * Check if a provider supports OAuth login.
  */
 export function isOAuthProvider(provider: string): provider is OAuthProviderId {
-	return provider in OAUTH_PROVIDERS;
+	return isOAuthProviderId(provider);
 }
 
 /**
  * Get display name for an OAuth provider.
  */
 export function getOAuthProviderName(provider: OAuthProviderId): string {
-	return OAUTH_PROVIDERS[provider].name;
+	return getOAuthProviderDisplayName(provider);
 }
 
 /**
@@ -103,11 +105,12 @@ export async function resolveApiKey(
 	storage: { set: (provider: string, value: string) => Promise<void> },
 	proxyUrl?: string,
 ): Promise<string> {
-	if (!isOAuthCredentials(storedValue)) {
-		return storedValue;
+	const providerCredential = parseProviderCredential(storedValue);
+	if (providerCredential.kind !== "oauth") {
+		return providerCredential.value;
 	}
 
-	let credentials = parseOAuthCredentials(storedValue);
+	let credentials = providerCredential.credentials;
 
 	// Refresh if expired (or within 60s of expiry)
 	if (Date.now() >= credentials.expires - 60_000) {

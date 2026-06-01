@@ -1,0 +1,107 @@
+{
+  "stage": "interview",
+  "title": "Agentic Browser Frontier — full-program goal",
+  "goalSlug": "agentic-browser-frontier",
+  "questions": [
+    {
+      "id": "gating",
+      "prompt": "How should execution gate at the risky architectural bets (T8 router, T11 headless, T12 stealth, T13 vision)?",
+      "description": "Each big swing has a defined spike + go/no-go in sequence.md §5. The question is whether /goal should HALT for your decision after each spike, or push through autonomously.",
+      "answerMode": "single-custom",
+      "recommendedAnswer": "Gate each big swing behind its spike — run the spike, report findings, and STOP for my go/no-go before committing the implementation.",
+      "recommendedOptionIds": ["gated"],
+      "options": [
+        { "id": "gated", "label": "Gate big swings (spike → stop → my decision)" },
+        { "id": "gate-tiers", "label": "Stop at the end of every tier (A/B/C/D)" },
+        { "id": "straight", "label": "Run straight through, autonomous" }
+      ],
+      "required": true
+    },
+    {
+      "id": "eval-harness",
+      "prompt": "Is a reliability eval harness in scope?",
+      "description": "The report's whole reliability thesis is 'measure with n>=8 runs; single-run scores are noise.' T7 (planner/validator/drift) can't be proven without measurement. How far do we go?",
+      "answerMode": "single-custom",
+      "recommendedAnswer": "Yes — a lightweight internal harness (a handful of repeatable task scenarios, n>=8 runs, pass-rate + token tracking) so T7's gains are measured, not eyeballed. Not a full public benchmark port.",
+      "recommendedOptionIds": ["lightweight"],
+      "options": [
+        { "id": "lightweight", "label": "Lightweight internal harness (n>=8, our own scenarios)" },
+        { "id": "full", "label": "Full benchmark port (WebVoyager / Online-Mind2Web)" },
+        { "id": "none", "label": "No harness — ship the technique, manual spot-check" }
+      ],
+      "required": true
+    },
+    {
+      "id": "default-model",
+      "prompt": "Which zero-friction default model path(s) should T5 ship? (select all acceptable)",
+      "description": "Goal: the product does something before the user connects a provider. Each path has tradeoffs — free-tier keys have ToS/quota exposure; OAuth-sub reuse needs flow upkeep; local models fail structured output for the agent loop.",
+      "answerMode": "multi-custom",
+      "recommendedAnswer": "Ship guided OAuth-subscription reuse (ChatGPT/Copilot/Gemini) AND a bundled free-tier key path; keep BYO as the power path; do NOT make local Ollama the default agent loop.",
+      "recommendedOptionIds": ["oauth", "free-tier"],
+      "options": [
+        { "id": "oauth", "label": "Guided OAuth-subscription reuse (no new credentials)" },
+        { "id": "free-tier", "label": "Bundled free-tier API key (Gemini Flash / NVIDIA)" },
+        { "id": "local", "label": "Local-model option (Ollama) as a selectable path" },
+        { "id": "byo-only", "label": "Keep BYO only (don't ship a default path)" }
+      ],
+      "required": true
+    },
+    {
+      "id": "multitask-shape",
+      "prompt": "What's the real multitask use case driving T8/T11?",
+      "description": "This sets how far the session router and headless runtime go. The T8 spike decides the physical ceiling regardless, but the target shape drives the design.",
+      "answerMode": "single-custom",
+      "recommendedAnswer": "Both: a few concurrent interactive windows for daily driving AND many background/headless sessions for fleet-style automation. Design the registry kind-neutral so both are the same abstraction.",
+      "recommendedOptionIds": ["both"],
+      "options": [
+        { "id": "both", "label": "Both interactive windows + background fleet" },
+        { "id": "fleet", "label": "Mainly many background/headless sessions (fleet)" },
+        { "id": "interactive", "label": "Mainly a few concurrent interactive windows" }
+      ],
+      "required": true
+    },
+    {
+      "id": "stealth-commitment",
+      "prompt": "If the T12 spike shows the extension can't be hidden (chrome.debugger infobar is mandatory), what then?",
+      "description": "The independent benchmark says the control plane, not patches, decides survivability. The extension path may be inherently non-stealth; the headless/direct-CDP path (T11) can be.",
+      "answerMode": "single-custom",
+      "recommendedAnswer": "Accept it: stealth lives on the headless/direct-CDP path (T11); the extension/sidepanel path is explicitly non-stealth and we ship no 'undetectable' claims.",
+      "recommendedOptionIds": ["headless-only"],
+      "options": [
+        { "id": "headless-only", "label": "Stealth = headless/direct-CDP path only; extension is non-stealth" },
+        { "id": "real-browser-required", "label": "Stealth in the real browser is a hard requirement" },
+        { "id": "drop", "label": "Drop T12 (stealth) entirely from this program" }
+      ],
+      "required": true
+    },
+    {
+      "id": "cookie-aggressiveness",
+      "prompt": "How aggressive should T10 (profile / cookies) be?",
+      "description": "Reading the user's real Chrome cookie store (SQLite) for selective per-site import is the daily-driver realism win, but it's root-equivalent over web identity and needs explicit consent. Default profile stays isolated either way.",
+      "answerMode": "single-custom",
+      "recommendedAnswer": "Selective per-site cookie import into a dedicated non-primary profile, behind an explicit per-site consent prompt. Isolated profile remains the default; full real-profile use stays the opt-in --use-default-profile path.",
+      "recommendedOptionIds": ["selective-consent"],
+      "options": [
+        { "id": "selective-consent", "label": "Selective per-site cookie import with explicit consent" },
+        { "id": "profile-only", "label": "Just --use-default-profile; no cookie extraction" },
+        { "id": "configurable", "label": "Both, fully user-configurable" }
+      ],
+      "required": true
+    },
+    {
+      "id": "guardrails",
+      "prompt": "Which guardrails must hold across the whole program? (select all that apply)",
+      "description": "Invariants the program must not break — used to bound scope and write 'must still be true' facts.",
+      "answerMode": "multi-custom",
+      "recommendedAnswer": "All four: existing single-session sidepanel UX keeps working; bridge CLI surface stays additive (no breaking changes); AGPL + local-first IndexedDB storage preserved; no 'undetectable' / bypass marketing claims.",
+      "recommendedOptionIds": ["sidepanel-ux", "bridge-additive", "agpl-local", "no-stealth-claims"],
+      "options": [
+        { "id": "sidepanel-ux", "label": "Existing single-session sidepanel UX keeps working" },
+        { "id": "bridge-additive", "label": "Bridge CLI surface stays additive (no breaking changes)" },
+        { "id": "agpl-local", "label": "Preserve AGPL + local-first IndexedDB storage" },
+        { "id": "no-stealth-claims", "label": "No 'undetectable' / bypass marketing claims" }
+      ],
+      "required": true
+    }
+  ]
+}

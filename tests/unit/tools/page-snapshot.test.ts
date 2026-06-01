@@ -5,6 +5,7 @@ import {
 	locateByRole,
 	locateByText,
 	PageSnapshotTool,
+	SNAPSHOT_PAGE_SCRIPT,
 	type PageSnapshotResult,
 } from "../../../src/tools/page-snapshot.js";
 
@@ -117,6 +118,7 @@ describe("PageSnapshotTool", () => {
 	});
 
 	it("captures snapshot data through chrome.userScripts", async () => {
+		expect(SNAPSHOT_PAGE_SCRIPT.toString()).toContain("shuvgeistSnapshotPageScript");
 		chrome.userScripts.execute.mockResolvedValue([
 			{
 				result: pageExecutionResult({
@@ -128,9 +130,10 @@ describe("PageSnapshotTool", () => {
 						totalCandidates: 2,
 						truncated: false,
 						entries: [
-							{
-								snapshotId: "e1",
-								frameId: 0,
+								{
+									snapshotId: "e1",
+									stableElementId: "stable-save",
+									frameId: 0,
 								tagName: "button",
 								role: "button",
 								name: "Save",
@@ -147,12 +150,35 @@ describe("PageSnapshotTool", () => {
 				}),
 			},
 		]);
-		await expect(capturePageSnapshot({ tabId: 55 })).resolves.toMatchObject({
+		await expect(capturePageSnapshot({ tabId: 55, query: "save" })).resolves.toEqual({
 			tabId: 55,
 			frameId: 0,
+			query: "save",
 			url: "https://example.com",
 			title: "Example",
-			entries: [{ snapshotId: "e1", tabId: 55, frameId: 0 }],
+			generatedAt: 10,
+			totalCandidates: 2,
+			truncated: false,
+			entries: [
+				{
+					snapshotId: "e1",
+					stableElementId: "stable-save",
+					tabId: 55,
+					frameId: 0,
+					tagName: "button",
+					role: "button",
+					name: "Save",
+					text: "Save",
+					label: "Save",
+					attributes: { id: "save" },
+					selectorCandidates: ["#save"],
+					ordinalPath: [1, 2, 0],
+					boundingBox: { x: 1, y: 2, width: 3, height: 4 },
+					interactive: true,
+					headingLevel: undefined,
+					landmark: undefined,
+				},
+			],
 		});
 		expect(chrome.userScripts.configureWorld).toHaveBeenCalledWith({
 			worldId: "shuvgeist-page-snapshot",

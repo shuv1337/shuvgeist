@@ -1,4 +1,13 @@
 import { WebSocket } from "ws";
+import type {
+	CdpSession,
+	CdpSessionCloseListener,
+	CdpSessionDomain,
+	CdpSessionEnsureDomainOptions,
+	CdpSessionEventListener,
+	CdpSessionTarget,
+	CdpSessionTraceOptions,
+} from "../../tools/helpers/cdp-session.js";
 
 interface CdpResponse<T = unknown> {
 	id: number;
@@ -78,5 +87,85 @@ export class ElectronCdpClient {
 
 	close(): void {
 		this.ws.close();
+	}
+}
+
+export interface ElectronCdpTransport {
+	send<T = unknown>(method: string, params?: Record<string, unknown>): Promise<T>;
+	on(method: string, listener: (params: Record<string, unknown>) => void): () => void;
+	onClose(listener: () => void): () => void;
+	close(): void;
+}
+
+export interface ElectronWsCdpSessionOptions {
+	transport: ElectronCdpTransport;
+	targetId?: string;
+}
+
+export class ElectronWsCdpSession implements CdpSession {
+	readonly target: CdpSessionTarget;
+	private readonly enabledDomains = new Set<CdpSessionDomain>();
+	private generation = 0;
+
+	constructor(private readonly options: ElectronWsCdpSessionOptions) {
+		this.target = {
+			kind: "electron-ws",
+			id: options.targetId ?? "electron",
+		};
+		for (const method of ["Page.frameNavigated", "Page.navigatedWithinDocument", "Page.frameStartedNavigating"]) {
+			options.transport.on(method, () => {
+				this.generation += 1;
+			});
+		}
+	}
+
+	static async connect(url: string, targetId?: string): Promise<ElectronWsCdpSession> {
+		return new ElectronWsCdpSession({
+			transport: await ElectronCdpClient.connect(url),
+			targetId,
+		});
+	}
+
+	get navigationGeneration(): number {
+		return this.generation;
+	}
+
+	async acquire(_owner: string, _trace?: CdpSessionTraceOptions): Promise<void> {}
+
+	async release(_owner: string, _trace?: CdpSessionTraceOptions): Promise<void> {}
+
+	async ensureDomain(domain: CdpSessionDomain, options: CdpSessionEnsureDomainOptions = {}): Promise<void> {
+		if (domain === "Runtime" && options.suppressRuntimeEnable === true) {
+			return;
+		}
+		if (this.enabledDomains.has(domain)) {
+			return;
+		}
+		await this.options.transport.send(domain + ".enable");
+		this.enabledDomains.add(domain);
+	}
+
+	async send<T = unknown>(
+		method: string,
+		params?: Record<string, unknown>,
+		_trace?: CdpSessionTraceOptions,
+	): Promise<T> {
+		return this.options.transport.send<T>(method, params);
+	}
+
+	onEvent(method: string, listener: CdpSessionEventListener): () => void {
+		return this.options.transport.on(method, listener);
+	}
+
+	onClose(listener: CdpSessionCloseListener): () => void {
+		return this.options.transport.onClose(() => listener());
+	}
+
+	on(method: string, listener: (params: Record<string, unknown>) => void): () => void {
+		return this.options.transport.on(method, listener);
+	}
+
+	close(): void {
+		this.options.transport.close();
 	}
 }

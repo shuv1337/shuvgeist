@@ -1,5 +1,6 @@
 import { bridgeLog } from "../../bridge/logging.js";
 import type { BridgeTelemetry, TelemetryAttributes, TraceContext } from "../../bridge/telemetry.js";
+import { type ChromeDebuggerSession, ChromeDebuggerSessionPool } from "./cdp-session.js";
 
 export type DebuggerDomain = "Runtime" | "Network" | "Page" | "Performance" | "Tracing";
 
@@ -28,6 +29,7 @@ interface DebuggerTraceOptions {
 
 export class DebuggerManager {
 	private readonly tabStates = new Map<number, TabDebuggerState>();
+	private readonly sessions = new ChromeDebuggerSessionPool(this);
 	private telemetry?: BridgeTelemetry;
 
 	constructor() {
@@ -242,6 +244,10 @@ export class DebuggerManager {
 
 	setTelemetry(telemetry?: BridgeTelemetry): void {
 		this.telemetry = telemetry;
+	}
+
+	cdpSession(tabId: number): ChromeDebuggerSession {
+		return this.sessions.get(tabId);
 	}
 
 	private async runSerialized(tabId: number, action: (state: TabDebuggerState) => Promise<void>): Promise<void> {

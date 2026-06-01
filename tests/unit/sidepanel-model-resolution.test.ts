@@ -2,6 +2,8 @@ import type { Model } from "@mariozechner/pi-ai";
 import {
 	isProxxProviderName,
 	normalizeModelForRuntime,
+	resolveDefaultModel,
+	resolveProviderCredential,
 	resolveModelSpec,
 } from "../../src/sidepanel/model-resolution.js";
 
@@ -53,5 +55,58 @@ describe("sidepanel model resolution", () => {
 		await expect(resolveModelSpec("missing", "custom-ai", sources)).rejects.toThrow(
 			"Model not found: missing (provider: custom-ai)",
 		);
+	});
+
+	it("resolves catalog default models before provider fallback models", async () => {
+		const catalogDefault = model("anthropic", "claude-sonnet-4-6");
+		const fallback = model("anthropic", "first-model");
+		const sources = {
+			getBuiltInModel: vi.fn((provider: string, modelId: string) =>
+				provider === "anthropic" && modelId === "claude-sonnet-4-6" ? catalogDefault : undefined,
+			),
+			getBuiltInModels: vi.fn(() => [fallback]),
+			getCustomProviderByName: vi.fn(async () => undefined),
+			getAllCustomProviders: vi.fn(async () => []),
+		};
+
+		await expect(resolveDefaultModel(["anthropic"], sources)).resolves.toBe(catalogDefault);
+		expect(sources.getBuiltInModels).not.toHaveBeenCalled();
+	});
+
+	it("falls back to built-in and custom provider first models when no catalog default exists", async () => {
+		const builtIn = model("uncataloged", "first-built-in");
+		const custom = model("custom-ai", "first-custom");
+		const sources = {
+			getBuiltInModel: vi.fn(() => undefined),
+			getBuiltInModels: vi.fn((provider: string) => (provider === "uncataloged" ? [builtIn] : [])),
+			getCustomProviderByName: vi.fn(async (name: string) =>
+				name === "custom-ai" ? ({ name, models: [custom] } as any) : undefined,
+			),
+			getAllCustomProviders: vi.fn(async () => []),
+		};
+
+		await expect(resolveDefaultModel(["uncataloged"], sources)).resolves.toBe(builtIn);
+		await expect(resolveDefaultModel(["custom-ai"], sources)).resolves.toBe(custom);
+	});
+
+	it("resolves stored, custom, and canonical proxx provider credentials", async () => {
+		const storedResolver = vi.fn(async (stored: string, provider: string) => `${provider}:${stored}`);
+		const sources = {
+			getStoredProviderKey: vi.fn(async (provider: string) => (provider === "proxx" ? "stored-proxx" : undefined)),
+			getCustomProviderByName: vi.fn(async (name: string) =>
+				name === "custom-ai" ? ({ name, apiKey: "custom-key", models: [] } as any) : undefined,
+			),
+			resolveStoredCredential: storedResolver,
+		};
+
+		await expect(resolveProviderCredential("custom-ai", sources)).resolves.toMatchObject({
+			apiKey: "custom-key",
+			source: "custom",
+		});
+		await expect(resolveProviderCredential("Proxx", sources)).resolves.toMatchObject({
+			apiKey: "proxx:stored-proxx",
+			providerName: "proxx",
+			source: "stored",
+		});
 	});
 });

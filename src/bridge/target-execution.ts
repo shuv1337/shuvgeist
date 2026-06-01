@@ -21,11 +21,11 @@ export interface BridgeExecutionResolution {
 export function getBridgeTargetSupport(method: BridgeMethod): BridgeTargetSupport {
 	const metadata = getBridgeCommandMetadata(method);
 	const serverLocal = metadata?.route === "server-local";
-	const targetDispatched = isCatalogTargetDispatchedMethod(method);
+	const electronTargetDispatched = isCatalogTargetDispatchedMethod(method, "electron-window");
 	return {
 		serverLocal,
 		chromeExtension: !serverLocal,
-		electronWindow: !serverLocal && targetDispatched,
+		electronWindow: !serverLocal && electronTargetDispatched,
 		requiresExtension: !serverLocal,
 	};
 }

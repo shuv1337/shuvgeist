@@ -16,7 +16,10 @@ describe("bridge command catalog", () => {
 			expect(entry, method).toBeDefined();
 			expect(entry?.route === "extension" || entry?.route === "server-local").toBe(true);
 			expect(isCatalogServerLocalMethod(method)).toBe(entry?.route === "server-local");
-			expect(isCatalogTargetDispatchedMethod(method)).toBe(!method.startsWith("session_"));
+			expect(isCatalogTargetDispatchedMethod(method, "chrome-tab")).toBe(!method.startsWith("session_"));
+			expect(isCatalogTargetDispatchedMethod(method, "electron-window")).toBe(
+				entry?.route === "extension" && !method.startsWith("session_"),
+			);
 		}
 	});
 

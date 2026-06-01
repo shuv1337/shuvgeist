@@ -2,6 +2,7 @@ import type { AgentTool, AgentToolUpdateCallback } from "@mariozechner/pi-agent-
 import { type Static, StringEnum, Type } from "@mariozechner/pi-ai";
 import type { TraceContext } from "../bridge/telemetry.js";
 import { resolveBrowserTarget } from "./helpers/browser-target.js";
+import { ChromeDebuggerSession } from "./helpers/cdp-session.js";
 import { type DebuggerManager, getSharedDebuggerManager } from "./helpers/debugger-manager.js";
 
 // ============================================================================
@@ -153,11 +154,11 @@ CRITICAL: Use browserjs() and repl tool for DOM manipulation. Use this ONLY for 
 				}
 
 				const owner = `debugger:${toolCallId}:${tabId}`;
-				await this.debuggerManager.acquireWithTrace(tabId, owner, { parent: traceContext });
+				const cdpSession = new ChromeDebuggerSession({ tabId, manager: this.debuggerManager });
+				await cdpSession.acquire(owner, { parent: traceContext });
 				try {
-					await this.debuggerManager.ensureDomainWithTrace(tabId, "Runtime", { parent: traceContext });
-					const result = await this.debuggerManager.sendCommandWithTrace<unknown>(
-						tabId,
+					await cdpSession.ensureDomain("Runtime", { trace: { parent: traceContext } });
+					const result = await cdpSession.send<unknown>(
 						"Runtime.evaluate",
 						{
 							expression: args.code,
@@ -179,7 +180,7 @@ CRITICAL: Use browserjs() and repl tool for DOM manipulation. Use this ONLY for 
 
 					return { content: [{ type: "text", text: output }], details };
 				} finally {
-					await this.debuggerManager.releaseWithTrace(tabId, owner, { parent: traceContext });
+					await cdpSession.release(owner, { parent: traceContext });
 				}
 			}
 

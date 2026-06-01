@@ -1,5 +1,6 @@
 import type { Agent, AgentMessage, AgentState } from "@mariozechner/pi-agent-core";
 import type { Model } from "@mariozechner/pi-ai";
+import { DEFAULT_AGENT_THINKING_LEVEL } from "../../src/agent/runtime.js";
 import { ErrorCodes, type SessionArtifactsResult } from "../../src/bridge/protocol.js";
 import { SidepanelSessionRuntime, type SidepanelSessionRuntimeDeps } from "../../src/sidepanel/session-runtime.js";
 
@@ -70,14 +71,15 @@ function createHarness(options: { sessionId?: string; title?: string; messages?:
 		emitSessionChanged: vi.fn(),
 		emitSessionMessage: vi.fn(),
 		updateUrl: vi.fn(),
-		createAgent: vi.fn(async (initialState) => {
+		createAgent: vi.fn(async (options) => {
+			const initialState = options?.initialState;
 			agent = {
 				...agent,
 				state: {
 					messages: initialState?.messages ?? [],
 					isStreaming: false,
-					model: initialState?.model ?? testModel("default-model"),
-					thinkingLevel: initialState?.thinkingLevel ?? "medium",
+					model: initialState?.model ?? options?.model ?? testModel("default-model"),
+					thinkingLevel: initialState?.thinkingLevel ?? options?.thinkingLevel ?? DEFAULT_AGENT_THINKING_LEVEL,
 					tools: initialState?.tools ?? [],
 					systemPrompt: initialState?.systemPrompt ?? "system",
 				} as unknown as AgentState,
@@ -175,9 +177,7 @@ describe("SidepanelSessionRuntime", () => {
 		expect(deps.createAgent).toHaveBeenCalledWith(
 			expect.objectContaining({
 				model: expect.objectContaining({ id: "anthropic/model-a", provider: "resolved" }),
-				systemPrompt: "system prompt",
-				messages: [],
-				tools: [],
+				thinkingLevel: DEFAULT_AGENT_THINKING_LEVEL,
 			}),
 		);
 		expect(deps.setSessionId).toHaveBeenLastCalledWith("new-session");

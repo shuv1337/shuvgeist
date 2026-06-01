@@ -27,7 +27,7 @@ import {
 	type ReplRouter,
 	type ScreenshotRouter,
 } from "./bridge/browser-command-executor.js";
-import { BridgeClient } from "./bridge/extension-client.js";
+import { BridgeClient, type BridgeConnectionState } from "./bridge/extension-client.js";
 import {
 	BRIDGE_ELECTRON_STATE_KEY,
 	BRIDGE_OTEL_STATE_KEY,
@@ -892,7 +892,7 @@ async function getRecordingTools(): Promise<RecordingTools> {
 		tools = new RecordingTools({
 			windowId,
 			debuggerManager: sharedDebuggerManager,
-			emitRecordFrame: (data) => bridgeClient.sendEvent("record_frame", { ...data }),
+			emitRecordFrame: (data) => getBridgeSessionForWindow(windowId)?.client.sendEvent("record_frame", { ...data }),
 			telemetry: extensionTelemetry,
 		});
 		recordingToolsByWindowId.set(windowId, tools);
@@ -1025,7 +1025,13 @@ function getCurrentCapabilities(): BridgeCapability[] {
 // BRIDGE CLIENT
 // ============================================================================
 
-const bridgeClient = new BridgeClient();
+interface BridgeWindowSession {
+	windowId: number;
+	client: BridgeClient;
+	executor: BrowserCommandExecutor;
+}
+
+const bridgeWindowSessions = new Map<number, BridgeWindowSession>();
 const bridgeSettingsStorage = createChromeStorageBridgeSettingsAdapter();
 let currentSettings: BridgeSettings | null = null;
 let bootstrapSettingsPromise: Promise<BridgeSettings> | null = null;
@@ -1035,12 +1041,43 @@ let bootstrapSettingsUrl: string | null = null;
  * never observed a usable focused window. Treated as "no target" everywhere.
  */
 let currentWindowId: number | undefined;
-/**
- * Window id the active BrowserCommandExecutor was constructed with. Used to
- * detect when focus has moved to a different window so we can rebuild the
- * executor (its `windowId` is `readonly` so updating in place is impossible).
- */
-let lastConnectedWindowId: number | undefined;
+
+function getCurrentBridgeSession(): BridgeWindowSession | undefined {
+	if (isUsableWindowId(currentWindowId)) return bridgeWindowSessions.get(currentWindowId);
+	return Array.from(bridgeWindowSessions.values()).find((session) => session.client.connectionState === "connected");
+}
+
+function getBridgeSessionForWindow(windowId: number | undefined): BridgeWindowSession | undefined {
+	if (!isUsableWindowId(windowId)) return undefined;
+	return bridgeWindowSessions.get(windowId);
+}
+
+function disconnectBridgeSessions(): void {
+	for (const session of bridgeWindowSessions.values()) {
+		session.client.disconnect();
+	}
+	bridgeWindowSessions.clear();
+}
+
+function sendBridgeCapabilitiesUpdate(): void {
+	for (const session of bridgeWindowSessions.values()) {
+		session.client.sendCapabilitiesUpdate();
+	}
+}
+
+function nudgeBridgeReconnects(): void {
+	for (const session of bridgeWindowSessions.values()) {
+		session.client.nudgeReconnect();
+	}
+}
+
+function currentBridgeConnectionState(): { state: BridgeConnectionState; detail?: string } {
+	const session = getCurrentBridgeSession();
+	return {
+		state: session?.client.connectionState ?? "disconnected",
+		detail: session?.client.connectionDetail,
+	};
+}
 
 async function resolveWindowId(): Promise<number | undefined> {
 	try {
@@ -1087,9 +1124,8 @@ async function ensureBridgeConnection(): Promise<void> {
 	applyBridgeObservabilitySettings(settings);
 
 	if (!settings.enabled) {
-		bridgeClient.disconnect();
+		disconnectBridgeSessions();
 		currentSettings = settings;
-		lastConnectedWindowId = undefined;
 		await setBridgeState("disabled");
 		return;
 	}
@@ -1106,22 +1142,24 @@ async function ensureBridgeConnection(): Promise<void> {
 			}
 			resolvedSettings = bootstrappedSettings;
 		} catch (error) {
-			bridgeClient.disconnect();
+			disconnectBridgeSessions();
 			currentSettings = resolvedSettings;
-			lastConnectedWindowId = undefined;
 			await setBridgeState("disconnected", error instanceof Error ? error.message : "Local bridge bootstrap failed");
 			return;
 		}
 	}
 
 	if (!resolvedSettings.token) {
-		bridgeClient.disconnect();
+		disconnectBridgeSessions();
 		currentSettings = resolvedSettings;
-		lastConnectedWindowId = undefined;
 		await setBridgeState("disconnected", "Enter the remote bridge token to connect.");
 		return;
 	}
 
+	const settingsChanged = settingsRequireReconnect(previousSettings, resolvedSettings);
+	if (settingsChanged) {
+		disconnectBridgeSessions();
+	}
 	currentSettings = resolvedSettings;
 
 	const windowId = await resolveWindowId();
@@ -1131,41 +1169,50 @@ async function ensureBridgeConnection(): Promise<void> {
 	// the next keepalive alarm will retry).
 	if (!isUsableWindowId(windowId)) {
 		console.log("[Background] Deferring bridge connection until a usable window id is available");
-		lastConnectedWindowId = undefined;
 		await setBridgeState("disconnected", "Waiting for a usable browser window");
 		return;
 	}
 
+	let session = bridgeWindowSessions.get(windowId);
+	if (!session) {
+		session = {
+			windowId,
+			client: new BridgeClient(),
+			executor: new BrowserCommandExecutor({
+				windowId,
+				sensitiveAccessEnabled: resolvedSettings.sensitiveAccessEnabled,
+				sessionBridge: backgroundSessionBridge,
+				replRouter,
+				screenshotRouter,
+				recordingRouter,
+				telemetry: extensionTelemetry,
+			}),
+		};
+		bridgeWindowSessions.set(windowId, session);
+	}
+
 	const stateRequiresReconnect =
-		bridgeClient.connectionState === "disabled" ||
-		bridgeClient.connectionState === "disconnected" ||
-		bridgeClient.connectionState === "error";
-	const windowIdChanged = lastConnectedWindowId !== windowId;
-	const settingsChanged = settingsRequireReconnect(previousSettings, resolvedSettings);
-	const needsReconnect = stateRequiresReconnect || windowIdChanged || settingsChanged;
+		session.client.connectionState === "disabled" ||
+		session.client.connectionState === "disconnected" ||
+		session.client.connectionState === "error";
 
-	if (!needsReconnect) return;
+	if (!stateRequiresReconnect) {
+		await setBridgeState(session.client.connectionState, session.client.connectionDetail);
+		return;
+	}
 
-	const executor = new BrowserCommandExecutor({
-		windowId,
-		sensitiveAccessEnabled: resolvedSettings.sensitiveAccessEnabled,
-		sessionBridge: backgroundSessionBridge,
-		replRouter,
-		screenshotRouter,
-		recordingRouter,
-		telemetry: extensionTelemetry,
-	});
-
-	bridgeClient.connect({
+	session.client.connect({
 		url: resolvedSettings.url,
 		token: resolvedSettings.token,
 		windowId,
 		sensitiveAccessEnabled: resolvedSettings.sensitiveAccessEnabled,
-		executor,
+		executor: session.executor,
 		telemetry: extensionTelemetry,
 		capabilitiesProvider: getCurrentCapabilities,
 		onStateChange: (state, detail) => {
-			void setBridgeState(state, detail);
+			if (currentWindowId === windowId) {
+				void setBridgeState(state, detail);
+			}
 		},
 		onEvent: (event, data) => {
 			if (event === "electron_sessions_changed" && data?.sessions && Array.isArray(data.sessions)) {
@@ -1177,7 +1224,7 @@ async function ensureBridgeConnection(): Promise<void> {
 			}
 		},
 	});
-	lastConnectedWindowId = windowId;
+	session.client.nudgeReconnect();
 }
 
 // ============================================================================
@@ -1189,13 +1236,13 @@ chrome.alarms.create("bridge-keepalive", { periodInMinutes: 1 });
 chrome.alarms.onAlarm.addListener((alarm) => {
 	if (alarm.name === "bridge-keepalive") {
 		void ensureBridgeConnection().then(() => {
-			// If the client settled into a disconnected/error state (bridge
+			// If a client settled into a disconnected/error state (bridge
 			// server was down, extension backoff hit its cap, ...), bypass the
 			// in-flight exponential backoff and retry now. Without this, the
 			// extension can sit in a long wait even after the bridge has come
 			// back up, which makes cold-start CLI commands look as if the
 			// extension is not connected.
-			bridgeClient.nudgeReconnect();
+			nudgeBridgeReconnects();
 		});
 	}
 });
@@ -1239,10 +1286,11 @@ void refreshTtsSettingsState();
 // ============================================================================
 
 chrome.tabs.onActivated.addListener(async (activeInfo) => {
-	if (bridgeClient.connectionState !== "connected") return;
+	const session = getBridgeSessionForWindow(activeInfo.windowId);
+	if (session?.client.connectionState !== "connected") return;
 	try {
 		const tab = await chrome.tabs.get(activeInfo.tabId);
-		bridgeClient.sendEvent("active_tab_changed", {
+		session.client.sendEvent("active_tab_changed", {
 			url: tab.url || "",
 			title: tab.title || "",
 			tabId: tab.id,
@@ -1253,9 +1301,10 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
 });
 
 chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
-	if (bridgeClient.connectionState !== "connected") return;
+	const session = getBridgeSessionForWindow(tab.windowId);
+	if (session?.client.connectionState !== "connected") return;
 	if (changeInfo.status !== "complete" || !tab.active) return;
-	bridgeClient.sendEvent("active_tab_changed", {
+	session.client.sendEvent("active_tab_changed", {
 		url: tab.url || "",
 		title: tab.title || "",
 		tabId: tab.id,
@@ -1292,20 +1341,18 @@ chrome.windows.onFocusChanged.addListener(async (windowId) => {
 	if (!isUsableWindowId(windowId)) return;
 	currentWindowId = windowId;
 
-	// If the bridge has not yet connected (deferred at startup because no
-	// usable window was available) OR the executor was built around a different
-	// window id, rebuild via ensureBridgeConnection() so the new window becomes
-	// the live target. BrowserCommandExecutor.windowId is readonly, so an
-	// in-place update is not possible.
-	if (lastConnectedWindowId !== windowId) {
+	// Ensure the focused window has its own bridge client without disconnecting
+	// clients owned by other windows.
+	if (!getBridgeSessionForWindow(windowId)) {
 		await ensureBridgeConnection();
 	}
 
-	if (bridgeClient.connectionState !== "connected") return;
+	const session = getBridgeSessionForWindow(windowId);
+	if (session?.client.connectionState !== "connected") return;
 	try {
 		const [tab] = await chrome.tabs.query({ active: true, windowId });
 		if (tab?.id) {
-			bridgeClient.sendEvent("active_tab_changed", {
+			session.client.sendEvent("active_tab_changed", {
 				url: tab.url || "",
 				title: tab.title || "",
 				tabId: tab.id,
@@ -1409,9 +1456,10 @@ chrome.runtime.onMessage.addListener(
 		}
 
 		if (message.type === "bridge-get-state") {
+			const connection = currentBridgeConnectionState();
 			const stateData: BridgeStateData = {
-				state: bridgeClient.connectionState,
-				detail: bridgeClient.connectionDetail,
+				state: connection.state,
+				detail: connection.detail,
 			};
 			sendResponse(stateData);
 			return false;
@@ -1504,7 +1552,7 @@ chrome.runtime.onConnect.addListener((port: chrome.runtime.Port) => {
 	});
 
 	// Update bridge capabilities when sidepanel opens
-	bridgeClient.sendCapabilitiesUpdate();
+	sendBridgeCapabilitiesUpdate();
 
 	port.onMessage.addListener((msg: SidepanelToBackgroundMessage) => {
 		if (msg.type === "acquireLock") {
@@ -1528,12 +1576,19 @@ chrome.runtime.onConnect.addListener((port: chrome.runtime.Port) => {
 	port.onDisconnect.addListener(() => {
 		closeSidepanel(windowId, false);
 		// Update bridge capabilities when sidepanel closes
-		bridgeClient.sendCapabilitiesUpdate();
+		sendBridgeCapabilitiesUpdate();
 	});
 });
 
 // Clean up locks when entire window closes
 chrome.windows.onRemoved.addListener((windowId: number) => {
+	if (currentWindowId === windowId) currentWindowId = undefined;
+	const session = bridgeWindowSessions.get(windowId);
+	if (session) {
+		session.client.disconnect();
+		bridgeWindowSessions.delete(windowId);
+	}
+	recordingToolsByWindowId.delete(windowId);
 	closeSidepanel(windowId, false);
 });
 

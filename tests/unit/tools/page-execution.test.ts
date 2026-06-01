@@ -264,4 +264,5 @@ describe("executePageFunction", () => {
 		);
 		expect(scriptingMock().executeScript).not.toHaveBeenCalled();
 	});
+
 });

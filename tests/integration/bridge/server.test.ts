@@ -135,33 +135,37 @@ async function createFakeCdpServer(port: number): Promise<{
 				params?: { expression?: string };
 			};
 			if (msg.method === "Runtime.evaluate") {
-				if (msg.params?.expression?.includes("electronSnapshotScript")) {
+				if (msg.params?.expression?.includes("shuvgeistSnapshotPageScript")) {
 					ws.send(
 						JSON.stringify({
 							id: msg.id,
 							result: {
 								result: {
 									value: {
-										url: "app://fixture",
-										title: "Fixture",
-										generatedAt: 1,
-										totalCandidates: 2,
-										truncated: false,
-										entries: [
-											{
-												snapshotId: "e1:w1:ref1",
-												tagName: "button",
-												role: "button",
-												name: "Save",
-												text: "Save",
-												label: "Save changes",
-												attributes: { id: "save" },
-												selectorCandidates: ["#save"],
-												ordinalPath: [0],
-												boundingBox: { x: 1, y: 2, width: 30, height: 20 },
-												interactive: true,
-											},
-										],
+										success: true,
+										result: {
+											url: "app://fixture",
+											title: "Fixture",
+											generatedAt: 1,
+											totalCandidates: 2,
+											truncated: false,
+											entries: [
+												{
+													snapshotId: "e1:w1:ref1",
+													stableElementId: "stable-save",
+													tagName: "button",
+													role: "button",
+													name: "Save",
+													text: "Save",
+													label: "Save changes",
+													attributes: { id: "save" },
+													selectorCandidates: ["#save"],
+													ordinalPath: [0],
+													boundingBox: { x: 1, y: 2, width: 30, height: 20 },
+													interactive: true,
+												},
+											],
+										},
 									},
 								},
 							},
@@ -520,6 +524,45 @@ describe("BridgeServer", () => {
 		cli.ws.close();
 	});
 
+	it("characterizes single-target bridge dispatch to the active extension", async () => {
+		const extension = await openRegisteredClient(baseUrl, "secret-token", "extension", {
+			windowId: 62,
+			capabilities: ["page_snapshot"],
+		});
+		const cli = await openRegisteredClient(baseUrl, "secret-token", "cli", { name: "single-target-cli" });
+		const params = { tabId: 42, frameId: 7, maxEntries: 25, includeHidden: true };
+		const responsePromise = sendRequestAndReadResponse(cli.ws, { id: 77, method: "page_snapshot", params });
+		const relayed = await readMessage<{ id: number; method: string; params?: unknown; target?: unknown }>(extension.ws);
+
+		expect(relayed).toEqual({
+			id: 1,
+			method: "page_snapshot",
+			params,
+			target: { kind: "chrome-tab" },
+		});
+		extension.ws.send(
+			JSON.stringify({
+				id: relayed.id,
+				result: {
+					tabId: 42,
+					frameId: 7,
+					entries: [{ snapshotId: "e1", role: "button", name: "Save" }],
+				},
+			}),
+		);
+		await expect(responsePromise).resolves.toEqual({
+			id: 77,
+			result: {
+				tabId: 42,
+				frameId: 7,
+				entries: [{ snapshotId: "e1", role: "button", name: "Save" }],
+			},
+		});
+
+		extension.ws.close();
+		cli.ws.close();
+	});
+
 	it("runs eval and screenshot through an attached electron CDP session", async () => {
 		const cdpPort = await getAvailablePort();
 		const cdp = await createFakeCdpServer(cdpPort);
@@ -562,7 +605,9 @@ describe("BridgeServer", () => {
 				}),
 			).resolves.toMatchObject({
 				id: 4,
-				result: { entries: [{ snapshotId: "e1:w1:ref1", role: "button", name: "Save" }] },
+				result: {
+					entries: [{ snapshotId: "e1:w1:ref1", stableElementId: "stable-save", role: "button", name: "Save" }],
+				},
 			});
 			await expect(
 				sendRequestAndReadResponse(cli.ws, {

@@ -109,8 +109,11 @@ export function isServerLocalMethod(method: BridgeMethod): boolean {
 	return isCatalogServerLocalMethod(method);
 }
 
-export function isTargetDispatchedMethod(method: BridgeMethod): boolean {
-	return isCatalogTargetDispatchedMethod(method);
+export function isTargetDispatchedMethod(
+	method: BridgeMethod,
+	targetKind: BridgeTarget["kind"] = "chrome-tab",
+): boolean {
+	return isCatalogTargetDispatchedMethod(method, targetKind);
 }
 
 export function isExtensionRelayedMethod(method: BridgeMethod): boolean {
@@ -223,6 +226,7 @@ export interface WorkflowValidateParams {
 export interface PageSnapshotBridgeParams extends TargetedBridgeParams {
 	maxEntries?: number;
 	includeHidden?: boolean;
+	query?: string;
 }
 
 export type PageAssertKind = "expression" | "text" | "selector" | "role" | "label" | "url";
@@ -536,6 +540,7 @@ export interface PageAssertResult {
 
 export interface BridgeSnapshotEntry {
 	snapshotId: string;
+	stableElementId?: string;
 	tabId: number;
 	frameId: number;
 	tagName: string;
@@ -560,6 +565,7 @@ export interface BridgeSnapshotEntry {
 export interface PageSnapshotBridgeResult {
 	tabId: number;
 	frameId: number;
+	query?: string;
 	url: string;
 	title: string;
 	generatedAt: number;
