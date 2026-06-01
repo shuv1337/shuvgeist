@@ -6,10 +6,13 @@
 
 ### Added
 
+- Bridge task lifecycle, request planning, and raw page-snapshot store foundations for the agentic browser roadmap.
+
 ### Changed
 
 ### Fixed
 
+- Settings categories now use a narrow-sidebar selector instead of overflowing horizontal tabs.
 - Loopback bridge reconnects now preflight the HTTP status endpoint before opening a WebSocket, and secondary extension target conflicts no longer emit repeated error-level registration logs.
 
 ### Removed

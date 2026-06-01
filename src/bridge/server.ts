@@ -32,8 +32,6 @@ import {
 	BRIDGE_PROTOCOL_VERSION,
 	BridgeDefaults,
 	type BridgeEvent,
-	type BridgeMethod,
-	BridgeMethods,
 	type BridgeRequest,
 	type BridgeResponse,
 	type BridgeServerConfig,
@@ -41,13 +39,12 @@ import {
 	ErrorCodes,
 	formatBridgeProtocolMismatch,
 	isBridgeProtocolCompatible,
-	isWriteMethod,
 	type RegistrationMessage,
 } from "./protocol.js";
-import { SessionRegistry } from "./session-registry.js";
+import { BridgeRequestHandler, type BridgeRequestTargetHandle } from "./request-handler.js";
+import { SessionRegistry, type TargetSessionHandle } from "./session-registry.js";
 import { parseBridgeSkillSnapshot } from "./skill-snapshot.js";
 import { isElectronTarget, requestTarget, targetTeachingLabel } from "./target.js";
-import { missingExtensionTargetError, resolveBridgeExecution } from "./target-execution.js";
 import { BridgeTelemetry, type BridgeTelemetrySpan, parseTraceparent, type TelemetryAttributes } from "./telemetry.js";
 
 // ---------------------------------------------------------------------------
@@ -91,6 +88,10 @@ interface ActiveRecordingLease {
 	tabId: number;
 	startedAt: number;
 	targetHandleKey?: string;
+}
+
+interface BridgeServerRequestTargetHandle extends BridgeRequestTargetHandle {
+	targetHandle: TargetSessionHandle<ClientInfo>;
 }
 
 function electronTargetTelemetryAttributes(target: ReturnType<typeof requestTarget>): TelemetryAttributes {
@@ -147,6 +148,7 @@ export class BridgeServer {
 	private readonly clients = new Map<WebSocket, ClientInfo>();
 	private readonly telemetry?: BridgeTelemetry;
 	private readonly sessionRegistry = new SessionRegistry<ClientInfo>();
+	private readonly requestHandler = new BridgeRequestHandler<BridgeServerRequestTargetHandle>();
 	private readonly pendingRequests = new Map<number, PendingRequest>();
 	private readonly rejectedBootstrapCounts = new Map<string, number>();
 	private nextRelayRequestId = 1;
@@ -513,103 +515,61 @@ export class BridgeServer {
 			},
 		});
 
-		// Validate method
-		if (!BridgeMethods.includes(req.method as BridgeMethod)) {
-			bridgeLog("warn", "invalid method", { ...fields, outcome: "rejected" });
-			span?.recordError(new Error("Unknown method: " + req.method));
-			span?.setAttribute("bridge.outcome", "rejected");
+		const plan = this.requestHandler.plan(req, {
+			cliConnectionId: client.connectionId,
+			resolveTarget: (target) => this.resolveRequestTargetHandle(target),
+		});
+
+		if (plan.type === "error") {
+			if (plan.reason === "invalid-method") {
+				bridgeLog("warn", "invalid method", { ...fields, outcome: "rejected" });
+				span?.recordError(new Error(plan.error.message));
+				span?.setAttribute("bridge.outcome", "rejected");
+			} else if (plan.reason === "missing-extension-target") {
+				bridgeLog("warn", "no extension target", { ...fields, outcome: "error" });
+				span?.recordError(new Error(plan.error.message));
+				span?.setAttribute("bridge.outcome", "error");
+			} else if (plan.reason === "capability-disabled") {
+				bridgeLog("warn", "capability disabled on active extension", {
+					...fields,
+					outcome: "rejected",
+				});
+				span?.recordError(new Error(plan.error.message));
+				span?.setAttribute("bridge.outcome", "rejected");
+			} else if (plan.reason === "write-locked") {
+				bridgeLog("warn", "session inject rejected due to active writer lock", {
+					...fields,
+					outcome: "rejected",
+					writerCliConnectionId: plan.writeLockHolder?.cliConnectionId,
+					writerSessionId: plan.writeLockHolder?.sessionId,
+				});
+				span?.recordError(new Error(plan.error.message));
+				span?.setAttribute("bridge.outcome", "rejected");
+			}
 			span?.end("error");
 			void this.telemetry?.flush();
 			this.sendJson(client.ws, {
 				id: req.id,
-				error: { code: ErrorCodes.INVALID_METHOD, message: "Unknown method: " + req.method },
+				error: plan.error,
 			});
 			return;
 		}
 
-		const target = requestTarget(req);
-		const execution = resolveBridgeExecution(req.method, target);
-		if (execution.adapter === "server-local") {
+		if (plan.type === "server-local") {
 			this.handleServerLocalRequest(client, req, span);
 			return;
 		}
 
-		if (execution.adapter === "electron-target" && isElectronTarget(target)) {
-			void this.handleElectronTargetRequest(client, req, target, span, fields);
+		if (plan.type === "electron-target") {
+			void this.handleElectronTargetRequest(client, req, plan.target, span, fields);
 			return;
 		}
 
-		if (execution.adapter === "unsupported-target" && execution.error) {
-			this.sendJson(client.ws, {
-				id: req.id,
-				error: execution.error,
-			});
-			return;
-		}
-
-		// Check extension target
-		const targetHandle = this.sessionRegistry.resolve(target);
-		if (!targetHandle || targetHandle.connection.ws.readyState !== WebSocket.OPEN) {
-			const error = missingExtensionTargetError();
-			bridgeLog("warn", "no extension target", { ...fields, outcome: "error" });
-			span?.recordError(new Error(error.message));
-			span?.setAttribute("bridge.outcome", "error");
-			span?.end("error");
-			void this.telemetry?.flush();
-			this.sendJson(client.ws, {
-				id: req.id,
-				error,
-			});
-			return;
-		}
-
-		if (targetHandle.capabilities && !targetHandle.capabilities.includes(req.method)) {
-			bridgeLog("warn", "capability disabled on active extension", {
-				...fields,
-				outcome: "rejected",
-				capabilities: targetHandle.capabilities,
-			});
-			span?.recordError(new Error(`Method '${req.method}' is disabled on the active extension target`));
-			span?.setAttribute("bridge.outcome", "rejected");
-			span?.end("error");
-			void this.telemetry?.flush();
-			this.sendJson(client.ws, {
-				id: req.id,
-				error: {
-					code: ErrorCodes.CAPABILITY_DISABLED,
-					message: `Method '${req.method}' is disabled on the active extension target`,
-				},
-			});
-			return;
-		}
-
-		if (isWriteMethod(req.method)) {
-			const expectedSessionId =
-				req.params && typeof req.params.expectedSessionId === "string" ? req.params.expectedSessionId : undefined;
-			const lease = targetHandle.writeLock.acquire(client.connectionId, expectedSessionId);
-			if (!lease.ok) {
-				bridgeLog("warn", "session inject rejected due to active writer lock", {
-					...fields,
-					outcome: "rejected",
-					writerCliConnectionId: lease.holder.cliConnectionId,
-					writerSessionId: lease.holder.sessionId,
-				});
-				span?.recordError(new Error("Another CLI currently holds the session write lock"));
-				span?.setAttribute("bridge.outcome", "rejected");
-				span?.end("error");
-				void this.telemetry?.flush();
-				this.sendJson(client.ws, {
-					id: req.id,
-					error: {
-						code: ErrorCodes.WRITE_LOCKED,
-						message: "Another CLI currently holds the session write lock",
-					},
-				});
-				return;
-			}
+		const targetHandle = plan.handle.targetHandle;
+		if (plan.writeLockAcquired) {
 			bridgeLog("info", "session writer lease acquired", {
 				...fields,
-				sessionId: expectedSessionId,
+				sessionId: plan.expectedSessionId,
 				outcome: "success",
 			});
 		}
@@ -634,9 +594,24 @@ export class BridgeServer {
 		this.sendJson(targetHandle.connection.ws, {
 			...req,
 			id: relayRequestId,
-			target,
+			target: plan.target,
 			...(span ? span.toTraceHeaders() : {}),
 		});
+	}
+
+	private resolveRequestTargetHandle(
+		target: ReturnType<typeof requestTarget>,
+	): BridgeServerRequestTargetHandle | undefined {
+		const targetHandle = this.sessionRegistry.resolve(target);
+		if (!targetHandle) return undefined;
+		return {
+			key: targetHandle.key,
+			isOpen: targetHandle.connection.ws.readyState === WebSocket.OPEN,
+			capabilities: targetHandle.capabilities,
+			acquireWriteLock: (cliConnectionId, expectedSessionId) =>
+				targetHandle.writeLock.acquire(cliConnectionId, expectedSessionId),
+			targetHandle,
+		};
 	}
 
 	private handleServerLocalRequest(client: ClientInfo, req: BridgeRequest, span?: BridgeTelemetrySpan): void {
