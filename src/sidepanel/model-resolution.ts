@@ -1,6 +1,7 @@
 import { type Api, getModel, getModels, type Model } from "@mariozechner/pi-ai";
 import type { CustomProvider } from "@mariozechner/pi-web-ui/storage/stores/custom-providers-store.js";
 import { getProviderCredentialStorageKey, getProviderDefaultModelId } from "../providers/catalog.js";
+import { BUNDLED_FREE_TIER_PROVIDER, createBundledFreeTierModel } from "../providers/free-tier.js";
 
 export interface ModelResolutionSources {
 	getCustomProviderByName(providerName: string): Promise<CustomProvider | undefined>;
@@ -110,6 +111,11 @@ export async function resolveDefaultModel(
 		const customProvider = await sources.getCustomProviderByName(provider);
 		const customModel = customProvider?.models?.[0];
 		if (customModel) return customModel;
+
+		if (provider === BUNDLED_FREE_TIER_PROVIDER) {
+			const bundledModel = createBundledFreeTierModel();
+			if (bundledModel) return bundledModel;
+		}
 	}
 
 	return undefined;

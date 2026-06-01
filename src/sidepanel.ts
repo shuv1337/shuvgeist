@@ -45,17 +45,10 @@ import {
 	summarizeForBridge,
 } from "./bridge/session-bridge.js";
 import { Toast } from "./components/Toast.js";
-import { AboutTab } from "./dialogs/AboutTab.js";
 import { ApiKeyOrOAuthDialog } from "./dialogs/ApiKeyOrOAuthDialog.js";
-import { ApiKeysOAuthTab } from "./dialogs/ApiKeysOAuthTab.js";
-import { BridgeTab } from "./dialogs/BridgeTab.js";
-import { CostsTab } from "./dialogs/CostsTab.js";
-import { ElectronTargetsTab } from "./dialogs/ElectronTargetsTab.js";
 import { SessionCostDialog } from "./dialogs/SessionCostDialog.js";
 import { ShuvgeistSessionListDialog } from "./dialogs/SessionListDialog.js";
-import { ShuvgeistProvidersTab } from "./dialogs/ShuvgeistProvidersTab.js";
-import { SkillsTab } from "./dialogs/SkillsTab.js";
-import { TtsTab } from "./dialogs/TtsTab.js";
+import { createSettingsTabs, type SettingsInitialTab } from "./dialogs/settings-tabs.js";
 import { UpdateNotificationDialog } from "./dialogs/UpdateNotificationDialog.js";
 import { UserScriptsPermissionDialog } from "./dialogs/UserScriptsPermissionDialog.js";
 import { WelcomeSetupDialog } from "./dialogs/WelcomeSetupDialog.js";
@@ -67,8 +60,18 @@ import {
 } from "./messages/NavigationMessage.js";
 import { registerUserMessageRenderer } from "./messages/UserMessageRenderer.js";
 import { createWelcomeMessage, registerWelcomeRenderer } from "./messages/WelcomeMessage.js";
-import { isOAuthCredentials, resolveApiKey } from "./oauth/index.js";
+import {
+	isOAuthCredentials,
+	parseProviderCredential,
+	resolveApiKey,
+	serializeFreeTierCredential,
+} from "./oauth/index.js";
 import { SYSTEM_PROMPT } from "./prompts/prompts.js";
+import {
+	BUNDLED_FREE_TIER_KEY,
+	BUNDLED_FREE_TIER_PROVIDER,
+	createBundledFreeTierProvider,
+} from "./providers/free-tier.js";
 import {
 	normalizeModelForRuntime,
 	resolveDefaultModel,
@@ -316,26 +319,20 @@ async function selectDefaultModelForAvailableProvider() {
 	renderApp();
 }
 
+async function enableBundledFreeTier() {
+	await storage.customProviders.set(createBundledFreeTierProvider());
+	await storage.providerKeys.set(BUNDLED_FREE_TIER_PROVIDER, serializeFreeTierCredential(BUNDLED_FREE_TIER_KEY));
+	await selectDefaultModelForAvailableProvider();
+}
+
 async function hasAnyApiKey(): Promise<boolean> {
 	const providers = await getAvailableProviderNames();
 	return providers.length > 0;
 }
 
-function openApiKeysDialog(): Promise<void> {
+function openApiKeysDialog(initialTab: SettingsInitialTab = "providers"): Promise<void> {
 	return new Promise((resolve) => {
-		SettingsDialog.open(
-			[
-				new ShuvgeistProvidersTab(),
-				new ApiKeysOAuthTab(),
-				new TtsTab(),
-				new CostsTab(),
-				new SkillsTab(),
-				new BridgeTab(),
-				new ElectronTargetsTab(),
-				new AboutTab(),
-			],
-			resolve,
-		);
+		SettingsDialog.open(createSettingsTabs(initialTab), resolve);
 	});
 }
 
@@ -347,7 +344,9 @@ async function updateAuthLabel() {
 	const provider = agent.state.model.provider;
 	const stored = await storage.providerKeys.get(provider);
 	if (stored) {
-		authLabel = isOAuthCredentials(stored) ? "subscription" : "api key";
+		const credential = parseProviderCredential(stored);
+		authLabel =
+			credential.kind === "free-tier" ? "free tier" : isOAuthCredentials(stored) ? "subscription" : "api key";
 		return;
 	}
 
@@ -1111,17 +1110,7 @@ const newSession = () => {
 	window.location.href = url.toString();
 };
 
-const openSettingsDialog = () =>
-	SettingsDialog.open([
-		new ShuvgeistProvidersTab(),
-		new ApiKeysOAuthTab(),
-		new TtsTab(),
-		new CostsTab(),
-		new SkillsTab(),
-		new BridgeTab(),
-		new ElectronTargetsTab(),
-		new AboutTab(),
-	]);
+const openSettingsDialog = () => SettingsDialog.open(createSettingsTabs());
 
 const onOpenTtsOverlayClick = async () => {
 	const availability = await checkUserScriptsAvailability();
@@ -1601,9 +1590,16 @@ async function initApp() {
 
 	// If no API keys configured, show welcome dialog, open settings, then auto-select model
 	if (!(await hasAnyApiKey())) {
-		await WelcomeSetupDialog.show();
-		await openApiKeysDialog();
-		await selectDefaultModelForAvailableProvider();
+		const setupChoice = await WelcomeSetupDialog.show();
+		if (setupChoice === "free-tier") {
+			await enableBundledFreeTier();
+		} else if (setupChoice === "subscription-settings") {
+			await openApiKeysDialog("subscriptions");
+			await selectDefaultModelForAvailableProvider();
+		} else {
+			await openApiKeysDialog();
+			await selectDefaultModelForAvailableProvider();
+		}
 		renderApp();
 	}
 }

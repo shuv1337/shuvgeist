@@ -89,6 +89,21 @@ describe("sidepanel model resolution", () => {
 		await expect(resolveDefaultModel(["custom-ai"], sources)).resolves.toBe(custom);
 	});
 
+	it("resolves the bundled free-tier provider without a stored custom provider", async () => {
+		const sources = {
+			getBuiltInModel: vi.fn(() => undefined),
+			getBuiltInModels: vi.fn(() => []),
+			getCustomProviderByName: vi.fn(async () => undefined),
+			getAllCustomProviders: vi.fn(async () => []),
+		};
+
+		await expect(resolveDefaultModel(["proxx"], sources)).resolves.toMatchObject({
+			provider: "proxx",
+			id: "gpt-5",
+			baseUrl: "http://shuvdev:8789/v1",
+		});
+	});
+
 	it("resolves stored, custom, and canonical proxx provider credentials", async () => {
 		const storedResolver = vi.fn(async (stored: string, provider: string) => `${provider}:${stored}`);
 		const sources = {

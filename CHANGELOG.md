@@ -9,6 +9,7 @@
 - Sidepanel navigation context now includes a compact semantic page snapshot and exposes the page snapshot tool to the agent.
 - Snapshot refs now carry stable element IDs and navigation-generation checks so stale refs fail cleanly after navigation.
 - Page snapshots now apply query filtering on Chrome and Electron while preserving ancestor hierarchy.
+- First-run setup now offers a bundled free-tier model path alongside subscription login and API-key setup.
 - Bridge task lifecycle, request planning, and raw page-snapshot store foundations for the agentic browser roadmap.
 
 ### Changed

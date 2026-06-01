@@ -3,6 +3,7 @@ import {
 	parseProviderCredential,
 	parseOAuthCredentials,
 	resolveApiKey,
+	serializeFreeTierCredential,
 	serializeOAuthCredentials,
 	type OAuthCredentials,
 } from "../../../src/oauth/index.js";
@@ -49,6 +50,16 @@ describe("OAuth credential resolution", () => {
 		expect(isOAuthCredentials(jsonApiKey)).toBe(false);
 		expect(parseProviderCredential(jsonApiKey)).toEqual({ kind: "api-key", value: jsonApiKey });
 		await expect(resolveApiKey(jsonApiKey, "google-gemini-cli", storage)).resolves.toBe(jsonApiKey);
+		expect(storage.set).not.toHaveBeenCalled();
+	});
+
+	it("resolves serialized free-tier credentials as provider keys", async () => {
+		const stored = serializeFreeTierCredential("free-tier-token");
+		const storage = { set: vi.fn(async () => {}) };
+
+		expect(parseProviderCredential(stored)).toEqual({ kind: "free-tier", value: "free-tier-token" });
+		expect(isOAuthCredentials(stored)).toBe(false);
+		await expect(resolveApiKey(stored, "proxx", storage)).resolves.toBe("free-tier-token");
 		expect(storage.set).not.toHaveBeenCalled();
 	});
 });

@@ -3,17 +3,20 @@ import { DialogContent, DialogHeader } from "@mariozechner/mini-lit/dist/Dialog.
 import { DialogBase } from "@mariozechner/mini-lit/dist/DialogBase.js";
 import { html } from "lit";
 
+export type WelcomeSetupChoice = "free-tier" | "subscription-settings" | "provider-settings";
+
 /**
  * Shown on first launch when no API keys are configured.
- * Blocks until user clicks OK, then opens the API Keys & OAuth settings.
+ * Blocks until the user chooses a built-in free tier or provider settings.
  */
 export class WelcomeSetupDialog extends DialogBase {
-	private resolvePromise?: () => void;
+	private resolvePromise?: (choice: WelcomeSetupChoice) => void;
+	private choice: WelcomeSetupChoice = "provider-settings";
 
 	protected modalWidth = "min(450px, 90vw)";
 	protected modalHeight = "auto";
 
-	static show(): Promise<void> {
+	static show(): Promise<WelcomeSetupChoice> {
 		return new Promise((resolve) => {
 			const dialog = new WelcomeSetupDialog();
 			dialog.resolvePromise = resolve;
@@ -21,9 +24,14 @@ export class WelcomeSetupDialog extends DialogBase {
 		});
 	}
 
+	private choose(choice: WelcomeSetupChoice) {
+		this.choice = choice;
+		this.close();
+	}
+
 	override close() {
 		super.close();
-		this.resolvePromise?.();
+		this.resolvePromise?.(this.choice);
 	}
 
 	protected renderContent() {
@@ -35,15 +43,24 @@ export class WelcomeSetupDialog extends DialogBase {
 						title: "Welcome to Shuvgeist",
 					})}
 					<p class="text-sm text-foreground">
-						To get started, you need to connect at least one AI provider.
-						You can either log in with an existing subscription (Anthropic, OpenAI, or GitHub Copilot)
-						or enter an API key.
+						Start with the bundled free tier, log in with an existing subscription,
+						or bring your own API key. You can change providers any time.
 					</p>
-					<div class="flex justify-end">
+					<div class="grid gap-3">
 						${Button({
 							variant: "default",
-							onClick: () => this.close(),
-							children: "Set up provider",
+							onClick: () => this.choose("free-tier"),
+							children: "Use free tier",
+						})}
+						${Button({
+							variant: "secondary",
+							onClick: () => this.choose("subscription-settings"),
+							children: "Log in with subscription",
+						})}
+						${Button({
+							variant: "secondary",
+							onClick: () => this.choose("provider-settings"),
+							children: "Bring API key",
 						})}
 					</div>
 				`,

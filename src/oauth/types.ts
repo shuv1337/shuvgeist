@@ -84,3 +84,7 @@ export function parseOAuthCredentials(value: string): OAuthCredentials {
 export function serializeOAuthCredentials(credentials: OAuthCredentials): string {
 	return JSON.stringify({ kind: "oauth", credentials } satisfies OAuthProviderCredential);
 }
+
+export function serializeFreeTierCredential(value: string): string {
+	return JSON.stringify({ kind: "free-tier", value } satisfies FreeTierProviderCredential);
+}

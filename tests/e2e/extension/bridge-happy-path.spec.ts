@@ -28,7 +28,7 @@ async function openBridgeSettings(page: import("@playwright/test").Page): Promis
 		await continueAnyway.click();
 	}
 	await page.waitForTimeout(1500);
-	const setupProvider = page.getByRole("button", { name: "Set up provider" });
+	const setupProvider = page.getByRole("button", { name: "Bring API key" });
 	if (await setupProvider.isVisible().catch(() => false)) {
 		await setupProvider.click();
 	} else {

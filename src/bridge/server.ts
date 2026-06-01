@@ -415,36 +415,16 @@ export class BridgeServer {
 		}
 
 		if (msg.role === "extension") {
-			// Handle existing extension connection
-			const activeHandle = this.sessionRegistry.activeHandle;
-			if (activeHandle && activeHandle.connection.ws.readyState === WebSocket.OPEN) {
-				if (activeHandle.windowId === msg.windowId) {
-					// Same window reconnecting (sidepanel reload, settings change, etc.)
-					// — replace the old connection gracefully
-					bridgeLog("info", "replacing existing extension connection (same windowId)", {
-						...fields,
-						windowId: msg.windowId,
-					});
-					const oldWs = activeHandle.connection.ws;
-					this.clients.delete(oldWs);
-					this.sessionRegistry.unregisterByConnection(activeHandle.connection);
-					oldWs.close(4008, "Replaced by new connection from same window");
-				} else {
-					// Different window — reject (single active target constraint)
-					bridgeLog("warn", "extension already connected — rejecting new registration", {
-						...fields,
-						outcome: "rejected",
-						existingWindowId: activeHandle.windowId,
-						newWindowId: msg.windowId,
-					});
-					this.sendJson(client.ws, {
-						type: "register_result",
-						ok: false,
-						error: "Another extension target is already connected",
-					});
-					client.ws.close(4007, "Extension already connected");
-					return;
-				}
+			const existingHandle = this.sessionRegistry.get("chrome-window:" + msg.windowId);
+			if (existingHandle?.connection.ws.readyState === WebSocket.OPEN) {
+				bridgeLog("info", "replacing existing extension connection (same windowId)", {
+					...fields,
+					windowId: msg.windowId,
+				});
+				const oldWs = existingHandle.connection.ws;
+				this.clients.delete(oldWs);
+				this.sessionRegistry.unregisterByConnection(existingHandle.connection);
+				oldWs.close(4008, "Replaced by new connection from same window");
 			}
 
 			client.role = "extension";
@@ -1089,10 +1069,14 @@ export class BridgeServer {
 		const disconnectedTargetHandle =
 			client.role === "extension" ? this.sessionRegistry.unregisterByConnection(client) : undefined;
 		if (client.role === "extension" && disconnectedTargetHandle) {
-			this.activeRecordingLeases.clear();
+			for (const [recordingId, lease] of this.activeRecordingLeases) {
+				if (lease.targetHandleKey === disconnectedTargetHandle.key) this.activeRecordingLeases.delete(recordingId);
+			}
 			bridgeLog("info", "extension disconnected", { ...fields, windowId: client.windowId });
 
-			for (const pending of this.pendingRequests.values()) {
+			for (const [relayRequestId, pending] of this.pendingRequests) {
+				if (pending.targetHandleKey !== disconnectedTargetHandle.key) continue;
+				this.pendingRequests.delete(relayRequestId);
 				pending.span?.recordError(new Error("Extension disconnected while request was pending"));
 				pending.span?.setAttribute("bridge.outcome", "error");
 				pending.span?.end("error");
@@ -1106,7 +1090,6 @@ export class BridgeServer {
 					});
 				}
 			}
-			this.pendingRequests.clear();
 			void this.telemetry?.flush();
 
 			// Broadcast to all CLIs

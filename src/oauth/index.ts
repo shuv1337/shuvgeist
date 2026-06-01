@@ -17,6 +17,7 @@ import {
 	type ProviderCredential,
 	parseOAuthCredentials,
 	parseProviderCredential,
+	serializeFreeTierCredential,
 	serializeOAuthCredentials,
 } from "./types.js";
 
@@ -25,6 +26,7 @@ export {
 	isOAuthCredentials,
 	parseOAuthCredentials,
 	parseProviderCredential,
+	serializeFreeTierCredential,
 	type ProviderCredential,
 	serializeOAuthCredentials,
 };

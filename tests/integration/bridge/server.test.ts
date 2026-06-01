@@ -60,6 +60,29 @@ async function sendAndReadResponseAndEvent(
 	});
 }
 
+async function readMessages<T = unknown>(ws: WebSocket, count: number): Promise<T[]> {
+	return new Promise<T[]>((resolve, reject) => {
+		const messages: T[] = [];
+		const cleanup = () => {
+			ws.off("message", handleMessage);
+			ws.off("error", handleError);
+		};
+		const handleError = (error: Error) => {
+			cleanup();
+			reject(error);
+		};
+		const handleMessage = (data: Buffer | string) => {
+			messages.push(JSON.parse(typeof data === "string" ? data : data.toString("utf-8")) as T);
+			if (messages.length === count) {
+				cleanup();
+				resolve(messages);
+			}
+		};
+		ws.on("message", handleMessage);
+		ws.on("error", handleError);
+	});
+}
+
 async function waitForTelemetryPayloads(payloads: unknown[], count: number): Promise<void> {
 	for (let attempt = 0; attempt < 20 && payloads.length < count; attempt++) {
 		await new Promise((resolve) => setTimeout(resolve, 25));
@@ -400,7 +423,7 @@ describe("BridgeServer", () => {
 		cli.ws.close();
 	});
 
-	it("rejects invalid tokens and multiple active extension windows", async () => {
+	it("rejects invalid tokens and accepts multiple active extension windows", async () => {
 		const bad = new WebSocket(baseUrl);
 		await new Promise<void>((resolve) => bad.once("open", resolve));
 		bad.send(JSON.stringify({ type: "register", role: "cli", token: "wrong-token" }));
@@ -415,11 +438,9 @@ describe("BridgeServer", () => {
 			windowId: 12,
 			capabilities: ["status"],
 		});
-		expect(second.registerResult).toEqual({
-			type: "register_result",
-			ok: false,
-			error: "Another extension target is already connected",
-		});
+		expect(second.registerResult.ok).toBe(true);
+		const status = await fetch("http://127.0.0.1:" + port + "/status").then((response) => response.json());
+		expect(status.clients).toMatchObject({ extension: 2 });
 		first.ws.close();
 		second.ws.close();
 	});
@@ -444,6 +465,67 @@ describe("BridgeServer", () => {
 
 		extension.ws.close();
 		reconnect.ws.close();
+		cli.ws.close();
+	});
+
+	it("routes explicit chrome window targets independently while default stays active", async () => {
+		const first = await openRegisteredClient(baseUrl, "secret-token", "extension", {
+			windowId: 71,
+			capabilities: ["status", "session_inject"],
+		});
+		const second = await openRegisteredClient(baseUrl, "secret-token", "extension", {
+			windowId: 72,
+			capabilities: ["status", "session_inject"],
+		});
+		const cli = await openRegisteredClient(baseUrl, "secret-token", "cli", { name: "multi-target-cli" });
+
+		const firstResponse = sendRequestAndReadResponse(cli.ws, {
+			id: 7101,
+			method: "status",
+			target: { kind: "chrome-tab", tabRef: "window:71" },
+		});
+		const firstRelayed = await readMessage<{ id: number; target?: unknown }>(first.ws);
+		expect(firstRelayed).toMatchObject({ target: { kind: "chrome-tab", tabRef: "window:71" } });
+		first.ws.send(JSON.stringify({ id: firstRelayed.id, result: { window: 71 } }));
+		await expect(firstResponse).resolves.toEqual({ id: 7101, result: { window: 71 } });
+
+		const defaultResponse = sendRequestAndReadResponse(cli.ws, { id: 7201, method: "status" });
+		const defaultRelayed = await readMessage<{ id: number; target?: unknown }>(second.ws);
+		expect(defaultRelayed).toMatchObject({ target: { kind: "chrome-tab" } });
+		second.ws.send(JSON.stringify({ id: defaultRelayed.id, result: { window: 72 } }));
+		await expect(defaultResponse).resolves.toEqual({ id: 7201, result: { window: 72 } });
+
+			cli.ws.send(
+				JSON.stringify({
+				id: 7102,
+				method: "session_inject",
+				target: { kind: "chrome-tab", tabRef: "window:71" },
+				params: { expectedSessionId: "s71", text: "first" },
+				}),
+			);
+			cli.ws.send(
+				JSON.stringify({
+				id: 7202,
+				method: "session_inject",
+				target: { kind: "chrome-tab", tabRef: "window:72" },
+				params: { expectedSessionId: "s72", text: "second" },
+				}),
+			);
+		const firstInject = await readMessage<{ id: number; method: string }>(first.ws);
+			const secondInject = await readMessage<{ id: number; method: string }>(second.ws);
+			expect(firstInject).toMatchObject({ method: "session_inject" });
+			expect(secondInject).toMatchObject({ method: "session_inject" });
+			const lockResponseMessages = readMessages<{ id: number; result: { ok: boolean; window: number } }>(cli.ws, 2);
+			first.ws.send(JSON.stringify({ id: firstInject.id, result: { ok: true, window: 71 } }));
+			second.ws.send(JSON.stringify({ id: secondInject.id, result: { ok: true, window: 72 } }));
+			const lockResponses = (await lockResponseMessages).sort((left, right) => left.id - right.id);
+			expect(lockResponses).toEqual([
+				{ id: 7102, result: { ok: true, window: 71 } },
+				{ id: 7202, result: { ok: true, window: 72 } },
+			]);
+
+		first.ws.close();
+		second.ws.close();
 		cli.ws.close();
 	});
 

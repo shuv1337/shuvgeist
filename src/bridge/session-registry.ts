@@ -33,39 +33,49 @@ export interface RegisterTargetSessionHandleOptions<TConnection> {
 }
 
 export class SessionRegistry<TConnection> {
-	private handle?: TargetSessionHandle<TConnection>;
+	private handles = new Map<string, TargetSessionHandle<TConnection>>();
+	private activeKey?: string;
 
 	get activeHandle(): TargetSessionHandle<TConnection> | undefined {
-		return this.handle;
+		return this.get(this.activeKey) ?? this.lastHandle();
 	}
 
 	register(options: RegisterTargetSessionHandleOptions<TConnection>): TargetSessionHandle<TConnection> {
+		const key = this.keyFor(options);
+		const existing = this.handles.get(key);
+		existing?.writeLock.clear();
 		const handle: TargetSessionHandle<TConnection> = {
 			...options,
-			key: this.keyFor(options),
+			key,
 			writeLock: new PerHandleWriteLock(),
 		};
-		this.handle = handle;
+		this.handles.set(handle.key, handle);
+		this.activeKey = handle.key;
 		return handle;
 	}
 
-	resolve(_target?: BridgeTarget): TargetSessionHandle<TConnection> | undefined {
-		return this.handle;
+	resolve(target?: BridgeTarget): TargetSessionHandle<TConnection> | undefined {
+		if (!target || target.kind === "chrome-tab") {
+			if (!target?.tabRef && typeof target?.tabId !== "number") return this.activeHandle;
+			if (target.tabRef) return this.resolveChromeRef(target.tabRef) ?? this.activeHandle;
+			return this.activeHandle;
+		}
+		return this.resolveElectronTarget(target) ?? this.activeHandle;
 	}
 
 	get(key: string | undefined): TargetSessionHandle<TConnection> | undefined {
-		if (!key || this.handle?.key !== key) return undefined;
-		return this.handle;
+		return key ? this.handles.get(key) : undefined;
 	}
 
 	findByConnection(connection: TConnection): TargetSessionHandle<TConnection> | undefined {
-		return this.handle?.connection === connection ? this.handle : undefined;
+		return [...this.handles.values()].find((handle) => handle.connection === connection);
 	}
 
 	unregisterByConnection(connection: TConnection): TargetSessionHandle<TConnection> | undefined {
-		if (this.handle?.connection !== connection) return undefined;
-		const removed = this.handle;
-		this.handle = undefined;
+		const removed = this.findByConnection(connection);
+		if (!removed) return undefined;
+		this.handles.delete(removed.key);
+		if (this.activeKey === removed.key) this.activeKey = this.lastHandle()?.key;
 		removed.writeLock.clear();
 		return removed;
 	}
@@ -73,15 +83,52 @@ export class SessionRegistry<TConnection> {
 	releaseLocksForCli(
 		cliConnectionId: string,
 	): Array<{ handle: TargetSessionHandle<TConnection>; sessionId?: string }> {
-		const holder = this.handle?.writeLock.currentHolder;
-		if (!this.handle || holder?.cliConnectionId !== cliConnectionId) return [];
-		this.handle.writeLock.clear();
-		return [{ handle: this.handle, sessionId: holder.sessionId }];
+		const released: Array<{ handle: TargetSessionHandle<TConnection>; sessionId?: string }> = [];
+		for (const handle of this.handles.values()) {
+			const holder = handle.writeLock.currentHolder;
+			if (holder?.cliConnectionId !== cliConnectionId) continue;
+			handle.writeLock.clear();
+			released.push({ handle, sessionId: holder.sessionId });
+		}
+		return released;
 	}
 
 	clear(): void {
-		this.handle?.writeLock.clear();
-		this.handle = undefined;
+		for (const handle of this.handles.values()) handle.writeLock.clear();
+		this.handles.clear();
+		this.activeKey = undefined;
+	}
+
+	private lastHandle(): TargetSessionHandle<TConnection> | undefined {
+		return [...this.handles.values()].at(-1);
+	}
+
+	private resolveChromeRef(tabRef: string): TargetSessionHandle<TConnection> | undefined {
+		const normalized = tabRef.trim();
+		if (!normalized) return undefined;
+		const withoutPrefix = normalized
+			.replace(/^window:/u, "")
+			.replace(/^chrome-window:/u, "")
+			.replace(/^session:/u, "");
+		return [...this.handles.values()].find(
+			(handle) =>
+				handle.kind === "chrome-tab" &&
+				(handle.key === normalized ||
+					handle.key === "chrome-window:" + withoutPrefix ||
+					String(handle.windowId) === withoutPrefix ||
+					handle.sessionId === withoutPrefix),
+		);
+	}
+
+	private resolveElectronTarget(
+		target: Extract<BridgeTarget, { kind: "electron-window" }>,
+	): TargetSessionHandle<TConnection> | undefined {
+		return [...this.handles.values()].find(
+			(handle) =>
+				handle.kind === "electron-window" &&
+				((target.sessionId && handle.sessionId === target.sessionId) ||
+					(target.targetId && handle.key === target.targetId)),
+		);
 	}
 
 	private keyFor(
