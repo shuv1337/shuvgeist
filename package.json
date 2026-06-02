@@ -24,6 +24,7 @@
 		"test:e2e": "playwright test",
 		"test:e2e:extension": "playwright test tests/e2e/extension",
 		"test:e2e:site": "playwright test tests/e2e/site",
+		"bench:agent-eval": "tsx benchmarks/agent-eval/cli.ts",
 		"check": "biome check --write . && tsc --noEmit && tsc --noEmit -p tsconfig.node.json && npm run test:unit && npm run test:integration && cd site && npm run check",
 		"prepare": "husky"
 	},
