@@ -31,9 +31,9 @@
 	"dependencies": {
 		"@mariozechner/jailjs": "^0.1.0",
 		"@mariozechner/mini-lit": "file:../mini-lit",
-		"@mariozechner/pi-agent-core": "file:../pi-mono/packages/agent",
-		"@mariozechner/pi-ai": "file:../pi-mono/packages/ai",
-		"@mariozechner/pi-web-ui": "file:../pi-mono/packages/web-ui",
+		"@shuv1337/pi-agent-core": "0.78.0",
+		"@shuv1337/pi-ai": "0.78.0",
+		"@shuv1337/pi-web-ui": "0.78.0",
 		"@sinclair/typebox": "^0.34.41",
 		"chart.js": "^4.5.1",
 		"docx-preview": "^0.3.7",

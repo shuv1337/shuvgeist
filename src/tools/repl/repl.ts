@@ -1,8 +1,8 @@
-import type { AgentTool } from "@mariozechner/pi-agent-core";
-import type { Static } from "@mariozechner/pi-ai";
-import { Type } from "@mariozechner/pi-ai";
-import type { SandboxFile, SandboxResult } from "@mariozechner/pi-web-ui/components/SandboxedIframe.js";
-import type { SandboxRuntimeProvider } from "@mariozechner/pi-web-ui/sandbox/SandboxRuntimeProvider.js";
+import type { AgentTool } from "@shuv1337/pi-agent-core";
+import type { Static } from "@shuv1337/pi-ai";
+import { Type } from "@shuv1337/pi-ai";
+import type { SandboxFile, SandboxResult } from "@shuv1337/pi-web-ui/components/SandboxedIframe.js";
+import type { SandboxRuntimeProvider } from "@shuv1337/pi-web-ui/sandbox/SandboxRuntimeProvider.js";
 import { injectOverlayForActiveTab, removeOverlayForActiveTab } from "./overlay-inject.js";
 
 // Execute JavaScript code with attachments using SandboxedIframe
@@ -61,7 +61,7 @@ export async function executeJavaScript(
 	}
 
 	// Dynamically import SandboxIframe to avoid DOM deps at module load time
-	const { SandboxIframe } = await import("@mariozechner/pi-web-ui/components/SandboxedIframe.js");
+	const { SandboxIframe } = await import("@shuv1337/pi-web-ui/components/SandboxedIframe.js");
 
 	// Create a SandboxedIframe instance for execution
 	const sandbox = new SandboxIframe();

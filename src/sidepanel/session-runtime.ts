@@ -1,5 +1,5 @@
-import type { Agent, AgentMessage } from "@mariozechner/pi-agent-core";
-import type { Model } from "@mariozechner/pi-ai";
+import type { Agent, AgentMessage } from "@shuv1337/pi-agent-core";
+import type { Model } from "@shuv1337/pi-ai";
 import {
 	type AgentRuntimeHooks,
 	type AgentRuntimeInitialState,

@@ -37,7 +37,7 @@ class AudioMock {
 
 const executeMock = vi.fn();
 
-vi.mock("@mariozechner/pi-web-ui", () => ({
+vi.mock("@shuv1337/pi-web-ui", () => ({
 	SandboxIframe: class {
 		style = { display: "" };
 		sandboxUrlProvider = () => "";

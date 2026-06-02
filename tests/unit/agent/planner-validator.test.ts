@@ -3,7 +3,7 @@ import type {
 	AgentMessage,
 	BeforeToolCallContext,
 	ShouldStopAfterTurnContext,
-} from "@mariozechner/pi-agent-core";
+} from "@shuv1337/pi-agent-core";
 import { createPlannerValidatorHooks, createPlannerValidatorState } from "../../../src/agent/planner-validator.js";
 
 function userMessage(text: string): AgentMessage {

@@ -1,6 +1,6 @@
 const navigateExecute = vi.hoisted(() => vi.fn());
 
-vi.mock("@mariozechner/pi-web-ui/sandbox/RuntimeMessageBridge.js", () => ({
+vi.mock("@shuv1337/pi-web-ui/sandbox/RuntimeMessageBridge.js", () => ({
 	RuntimeMessageBridge: {
 		generateBridgeCode: vi.fn(() => "window.sendRuntimeMessage = () => {};"),
 	},

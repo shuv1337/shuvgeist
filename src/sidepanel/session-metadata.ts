@@ -1,5 +1,5 @@
-import type { AgentMessage, AgentState } from "@mariozechner/pi-agent-core";
-import type { SessionMetadata } from "@mariozechner/pi-web-ui";
+import type { AgentMessage, AgentState } from "@shuv1337/pi-agent-core";
+import type { SessionMetadata } from "@shuv1337/pi-web-ui";
 
 export type ShuvgeistSessionMetadata = SessionMetadata & { modelId: string };
 

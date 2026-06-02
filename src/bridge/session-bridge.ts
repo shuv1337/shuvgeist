@@ -1,4 +1,4 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage } from "@shuv1337/pi-agent-core";
 
 /** Check if a message is a user message with attachments (role-based type guard). */
 function isUserMessageWithAttachments(

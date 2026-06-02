@@ -1,4 +1,4 @@
-import type { AgentMessage, AgentState } from "@mariozechner/pi-agent-core";
+import type { AgentMessage, AgentState } from "@shuv1337/pi-agent-core";
 import {
 	aggregateSessionUsage,
 	buildSessionMetadata,

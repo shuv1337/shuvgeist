@@ -1,4 +1,4 @@
-import type { SettingsTab } from "@mariozechner/pi-web-ui";
+import type { SettingsTab } from "@shuv1337/pi-web-ui";
 import { AboutTab } from "./AboutTab.js";
 import { ApiKeysOAuthTab } from "./ApiKeysOAuthTab.js";
 import { BridgeTab } from "./BridgeTab.js";

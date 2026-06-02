@@ -2,14 +2,14 @@ import "@mariozechner/mini-lit/dist/MarkdownBlock.js";
 import { icon } from "@mariozechner/mini-lit";
 import { Diff } from "@mariozechner/mini-lit/dist/Diff.js";
 import i18n from "@mariozechner/mini-lit/dist/i18n.js";
-import type { ToolResultMessage } from "@mariozechner/pi-ai";
+import type { ToolResultMessage } from "@shuv1337/pi-ai";
 import {
 	registerToolRenderer,
 	renderCollapsibleHeader,
 	renderHeader,
 	type ToolRenderer,
 	type ToolRenderResult,
-} from "@mariozechner/pi-web-ui";
+} from "@shuv1337/pi-web-ui";
 import { html, type TemplateResult } from "lit";
 import { createRef, ref } from "lit/directives/ref.js";
 import { Sparkles } from "lucide";

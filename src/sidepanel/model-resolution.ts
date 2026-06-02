@@ -1,5 +1,5 @@
-import { type Api, getModel, getModels, type Model } from "@mariozechner/pi-ai";
-import type { CustomProvider } from "@mariozechner/pi-web-ui/storage/stores/custom-providers-store.js";
+import { type Api, getModel, getModels, type Model } from "@shuv1337/pi-ai";
+import type { CustomProvider } from "@shuv1337/pi-web-ui/storage/stores/custom-providers-store.js";
 import { getProviderCredentialStorageKey, getProviderDefaultModelId } from "../providers/catalog.js";
 import { BUNDLED_FREE_TIER_PROVIDER, createBundledFreeTierModel } from "../providers/free-tier.js";
 

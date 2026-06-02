@@ -1,5 +1,5 @@
-import type { AgentTool } from "@mariozechner/pi-agent-core";
-import { type Static, StringEnum, Type } from "@mariozechner/pi-ai";
+import type { AgentTool } from "@shuv1337/pi-agent-core";
+import { type Static, StringEnum, Type } from "@shuv1337/pi-ai";
 import { SKILL_TOOL_DESCRIPTION } from "../prompts/prompts.js";
 import { getShuvgeistStorage } from "../storage/app-storage.js";
 import type { Skill } from "../storage/stores/skills-store.js";
@@ -72,7 +72,7 @@ async function validateJavaScriptSyntax(code: string): Promise<{ valid: boolean;
 	}
 
 	// Dynamically import SandboxIframe to avoid DOM deps at module load time
-	const { SandboxIframe } = await import("@mariozechner/pi-web-ui");
+	const { SandboxIframe } = await import("@shuv1337/pi-web-ui");
 
 	const sandbox = new SandboxIframe();
 	sandbox.sandboxUrlProvider = getSandboxUrl;

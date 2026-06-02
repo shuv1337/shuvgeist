@@ -1,6 +1,6 @@
 import { Button } from "@mariozechner/mini-lit/dist/Button.js";
 import { Input } from "@mariozechner/mini-lit/dist/Input.js";
-import { SettingsTab } from "@mariozechner/pi-web-ui";
+import { SettingsTab } from "@shuv1337/pi-web-ui";
 import { html } from "lit";
 import { BRIDGE_SETTINGS_KEY, type BridgeSettings } from "../bridge/internal-messages.js";
 import { getDefaultBridgeSettings, normalizeBridgeSettings } from "../bridge/settings.js";

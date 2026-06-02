@@ -8,7 +8,7 @@
  * or offscreen document (for REPL when sidepanel is closed).
  */
 
-import { setAppStorage } from "@mariozechner/pi-web-ui";
+import { setAppStorage } from "@shuv1337/pi-web-ui";
 import {
 	buildLockedSessionsMessage,
 	buildLockResult,

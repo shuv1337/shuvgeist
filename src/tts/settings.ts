@@ -1,4 +1,4 @@
-import { getAppStorage } from "@mariozechner/pi-web-ui";
+import { getAppStorage } from "@shuv1337/pi-web-ui";
 import type { TtsProviderId, TtsSettingsSnapshot, TtsVoice } from "./types.js";
 
 export const TTS_SETTINGS_KEYS = {

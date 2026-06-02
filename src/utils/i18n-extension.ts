@@ -1,5 +1,5 @@
 import { setTranslations } from "@mariozechner/mini-lit";
-import { translations as webUiTranslations } from "@mariozechner/pi-web-ui";
+import { translations as webUiTranslations } from "@shuv1337/pi-web-ui";
 
 declare module "@mariozechner/mini-lit" {
 	interface i18nMessages {

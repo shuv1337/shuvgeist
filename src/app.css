@@ -4,8 +4,8 @@
 /* Tell Tailwind to scan mini-lit components */
 @source "../node_modules/@mariozechner/mini-lit/dist";
 
-/* Tell Tailwind to scan web-ui components from file: dependency */
-@source "../node_modules/@mariozechner/pi-web-ui/src";
+/* Tell Tailwind to scan web-ui components (published package ships dist only) */
+@source "../node_modules/@shuv1337/pi-web-ui/dist";
 
 /* Tell Tailwind to scan local components */
 @source "../src/**/*.ts";

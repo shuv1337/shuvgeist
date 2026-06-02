@@ -12,7 +12,7 @@
  * (runtimes are stringified with `.toString()`) and must match the sidepanel
  * providers' runtime surfaces exactly.
  */
-import type { SandboxRuntimeProvider } from "@mariozechner/pi-web-ui/sandbox/SandboxRuntimeProvider.js";
+import type { SandboxRuntimeProvider } from "@shuv1337/pi-web-ui/sandbox/SandboxRuntimeProvider.js";
 import {
 	BROWSERJS_RUNTIME_PROVIDER_DESCRIPTION,
 	NATIVE_INPUT_EVENTS_DESCRIPTION,

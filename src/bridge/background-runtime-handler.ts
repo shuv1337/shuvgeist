@@ -14,7 +14,7 @@
  * possible and provide a self-contained wrapper for `chrome.userScripts.execute()`
  * that does NOT depend on the DOM-bound `RUNTIME_MESSAGE_ROUTER`.
  */
-import { RuntimeMessageBridge } from "@mariozechner/pi-web-ui/sandbox/RuntimeMessageBridge.js";
+import { RuntimeMessageBridge } from "@shuv1337/pi-web-ui/sandbox/RuntimeMessageBridge.js";
 import { getShuvgeistStorage } from "../storage/app-storage.js";
 import { isProtectedTabUrl, resolveTabTarget } from "../tools/helpers/browser-target.js";
 import { getSharedDebuggerManager } from "../tools/helpers/debugger-manager.js";

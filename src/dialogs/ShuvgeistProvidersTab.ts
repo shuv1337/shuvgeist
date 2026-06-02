@@ -1,5 +1,5 @@
 import { Button } from "@mariozechner/mini-lit/dist/Button.js";
-import { type CustomProvider, getAppStorage, ProvidersModelsTab } from "@mariozechner/pi-web-ui";
+import { type CustomProvider, getAppStorage, ProvidersModelsTab } from "@shuv1337/pi-web-ui";
 import { html, type TemplateResult } from "lit";
 import { Toast } from "../components/Toast.js";
 

@@ -1,4 +1,4 @@
-import { SettingsTab } from "@mariozechner/pi-web-ui";
+import { SettingsTab } from "@shuv1337/pi-web-ui";
 import { html, type TemplateResult } from "lit";
 import { customElement, state } from "lit/decorators.js";
 import type { BridgeConnectionState } from "../bridge/extension-client.js";

@@ -1,6 +1,6 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { ImageContent, Message, TextContent } from "@mariozechner/pi-ai";
-import { convertAttachments, isUserMessageWithAttachments } from "@mariozechner/pi-web-ui";
+import type { AgentMessage } from "@shuv1337/pi-agent-core";
+import type { ImageContent, Message, TextContent } from "@shuv1337/pi-ai";
+import { convertAttachments, isUserMessageWithAttachments } from "@shuv1337/pi-web-ui";
 import type { PageSnapshotEntry, PageSnapshotResult } from "../tools/page-snapshot.js";
 import type { NavigationMessage } from "./NavigationMessage.js";
 

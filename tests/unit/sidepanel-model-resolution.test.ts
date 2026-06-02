@@ -1,4 +1,4 @@
-import type { Model } from "@mariozechner/pi-ai";
+import type { Model } from "@shuv1337/pi-ai";
 import {
 	isProxxProviderName,
 	normalizeModelForRuntime,

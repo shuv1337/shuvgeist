@@ -1,4 +1,4 @@
-import type { SandboxRuntimeProvider } from "@mariozechner/pi-web-ui/sandbox/SandboxRuntimeProvider.js";
+import type { SandboxRuntimeProvider } from "@shuv1337/pi-web-ui/sandbox/SandboxRuntimeProvider.js";
 import type { BridgeTelemetry, TraceContext } from "../bridge/telemetry.js";
 import { NATIVE_INPUT_EVENTS_DESCRIPTION } from "../prompts/prompts.js";
 import { resolveTabTarget } from "./helpers/browser-target.js";

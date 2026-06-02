@@ -1,5 +1,5 @@
-import { Store } from "@mariozechner/pi-web-ui/storage/store.js";
-import type { StoreConfig } from "@mariozechner/pi-web-ui/storage/types.js";
+import { Store } from "@shuv1337/pi-web-ui/storage/store.js";
+import type { StoreConfig } from "@shuv1337/pi-web-ui/storage/types.js";
 
 export interface SkillMemory {
 	id: string;

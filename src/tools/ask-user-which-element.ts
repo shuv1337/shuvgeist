@@ -1,5 +1,5 @@
-import type { AgentTool } from "@mariozechner/pi-agent-core";
-import { type Static, Type } from "@mariozechner/pi-ai";
+import type { AgentTool } from "@shuv1337/pi-agent-core";
+import { type Static, Type } from "@shuv1337/pi-ai";
 import { ASK_USER_WHICH_ELEMENT_TOOL_DESCRIPTION } from "../prompts/prompts.js";
 import { isProtectedTabUrl, resolveTabTarget } from "./helpers/browser-target.js";
 import { type ElementInfo, ElementPickCancelled, pickElement } from "./helpers/element-picker.js";

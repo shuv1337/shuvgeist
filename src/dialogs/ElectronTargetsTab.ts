@@ -1,5 +1,5 @@
 import { Button } from "@mariozechner/mini-lit/dist/Button.js";
-import { SettingsTab } from "@mariozechner/pi-web-ui";
+import { SettingsTab } from "@shuv1337/pi-web-ui";
 import { html } from "lit";
 import {
 	BRIDGE_ELECTRON_STATE_KEY,

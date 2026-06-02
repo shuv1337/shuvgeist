@@ -1,5 +1,5 @@
 import { Button } from "@mariozechner/mini-lit/dist/Button.js";
-import { getAppStorage, SettingsTab } from "@mariozechner/pi-web-ui";
+import { getAppStorage, SettingsTab } from "@shuv1337/pi-web-ui";
 import { html, type TemplateResult } from "lit";
 import { customElement, state } from "lit/decorators.js";
 import { Toast } from "../components/Toast.js";

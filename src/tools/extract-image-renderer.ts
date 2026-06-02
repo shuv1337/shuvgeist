@@ -1,5 +1,5 @@
-import type { ImageContent, ToolResultMessage } from "@mariozechner/pi-ai";
-import { registerToolRenderer, renderHeader, type ToolRenderer, type ToolRenderResult } from "@mariozechner/pi-web-ui";
+import type { ImageContent, ToolResultMessage } from "@shuv1337/pi-ai";
+import { registerToolRenderer, renderHeader, type ToolRenderer, type ToolRenderResult } from "@shuv1337/pi-web-ui";
 import { html } from "lit";
 import { Image as ImageIcon } from "lucide";
 import type { ExtractImageDetails, ExtractImageParams } from "./extract-image.js";

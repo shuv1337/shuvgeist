@@ -1,6 +1,6 @@
-import { RuntimeMessageBridge } from "@mariozechner/pi-web-ui/sandbox/RuntimeMessageBridge.js";
-import { RUNTIME_MESSAGE_ROUTER } from "@mariozechner/pi-web-ui/sandbox/RuntimeMessageRouter.js";
-import type { SandboxRuntimeProvider } from "@mariozechner/pi-web-ui/sandbox/SandboxRuntimeProvider.js";
+import { RuntimeMessageBridge } from "@shuv1337/pi-web-ui/sandbox/RuntimeMessageBridge.js";
+import { RUNTIME_MESSAGE_ROUTER } from "@shuv1337/pi-web-ui/sandbox/RuntimeMessageRouter.js";
+import type { SandboxRuntimeProvider } from "@shuv1337/pi-web-ui/sandbox/SandboxRuntimeProvider.js";
 
 export interface UserScriptsCheckResult {
 	available: boolean;

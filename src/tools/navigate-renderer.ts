@@ -1,6 +1,6 @@
 import { i18n, icon } from "@mariozechner/mini-lit";
-import type { ToolResultMessage } from "@mariozechner/pi-ai";
-import { registerToolRenderer, type ToolRenderer, type ToolRenderResult } from "@mariozechner/pi-web-ui";
+import type { ToolResultMessage } from "@shuv1337/pi-ai";
+import { registerToolRenderer, type ToolRenderer, type ToolRenderResult } from "@shuv1337/pi-web-ui";
 import { html } from "lit";
 import { Loader2 } from "lucide";
 import { SkillPill } from "../components/SkillPill.js";

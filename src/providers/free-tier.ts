@@ -1,5 +1,5 @@
-import { getModels, type Model } from "@mariozechner/pi-ai";
-import type { CustomProvider } from "@mariozechner/pi-web-ui/storage/stores/custom-providers-store.js";
+import { getModels, type Model } from "@shuv1337/pi-ai";
+import type { CustomProvider } from "@shuv1337/pi-web-ui/storage/stores/custom-providers-store.js";
 
 export const BUNDLED_FREE_TIER_PROVIDER = "proxx";
 export const BUNDLED_FREE_TIER_MODEL = "gpt-5";

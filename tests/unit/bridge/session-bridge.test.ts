@@ -1,4 +1,4 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage } from "@shuv1337/pi-agent-core";
 import {
 	buildSessionHistoryResult,
 	projectSessionMessage,

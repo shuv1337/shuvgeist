@@ -4,8 +4,8 @@ import type {
 	AgentMessage,
 	BeforeToolCallContext,
 	BeforeToolCallResult,
-} from "@mariozechner/pi-agent-core";
-import type { TextContent } from "@mariozechner/pi-ai";
+} from "@shuv1337/pi-agent-core";
+import type { TextContent } from "@shuv1337/pi-ai";
 import type { AgentRuntimeHooks } from "./runtime.js";
 
 export interface PlannerValidatorNote {

@@ -1,5 +1,5 @@
 import { Select, type SelectOption } from "@mariozechner/mini-lit/dist/Select.js";
-import { SettingsTab } from "@mariozechner/pi-web-ui";
+import { SettingsTab } from "@shuv1337/pi-web-ui";
 import { Chart, type ChartConfiguration, registerables } from "chart.js";
 import { html, type PropertyValues } from "lit";
 import { getShuvgeistStorage } from "../storage/app-storage.js";

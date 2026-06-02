@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { setAppStorage } from "@mariozechner/pi-web-ui";
+import { setAppStorage } from "@shuv1337/pi-web-ui";
 
 const settingsStore = new Map<string, unknown>();
 const providerKeyStore = new Map<string, string>();
@@ -19,8 +19,8 @@ const storageMock = {
 	},
 };
 
-vi.mock("@mariozechner/pi-web-ui", async () => {
-	const actual = await vi.importActual<typeof import("@mariozechner/pi-web-ui")>("@mariozechner/pi-web-ui");
+vi.mock("@shuv1337/pi-web-ui", async () => {
+	const actual = await vi.importActual<typeof import("@shuv1337/pi-web-ui")>("@shuv1337/pi-web-ui");
 	return {
 		...actual,
 		getAppStorage: () => storageMock,

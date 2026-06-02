@@ -1,4 +1,4 @@
-import type { Api, Model } from "@mariozechner/pi-ai";
+import type { Api, Model } from "@shuv1337/pi-ai";
 import { describe, expect, it } from "vitest";
 import {
 	DirectCdpAgentSessionAdapter,

@@ -6,7 +6,7 @@
  * lifecycle changes inside the shared offscreen document.
  */
 
-import { SandboxIframe } from "@mariozechner/pi-web-ui";
+import { SandboxIframe } from "@shuv1337/pi-web-ui";
 import type { BridgeReplMessageResponse, BridgeToOffscreenMessage } from "./bridge/internal-messages.js";
 import { buildOffscreenRuntimeProviders } from "./bridge/offscreen-runtime-providers.js";
 import type { TtsOffscreenMessage, TtsOffscreenResponse } from "./tts/internal-messages.js";

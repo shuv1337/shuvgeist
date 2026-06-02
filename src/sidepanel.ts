@@ -1,8 +1,8 @@
 import { icon } from "@mariozechner/mini-lit";
 import { Button } from "@mariozechner/mini-lit/dist/Button.js";
 import { Input } from "@mariozechner/mini-lit/dist/Input.js";
-import type { Agent, AgentEvent, AgentMessage, AgentTool } from "@mariozechner/pi-agent-core";
-import { getModel, type Model, registerModels } from "@mariozechner/pi-ai";
+import type { Agent, AgentEvent, AgentMessage, AgentTool } from "@shuv1337/pi-agent-core";
+import { getModel, type Model, registerModels } from "@shuv1337/pi-ai";
 import {
 	ChatPanel,
 	createExtractDocumentTool,
@@ -12,7 +12,7 @@ import {
 	// PersistentStorageDialog,
 	setAppStorage,
 	setShowJsonMode,
-} from "@mariozechner/pi-web-ui";
+} from "@shuv1337/pi-web-ui";
 import { html, render } from "lit";
 import { Crosshair, History, Plus, Settings, Volume2 } from "lucide";
 import { buildSkillMemoryWrites } from "./agent/skill-memory.js";
@@ -197,8 +197,8 @@ const FIREWORKS_SESSION_AFFINITY =
 
 const FIREWORKS_EXTENSION_MODELS: Model<"openai-completions">[] = [
 	{
-		id: "accounts/fireworks/routers/kimi-k2p5-turbo",
-		name: "Kimi K2.5 Turbo (Fireworks)",
+		id: "accounts/fireworks/routers/kimi-k2p6-turbo",
+		name: "Kimi K2.6 Turbo (Fireworks)",
 		api: "openai-completions",
 		provider: "fireworks",
 		baseUrl: "https://api.fireworks.ai/inference/v1",

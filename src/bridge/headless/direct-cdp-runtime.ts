@@ -1,5 +1,5 @@
-import type { AgentMessage, AgentTool } from "@mariozechner/pi-agent-core";
-import { type Api, type Model, type Static, Type } from "@mariozechner/pi-ai";
+import type { AgentMessage, AgentTool } from "@shuv1337/pi-agent-core";
+import { type Api, type Model, type Static, Type } from "@shuv1337/pi-ai";
 import {
 	type AgentRuntimeInitialState,
 	type AgentRuntimeThinkingLevel,

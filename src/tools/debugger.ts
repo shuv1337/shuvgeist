@@ -1,5 +1,5 @@
-import type { AgentTool, AgentToolUpdateCallback } from "@mariozechner/pi-agent-core";
-import { type Static, StringEnum, Type } from "@mariozechner/pi-ai";
+import type { AgentTool, AgentToolUpdateCallback } from "@shuv1337/pi-agent-core";
+import { type Static, StringEnum, Type } from "@shuv1337/pi-ai";
 import type { TraceContext } from "../bridge/telemetry.js";
 import { resolveBrowserTarget } from "./helpers/browser-target.js";
 import { ChromeDebuggerSession } from "./helpers/cdp-session.js";

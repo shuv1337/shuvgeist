@@ -1,7 +1,7 @@
 import { Button } from "@mariozechner/mini-lit/dist/Button.js";
 import { DialogContent, DialogHeader } from "@mariozechner/mini-lit/dist/Dialog.js";
 import { DialogBase } from "@mariozechner/mini-lit/dist/DialogBase.js";
-import { getAppStorage } from "@mariozechner/pi-web-ui";
+import { getAppStorage } from "@shuv1337/pi-web-ui";
 import { html } from "lit";
 import { Toast } from "../components/Toast.js";
 import {
@@ -12,7 +12,7 @@ import {
 	serializeOAuthCredentials,
 } from "../oauth/index.js";
 // ProviderKeyInput custom element is registered via pi-web-ui main export
-import "@mariozechner/pi-web-ui";
+import "@shuv1337/pi-web-ui";
 
 /**
  * Prompt dialog shown when trying to use a provider with no key.

@@ -10,8 +10,8 @@ const storageMock = {
 	},
 };
 
-vi.mock("@mariozechner/pi-web-ui", async () => {
-	const actual = await vi.importActual<typeof import("@mariozechner/pi-web-ui")>("@mariozechner/pi-web-ui");
+vi.mock("@shuv1337/pi-web-ui", async () => {
+	const actual = await vi.importActual<typeof import("@shuv1337/pi-web-ui")>("@shuv1337/pi-web-ui");
 	return {
 		...actual,
 		getAppStorage: () => storageMock,

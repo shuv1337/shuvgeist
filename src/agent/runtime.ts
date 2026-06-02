@@ -1,4 +1,4 @@
-import { Agent, type AgentOptions, type AgentState } from "@mariozechner/pi-agent-core";
+import { Agent, type AgentOptions, type AgentState } from "@shuv1337/pi-agent-core";
 import {
 	createPlannerValidatorHooks,
 	type PlannerValidatorOptions,

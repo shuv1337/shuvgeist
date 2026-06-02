@@ -10,7 +10,7 @@
 // raw payload — the LLM path does not read it.
 // ============================================================================
 
-import type { Attachment } from "@mariozechner/pi-web-ui";
+import type { Attachment } from "@shuv1337/pi-web-ui";
 import type { ElementInfo } from "./element-picker.js";
 
 // Curated allowlist of computed styles to forward to the model. Anything not

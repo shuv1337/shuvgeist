@@ -28,7 +28,7 @@ export const PROVIDER_CATALOG = {
 	fireworks: {
 		id: "fireworks",
 		credentialStorageKey: "fireworks",
-		defaultModelId: "accounts/fireworks/routers/kimi-k2p5-turbo",
+		defaultModelId: "accounts/fireworks/routers/kimi-k2p6-turbo",
 	},
 	"github-copilot": {
 		id: "github-copilot",

@@ -9,7 +9,7 @@ import {
 	type AssistantMessageEvent,
 	EventStream,
 	type Model,
-} from "@mariozechner/pi-ai";
+} from "@shuv1337/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
 import type { CreateAgentRuntimeOptions } from "../../../src/agent/runtime.js";
 import {

@@ -1,11 +1,11 @@
-import type { ToolResultMessage } from "@mariozechner/pi-ai";
+import type { ToolResultMessage } from "@shuv1337/pi-ai";
 import {
 	registerToolRenderer,
 	renderCollapsibleHeader,
 	renderHeader,
 	type ToolRenderer,
 	type ToolRenderResult,
-} from "@mariozechner/pi-web-ui";
+} from "@shuv1337/pi-web-ui";
 import { html } from "lit";
 import { createRef, ref } from "lit/directives/ref.js";
 import { Bug } from "lucide";

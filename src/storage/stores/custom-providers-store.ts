@@ -1,8 +1,8 @@
-import { getModels, type Model } from "@mariozechner/pi-ai";
+import { getModels, type Model } from "@shuv1337/pi-ai";
 import {
 	CustomProvidersStore as BaseCustomProvidersStore,
 	type CustomProvider,
-} from "@mariozechner/pi-web-ui/storage/stores/custom-providers-store.js";
+} from "@shuv1337/pi-web-ui/storage/stores/custom-providers-store.js";
 
 const PROXX_PROVIDER_NAME = "proxx";
 const PROXX_CANONICAL_BASE_URL = "http://shuvdev:8789/v1";
