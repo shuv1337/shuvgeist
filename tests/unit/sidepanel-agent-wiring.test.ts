@@ -170,6 +170,10 @@ describe("sidepanel createAgent wiring", () => {
 		]) {
 			expect(propertyInitializerText(sidepanelSourceFile, runtimeOptions, hook)).toBe("options." + hook);
 		}
+		expect(propertyInitializerText(sidepanelSourceFile, runtimeOptions, "plannerValidator")).toBe(
+			"plannerValidatorEnabled ? {} : false",
+		);
+		expect(createAgent.getText(sidepanelSourceFile)).toContain('storage.settings.get<boolean>("agent.plannerValidator.enabled")');
 	});
 
 	it("keeps the current sidepanel tools list and debugger-mode conditional", () => {

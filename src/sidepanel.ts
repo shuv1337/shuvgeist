@@ -755,6 +755,7 @@ const createAgent = async (options: SidepanelCreateAgentOptions = {}, shouldSave
 				model: initialState.model ? normalizeModelForRuntime(initialState.model) : initialState.model,
 			}
 		: initialState;
+	const plannerValidatorEnabled = (await storage.settings.get<boolean>("agent.plannerValidator.enabled")) !== false;
 
 	const agentSessionContext = createAgentRuntime({
 		initialState: normalizedInitialState,
@@ -776,6 +777,7 @@ const createAgent = async (options: SidepanelCreateAgentOptions = {}, shouldSave
 		afterToolCall: options.afterToolCall,
 		shouldStopAfterTurn: options.shouldStopAfterTurn,
 		prepareNextTurn: options.prepareNextTurn,
+		plannerValidator: plannerValidatorEnabled ? {} : false,
 	});
 	agent = agentSessionContext.agent;
 

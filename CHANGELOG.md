@@ -14,6 +14,7 @@
 - Bridge cookie import can selectively apply consented site cookies through the sensitive extension relay.
 - First-run setup now offers a bundled free-tier model path alongside subscription login and API-key setup.
 - Bridge task lifecycle, request planning, and raw page-snapshot store foundations for the agentic browser roadmap.
+- Sidepanel agents now run with the planner-validator loop enabled by default, with a local setting escape hatch.
 
 ### Changed
 
