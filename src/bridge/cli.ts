@@ -62,6 +62,7 @@ import {
 } from "./protocol.js";
 import { assertFfmpegAvailable, FfmpegWebmEncoder } from "./recording/ffmpeg-encoder.js";
 import { BridgeServer } from "./server.js";
+import { ensureSkillInstalled, installSkill, resolveSkillTargetDir } from "./skill-install.js";
 import type { BridgeTarget } from "./target.js";
 import { BridgeTelemetry } from "./telemetry.js";
 import { formatWorkflowValidationErrors, validateWorkflowDefinition } from "./workflow-schema.js";
@@ -1329,6 +1330,7 @@ Usage:
   shuvgeist new-session [provider/model-id] [--json]
   shuvgeist set-model <provider/model-id> [--json]
   shuvgeist artifacts [--json]
+  shuvgeist skill <install|path> [--force] [--json]
 
 Global options:
   --url <ws://...>    Bridge server URL
@@ -1398,6 +1400,8 @@ Notes:
   Example: shuvgeist screenshot --target electron:e1:w1 --out app.png
   screenshot --out writes a sibling viewport.json with css/image size, DPR, and scale;
   screenshot --json includes those same metadata fields in the response.
+  The packaged agent skill auto-installs to ~/.agents/skills/shuvgeist on each run
+  (run "shuvgeist skill install --force" to reinstall it explicitly).
 
 Examples:
   shuvgeist launch --url http://127.0.0.1:3000 --headless --user-data-dir /tmp/shuvgeist-profile --json
@@ -1421,6 +1425,49 @@ Exit codes:
   2  no extension target connected
   3  auth/configuration/network/invalid-method/registration error
 `);
+}
+
+/**
+ * Handle the local `skill` command: install/refresh the packaged agent skill
+ * into ~/.agents/skills, or print its install path. Runs without a bridge.
+ */
+function runSkillCommand(args: string[]): void {
+	const sub = args[0];
+	const json = args.includes("--json");
+	const force = args.includes("--force");
+
+	if (sub === "path") {
+		const dir = resolveSkillTargetDir();
+		console.log(json ? JSON.stringify({ path: dir }) : dir);
+		return;
+	}
+
+	if (sub === "install") {
+		const result = installSkill({ version: VERSION, force });
+		if (json) {
+			console.log(JSON.stringify(result));
+		} else if (result.action === "installed") {
+			console.log(`Installed shuvgeist skill to ${result.targetDir} (v${result.installedVersion})`);
+		} else if (result.action === "updated") {
+			console.log(
+				`Updated shuvgeist skill at ${result.targetDir} (v${result.previousVersion ?? "?"} -> v${result.installedVersion})`,
+			);
+		} else if (result.action === "unchanged") {
+			console.log(`shuvgeist skill already up to date at ${result.targetDir} (v${result.installedVersion})`);
+		} else {
+			console.error(`Could not install shuvgeist skill: ${result.reason ?? "unknown error"}`);
+		}
+		if (result.action === "skipped") process.exitCode = 1;
+		return;
+	}
+
+	const usage = "Usage: shuvgeist skill <install|path> [--force] [--json]";
+	if (sub === undefined || sub === "--help" || sub === "-h") {
+		console.log(usage);
+	} else {
+		console.error(`Unknown skill subcommand: ${sub}\n${usage}`);
+		process.exitCode = 1;
+	}
 }
 
 /**
@@ -1462,6 +1509,17 @@ async function main(): Promise<void> {
 		console.log(VERSION);
 		process.exit(0);
 	}
+
+	// `skill` is a local management command (no bridge needed): it syncs the
+	// packaged agent skill into ~/.agents/skills so coding agents discover it.
+	if (args[0] === "skill") {
+		runSkillCommand(args.slice(1));
+		return;
+	}
+
+	// Best-effort: keep the packaged skill synced to ~/.agents/skills on every
+	// real command run (version-gated, silent, never fatal).
+	ensureSkillInstalled(VERSION);
 
 	const command = args[0];
 	const rest = args.slice(1);

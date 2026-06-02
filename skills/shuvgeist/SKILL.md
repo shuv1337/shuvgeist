@@ -82,6 +82,14 @@ shuvgeist --help       # full usage: all commands + global options
 shuvgeist --version    # CLI version (tracks the extension build)
 ```
 
+The CLI keeps this skill available to agents automatically: on every run it syncs the packaged skill into `~/.agents/skills/shuvgeist` (version-gated and silent). Manage it explicitly with:
+
+```bash
+shuvgeist skill install          # (re)install/refresh the skill into ~/.agents/skills
+shuvgeist skill install --force  # force a re-copy even if the version matches
+shuvgeist skill path             # print the install path
+```
+
 ## Prerequisites
 
 ### Required
