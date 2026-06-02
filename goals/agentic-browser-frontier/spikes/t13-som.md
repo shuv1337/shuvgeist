@@ -89,3 +89,36 @@ Because the live default/free-tier model comparison is missing, this spike shoul
 ## Gate Status
 
 SPIKE-T13 produced local payload evidence but did not complete the required live model comparison. Stop here until the user decides whether to approve the reshaped T13 baseline, rerun with reachable model credentials, or defer T13.
+
+## Gate Decision - 2026-06-01
+
+Human decision: `approve-structured-candidate-baseline` - implement screenshot
+plus candidate JSON fallback first, without numbered badges initially.
+
+Implementation constraints carried forward:
+
+- Treat this as a reshaped baseline implementation, not proof that numbered
+  SoM badges improve model accuracy.
+- Gate the fallback to vision-capable providers only.
+- Trigger from the planner-validator ambiguity/failure signal, never by
+  default.
+- Keep model proof separate; the live default/free-tier model comparison
+  remains unproven until credentials or a reachable free-tier endpoint exist.
+
+## Implementation Evidence - 2026-06-01
+
+The reshaped baseline is implemented in `src/bridge/headless/direct-cdp-runtime.ts`:
+
+- `captureVisionCandidateBaseline` requires an explicit fallback trigger and a
+  vision-capable `Model.input` containing `image`.
+- The baseline captures `Page.captureScreenshot` and pairs it with compact
+  structured candidates from the semantic snapshot contract.
+- Candidate JSON includes refs, roles/names/text, interactivity, and bounding
+  boxes, but no numbered marks or badge overlays.
+- Unit proof lives in `tests/unit/bridge/direct-cdp-vision-baseline.test.ts`.
+- No-extension headless Chromium proof lives in
+  `tests/integration/bridge/headless-direct-cdp-runtime.test.ts`.
+
+This implementation does not claim live model-comparison proof. That remains
+separate until model credentials or a reachable free-tier endpoint are
+available.

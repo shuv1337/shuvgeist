@@ -92,3 +92,38 @@ No reshape is needed beyond the already accepted direction that stealth belongs 
 ## Gate Status
 
 SPIKE-T12 evidence supports proceeding on the headless/direct-CDP path, but the plan requires a human go/no-go before T12 implementation. Stop here until the user approves T12.
+
+## Gate Decision - 2026-06-01
+
+Human decision: `go-direct-cdp-only` - implement `TrustedInputProvider` over
+`CdpSession` and keep `Runtime.enable` off the action path.
+
+Implementation constraints carried forward:
+
+- T12 belongs to the headless/direct-CDP runtime, not the extension path.
+- The provider must consume pre-resolved coordinates from snapshot/ref
+  metadata.
+- Unit proof must show no `ensureDomain("Runtime")` or `Runtime.enable` call
+  on the action hot path.
+- Documentation and UI copy must avoid undetectable or bypass-all-detection
+  claims.
+
+## Implementation Evidence - 2026-06-01
+
+Implemented the approved direct-CDP-only trusted input path in
+`src/bridge/headless/trusted-input-provider.ts` and wired it into
+`DirectCdpAgentSessionAdapter` ref clicks.
+
+Evidence:
+
+- `TrustedInputProvider` accepts a `CdpSession` and dispatches trusted mouse
+  input through `Input.dispatchMouseEvent` only.
+- The headless direct-CDP `ref_click` tool now delegates to
+  `TrustedInputProvider` instead of owning its own action dispatch.
+- `tests/unit/bridge/trusted-input-provider.test.ts` proves the action path
+  sends only `Input.dispatchMouseEvent` commands and never calls
+  `ensureDomain("Runtime")` or `Runtime.enable`.
+
+Focused validation passed:
+
+- `npx vitest run tests/unit/bridge/trusted-input-provider.test.ts tests/integration/bridge/headless-direct-cdp-runtime.test.ts`

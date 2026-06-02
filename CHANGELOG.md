@@ -15,6 +15,9 @@
 - First-run setup now offers a bundled free-tier model path alongside subscription login and API-key setup.
 - Bridge task lifecycle, request planning, and raw page-snapshot store foundations for the agentic browser roadmap.
 - Sidepanel agents now run with the planner-validator loop enabled by default, with a local setting escape hatch.
+- Direct-CDP headless runtime support can connect to no-extension Chromium page targets, run semantic snapshot/locate/ref-click tools through the agent runtime, and reconnect by target id.
+- Direct-CDP trusted input support dispatches headless ref clicks through a `CdpSession` action path without enabling Runtime.
+- Direct-CDP vision candidate baselines capture screenshots plus structured candidate JSON for vision-capable models without numbered badge overlays.
 
 ### Changed
 

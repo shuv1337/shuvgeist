@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Decisions - Agentic Browser Frontier Gates</title>
+<style>
+  :root {
+    --paper:#F7F6F2; --ink:#14181F; --steel:#38617B; --steel-lift:#7AA0BD;
+    --moss:#6E8B5C; --moss-lift:#9FB87E; --brick:#B23838; --brick-lift:#D67373;
+    --amber:#B07636; --amber-lift:#D49B5C; --paper-150:#EFEDE7;
+    --paper-300:#D4D2CC; --paper-500:#757A85; --paper-700:#3D4451;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    --radius:6px; --radius-sm:4px;
+    --bg:var(--paper); --surface:#FFFFFF; --recessed:var(--paper-150);
+    --text-strong:var(--ink); --text:var(--paper-700); --text-dim:var(--paper-500);
+    --border:var(--paper-300); --border-w:1px; --chip-bg:var(--paper-150);
+    --accent:var(--steel); --accent-2:var(--moss); --good:var(--moss);
+    --bad:var(--brick); --warn:var(--amber);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:#14181F; --surface:#1C2129; --recessed:#0E1117;
+      --text-strong:#ECEDF0; --text:#C8CBD2; --text-dim:#8B8E96;
+      --border:rgba(232,234,240,.10); --chip-bg:#2A2E37;
+      --accent:var(--steel-lift); --accent-2:var(--moss-lift);
+      --good:var(--moss-lift); --bad:var(--brick-lift); --warn:var(--amber-lift);
+    }
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:var(--sans);background:var(--bg);color:var(--text);line-height:1.6;font-size:15px;-webkit-font-smoothing:antialiased;padding:56px 24px 96px}
+  .page{max-width:860px;margin:0 auto}
+  header{margin-bottom:40px}
+  .eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.10em;text-transform:uppercase;color:var(--text-dim);margin-bottom:14px}
+  h1{font-weight:600;font-size:30px;line-height:1.2;color:var(--text-strong);margin-bottom:14px}
+  .lead{font-size:15.5px;line-height:1.65;color:var(--text);max-width:720px}
+  .meta-strip{display:flex;flex-wrap:wrap;gap:24px;margin-top:18px;padding-top:16px;border-top:1px solid var(--border);font-family:var(--mono);font-size:12px;color:var(--text-dim)}
+  .meta-strip .v{color:var(--text)}
+  .briefing{margin:0 0 24px;padding:16px 18px;border:1px solid color-mix(in srgb,var(--accent),var(--border) 55%);border-left:3px solid var(--accent);border-radius:0 var(--radius) var(--radius) 0;background:var(--surface)}
+  .briefing h2{font-size:15px;font-weight:600;color:var(--text-strong);margin-bottom:8px}
+  .briefing p,.briefing li{font-size:13.5px;color:var(--text)}
+  .briefing ul{margin:8px 0 0 18px}
+  fieldset{border:var(--border-w) solid var(--border);border-radius:var(--radius);padding:18px 20px;margin-bottom:20px;background:var(--surface)}
+  .sec-head{display:flex;align-items:center;gap:10px;margin-bottom:12px}
+  .num{font-family:var(--mono);font-size:11px;font-weight:500;color:var(--accent);border:1px solid var(--border);padding:2px 7px;border-radius:3px;letter-spacing:.04em}
+  .sec-head h2{font-weight:600;font-size:16px;color:var(--text-strong)}
+  .question-meta{margin:-4px 0 12px;padding:10px 12px;border-left:2px solid var(--accent);background:var(--recessed);border-radius:0 var(--radius-sm) var(--radius-sm) 0;font-size:13px;color:var(--text)}
+  .question-meta strong,.recommendation strong{font-size:11px;font-family:var(--mono);text-transform:uppercase;letter-spacing:.06em;color:var(--accent)}
+  .question-meta ul{margin:6px 0 0 18px;color:var(--text-dim)}
+  .recommendation{margin:10px 0 12px;padding:10px 12px;border:1px solid color-mix(in srgb,var(--good),var(--border) 55%);border-radius:var(--radius-sm);background:color-mix(in srgb,var(--good),transparent 90%);font-size:13px;color:var(--text)}
+  .recommendation strong{color:var(--good)}
+  .option{display:flex;align-items:flex-start;gap:10px;padding:10px 12px;cursor:pointer;border-radius:var(--radius-sm);transition:background .08s}
+  .option:hover{background:var(--recessed)}
+  .option input{margin-top:3px;accent-color:var(--accent);width:16px;height:16px;flex-shrink:0}
+  .option-label{font-weight:500;color:var(--text-strong);line-height:1.4;font-size:14.5px}
+  .option-detail{font-size:13px;color:var(--text-dim);margin-top:3px;font-family:var(--mono)}
+  .option-detail code{font-family:var(--mono);font-size:12px;background:var(--recessed);border:1px solid var(--border);padding:1px 5px;border-radius:3px;color:var(--text-strong)}
+  .discussion-note{display:block;width:calc(100% - 38px);min-height:72px;margin:4px 0 10px 38px;padding:9px 10px;resize:vertical;font-family:var(--sans);font-size:13px;line-height:1.45;color:var(--text);background:var(--recessed);border:1px solid var(--border);border-radius:var(--radius-sm)}
+  .discussion-note::placeholder{color:var(--text-dim)}
+  .explain-visual{margin:12px 0;padding:12px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--recessed);overflow-x:auto}
+  .explain-visual svg{display:block;max-width:100%;height:auto}
+  .matrix{width:100%;border-collapse:collapse;margin:12px 0;font-size:13px}
+  .matrix th,.matrix td{border:1px solid var(--border);padding:8px 10px;text-align:left;vertical-align:top}
+  .matrix th{color:var(--text-strong);background:var(--recessed);font-weight:600}
+  .compiled{background:var(--surface);border:var(--border-w) solid var(--border);border-left:3px solid var(--good);border-radius:0 var(--radius) var(--radius) 0;padding:18px 20px;margin-top:32px}
+  .compiled h2{font-weight:600;font-size:16px;color:var(--good);margin-bottom:12px;display:flex;align-items:center;justify-content:space-between;gap:12px}
+  .compiled pre{font-family:var(--mono);font-size:13px;line-height:1.6;color:var(--text);background:var(--recessed);border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px 14px;overflow-x:auto;white-space:pre-wrap;word-break:break-word;cursor:text}
+  .copy-btn{background:var(--good);color:#fff;border:none;border-radius:var(--radius-sm);padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;flex-shrink:0}
+  .copy-btn.copied{background:var(--accent)}
+  .dot{display:inline-block;width:7px;height:7px;border-radius:50%;vertical-align:1px;margin-right:6px;background:var(--good)}
+</style>
+</head>
+<body>
+<div class="page">
+<header>
+  <div class="eyebrow">Decisions - agentic-browser-frontier</div>
+  <h1>Tier-D Gate Decisions</h1>
+  <p class="lead">Pick the process and implementation decisions needed to unblock goals/agentic-browser-frontier/goal.md. Copy the compiled block at the bottom and paste it back into the agent.</p>
+  <div class="meta-strip"><div><span class="k">questions:</span> <span class="v">5</span></div><div><span class="k">format:</span> <span class="v">plain text</span></div><div><span class="k">source:</span> <span class="v">verification-audit.md + spikes</span></div></div>
+</header>
+
+<section class="briefing">
+  <h2>Recommended path</h2>
+  <p>First record the T8 gate status: prefer recovered proof of prior approval, otherwise accept a user-approved process exception that is clearly labeled as an exception. Then approve T11 and T12 for the direct-CDP path, and reshape T13 to the cheaper structured-candidate vision baseline unless model credentials are immediately available for a live comparison.</p>
+  <ul><li>This preserves the original architecture direction without pretending T8's process gap or T13's model evidence is already solved.</li><li>T11 and T12 are coupled: T12's credible stealth surface is the headless/direct-CDP runtime, not the extension path.</li></ul>
+</section>
+
+<fieldset data-question="T8 Process Record">
+  <div class="sec-head"><span class="num">[01]</span><h2>T8 process record</h2></div>
+  <div class="question-meta"><div><strong>Intention</strong> Decide how to handle the missing explicit go/no-go record for a target that is already implemented.</div><ul><li>The repo has spikes/t8-concurrent-cdp.md and T8 implementation/test evidence.</li><li>The goal requires spike then human go/no-go before implementation commit.</li></ul></div>
+  <div class="recommendation"><strong>Recommended</strong> Recover original approval proof if it exists; otherwise accept a retroactive exception only if the user explicitly approves the process exception.</div>
+  <label class="option"><input type="radio" name="q1" value="accept-retroactive-exception" data-detail="record a user-approved process exception; not original go/no-go proof"><div><div class="option-label">Accept retroactive exception note</div><div class="option-detail"><code>accept-retroactive-exception</code> - add a decision note acknowledging the gap and accepting current T8 implementation as an explicit exception.</div></div></label>
+  <label class="option"><input type="radio" name="q1" value="require-original-proof" data-detail="do not count T8 gate until prior human approval evidence is found"><div><div class="option-label">Require original approval proof</div><div class="option-detail"><code>require-original-proof</code> - keep the goal blocked until the missing approval evidence is recovered.</div></div></label>
+  <label class="option"><input type="radio" name="q1" value="defer-t8-credit" data-detail="leave T8 implemented but not counted toward goal completion"><div><div class="option-label">Defer T8 credit</div><div class="option-detail"><code>defer-t8-credit</code> - implementation stays, but completion audit treats T8 gate as unsatisfied.</div></div></label>
+  <label class="option"><input type="radio" name="q1" value="__skip__" data-detail="needs more discussion"><div><div class="option-label">Needs more discussion</div><div class="option-detail">Use this if the process handling needs a separate call.</div></div></label>
+  <textarea class="discussion-note" data-skip-note name="q1-note" placeholder="What needs discussion?"></textarea>
+</fieldset>
+
+<fieldset data-question="T11 Headless Runtime">
+  <div class="sec-head"><span class="num">[02]</span><h2>T11 headless runtime go/no-go</h2></div>
+  <div class="question-meta"><div><strong>Intention</strong> Decide whether to implement a no-extension direct-CDP runtime after a successful local spike.</div><ul><li>The spike proved snapshot to locate to click to snapshot on a local no-extension headless target.</li><li>It did not implement the full AgentRuntimeFactory path.</li></ul></div>
+  <div class="explain-visual" aria-label="T11 runtime dependency diagram"><svg viewBox="0 0 720 120" role="img"><title>T11 direct-CDP path</title><rect x="20" y="34" width="140" height="48" rx="6" fill="none" stroke="currentColor"></rect><text x="90" y="63" text-anchor="middle" fill="currentColor" font-size="13">Headless target</text><path d="M170 58 H265" stroke="currentColor" stroke-width="2"></path><rect x="275" y="34" width="150" height="48" rx="6" fill="none" stroke="currentColor"></rect><text x="350" y="63" text-anchor="middle" fill="currentColor" font-size="13">ElectronWsCdpSession</text><path d="M435 58 H530" stroke="currentColor" stroke-width="2"></path><rect x="540" y="34" width="150" height="48" rx="6" fill="none" stroke="currentColor"></rect><text x="615" y="63" text-anchor="middle" fill="currentColor" font-size="13">AgentRuntimeFactory</text></svg></div>
+  <div class="recommendation"><strong>Recommended</strong> Go, with the spike caveats carried into implementation: self-contained snapshot script artifact, direct-CDP target discovery, and reconnect proof.</div>
+  <label class="option"><input type="radio" name="q2" value="go-direct-cdp-headless" data-detail="implement direct-CDP headless adapter and full agent loop"><div><div class="option-label">Go: implement direct-CDP headless runtime</div><div class="option-detail"><code>go-direct-cdp-headless</code> - build target discovery, session adapter, no-op UI persistence, and integration proof.</div></div></label>
+  <label class="option"><input type="radio" name="q2" value="reshape-electron-only" data-detail="limit T11 to Electron app automation surface"><div><div class="option-label">Reshape: Electron-app automation only</div><div class="option-detail"><code>reshape-electron-only</code> - lower browser frontier ambition; useful if direct Chromium support is too broad.</div></div></label>
+  <label class="option"><input type="radio" name="q2" value="defer-t11" data-detail="record explicit deferral at gate"><div><div class="option-label">Defer T11</div><div class="option-detail"><code>defer-t11</code> - acceptable only if the goal records a deferral instead of a shipped target.</div></div></label>
+  <label class="option"><input type="radio" name="q2" value="__skip__" data-detail="needs more discussion"><div><div class="option-label">Needs more discussion</div><div class="option-detail">Use this if risk, scope, or runtime ownership is unclear.</div></div></label>
+  <textarea class="discussion-note" data-skip-note name="q2-note" placeholder="What needs discussion?"></textarea>
+</fieldset>
+
+<fieldset data-question="T12 Stealth Control Plane">
+  <div class="sec-head"><span class="num">[03]</span><h2>T12 direct-CDP control plane go/no-go</h2></div>
+  <div class="question-meta"><div><strong>Intention</strong> Decide whether to implement trusted input on the headless/direct-CDP path while documenting the extension path as non-stealth.</div><ul><li>The spike showed only Input.dispatchMouseEvent on the action hot path.</li><li>It explicitly does not prove headed extension infobar avoidability.</li></ul></div>
+  <table class="matrix"><thead><tr><th>Option</th><th>Best when</th><th>Cost / risk</th></tr></thead><tbody><tr><td>Go direct-CDP only</td><td>T11 is approved and headless runtime is the stealth surface.</td><td>Requires clear docs to avoid extension-path stealth claims.</td></tr><tr><td>Defer</td><td>Input stealth is not a current priority.</td><td>Leaves daily-driver stealth axis incomplete.</td></tr><tr><td>Extension stealth</td><td>Not recommended.</td><td>Contradicts spike caveats and goal decision.</td></tr></tbody></table>
+  <div class="recommendation"><strong>Recommended</strong> Go direct-CDP only - do not expand this to the extension path.</div>
+  <label class="option"><input type="radio" name="q3" value="go-direct-cdp-only" data-detail="implement TrustedInputProvider over CdpSession; no Runtime.enable on action path"><div><div class="option-label">Go: direct-CDP only</div><div class="option-detail"><code>go-direct-cdp-only</code> - implement TrustedInputProvider and unit proof that Runtime is suppressed on the action path.</div></div></label>
+  <label class="option"><input type="radio" name="q3" value="defer-t12" data-detail="record explicit deferral at gate"><div><div class="option-label">Defer T12</div><div class="option-detail"><code>defer-t12</code> - record a deferral and leave implementation out.</div></div></label>
+  <label class="option"><input type="radio" name="q3" value="reject-stealth-work" data-detail="remove stealth as an active goal axis"><div><div class="option-label">Reject stealth work</div><div class="option-detail"><code>reject-stealth-work</code> - strongest scope reduction; requires updating goal expectations.</div></div></label>
+  <label class="option"><input type="radio" name="q3" value="__skip__" data-detail="needs more discussion"><div><div class="option-label">Needs more discussion</div><div class="option-detail">Use this if T12 depends on a broader product/legal call.</div></div></label>
+  <textarea class="discussion-note" data-skip-note name="q3-note" placeholder="What needs discussion?"></textarea>
+</fieldset>
+
+<fieldset data-question="T13 Vision Path">
+  <div class="sec-head"><span class="num">[04]</span><h2>T13 vision path</h2></div>
+  <div class="question-meta"><div><strong>Intention</strong> Decide what to do with an incomplete SoM spike where local payload evidence exists but live model comparison does not.</div><ul><li>No provider credentials were available and the free-tier endpoint was unreachable.</li><li>Structured candidates resolved the fixture and were cheaper than annotated screenshots.</li></ul></div>
+  <div class="recommendation"><strong>Recommended</strong> Approve the reshaped baseline as the next implementation path, not as completed model evidence. Rerun live comparison first if credentials are available now.</div>
+  <label class="option"><input type="radio" name="q4" value="approve-structured-candidate-baseline" data-detail="implement screenshot plus candidate JSON fallback; no numbered badges initially; model proof remains separate"><div><div class="option-label">Approve reshaped structured-candidate baseline</div><div class="option-detail"><code>approve-structured-candidate-baseline</code> - gate to vision-capable providers, trigger only on ambiguity, off by default; do not count as live model proof.</div></div></label>
+  <label class="option"><input type="radio" name="q4" value="rerun-live-model-comparison" data-detail="provide credentials or reachable free-tier endpoint before implementation"><div><div class="option-label">Rerun live model comparison first</div><div class="option-detail"><code>rerun-live-model-comparison</code> - best evidence path, but blocked until model access exists.</div></div></label>
+  <label class="option"><input type="radio" name="q4" value="defer-t13" data-detail="record explicit deferral at gate"><div><div class="option-label">Defer T13</div><div class="option-detail"><code>defer-t13</code> - acceptable if the vision axis can remain unshipped.</div></div></label>
+  <label class="option"><input type="radio" name="q4" value="ship-numbered-badges" data-detail="not recommended without live model evidence"><div><div class="option-label">Ship numbered badge SoM anyway</div><div class="option-detail"><code>ship-numbered-badges</code> - not recommended; adds payload and DOM/screenshot complexity without proof.</div></div></label>
+  <label class="option"><input type="radio" name="q4" value="__skip__" data-detail="needs more discussion"><div><div class="option-label">Needs more discussion</div><div class="option-detail">Use this if model access or eval design needs a separate decision.</div></div></label>
+  <textarea class="discussion-note" data-skip-note name="q4-note" placeholder="What needs discussion?"></textarea>
+</fieldset>
+
+<fieldset data-question="Implementation Sequencing">
+  <div class="sec-head"><span class="num">[05]</span><h2>Implementation sequencing</h2></div>
+  <div class="question-meta"><div><strong>Intention</strong> Decide the order if multiple gates are approved.</div><ul><li>T12 depends on a credible headless/direct-CDP surface from T11.</li><li>T13 depends on T7 ambiguity signals and may benefit from T11's headless surface.</li></ul></div>
+  <div class="recommendation"><strong>Recommended</strong> T8 record, then T11, then T12, then T13 decision/implementation.</div>
+  <label class="option"><input type="radio" name="q5" value="t8-t11-t12-t13" data-detail="record T8 process first; implement headless before stealth; resolve vision last"><div><div class="option-label">T8 record -> T11 -> T12 -> T13</div><div class="option-detail"><code>t8-t11-t12-t13</code> - strongest dependency order.</div></div></label>
+  <label class="option"><input type="radio" name="q5" value="t11-only-first" data-detail="implement headless runtime first, pause before stealth or vision"><div><div class="option-label">T11 only first</div><div class="option-detail"><code>t11-only-first</code> - reduces scope for the next implementation slice.</div></div></label>
+  <label class="option"><input type="radio" name="q5" value="record-deferrals-only" data-detail="record selected gate deferrals; final completion still requires a full audit"><div><div class="option-label">Record deferrals only</div><div class="option-detail"><code>record-deferrals-only</code> - only valid if each deferral is explicitly accepted and the final completion audit confirms the done condition is satisfied.</div></div></label>
+  <label class="option"><input type="radio" name="q5" value="__skip__" data-detail="needs more discussion"><div><div class="option-label">Needs more discussion</div><div class="option-detail">Use this if a different work order is required.</div></div></label>
+  <textarea class="discussion-note" data-skip-note name="q5-note" placeholder="What needs discussion?"></textarea>
+</fieldset>
+
+<div class="compiled"><h2><span><span class="dot"></span>Compiled decisions</span> <button class="copy-btn" onclick="copyPayload()">Copy</button></h2><pre id="payload">No selections yet.</pre></div>
+</div>
+
+<script>
+function collect(){
+  const decisions=[];
+  document.querySelectorAll('fieldset[data-question]').forEach(fs=>{
+    const q=fs.dataset.question;
+    const checked=fs.querySelectorAll('input:checked');
+    if(checked.length===0)return;
+    const skip=fs.querySelector('input[value="__skip__"]:checked');
+    if(skip){
+      const noteEl=fs.querySelector('[data-skip-note]');
+      const note=noteEl?noteEl.value.trim().replace(/\s+/g,' '):'';
+      decisions.push({question:q,answers:{choice:'Needs more discussion',detail:note?'notes: '+note:''}});
+      return;
+    }
+    const values=Array.from(checked).map(el=>({choice:el.value,detail:el.dataset.detail||''}));
+    decisions.push({question:q,answers:values.length===1?values[0]:values});
+  });
+  return decisions;
+}
+function render(){
+  const decisions=collect();
+  if(decisions.length===0){document.getElementById('payload').textContent='No selections yet.';return;}
+  const lines=decisions.map(d=>{
+    const ans=Array.isArray(d.answers)?d.answers.map(a=>a.choice+(a.detail?' ('+a.detail+')':'')).join(', '):d.answers.choice+(d.answers.detail?' ('+d.answers.detail+')':'');
+    return d.question+': '+ans;
+  });
+  document.getElementById('payload').textContent=lines.join('\n');
+}
+function copyPayload(){
+  const pre=document.getElementById('payload');
+  const copied=()=>{
+    const btn=document.querySelector('.copy-btn');
+    btn.textContent='Copied'; btn.classList.add('copied');
+    setTimeout(()=>{btn.textContent='Copy';btn.classList.remove('copied');},1500);
+  };
+  if(navigator.clipboard&&navigator.clipboard.writeText){
+    navigator.clipboard.writeText(pre.textContent).then(copied).catch(()=>fallbackCopy(pre,copied));
+  }else{
+    fallbackCopy(pre,copied);
+  }
+}
+function fallbackCopy(pre,done){
+  const selection=window.getSelection();
+  const range=document.createRange();
+  range.selectNodeContents(pre);
+  selection.removeAllRanges();
+  selection.addRange(range);
+  try{document.execCommand('copy');done();}catch(_err){}
+  selection.removeAllRanges();
+}
+document.querySelectorAll('input[type="radio"], input[type="checkbox"]').forEach(el=>{el.addEventListener('change',render);});
+document.querySelectorAll('[data-skip-note]').forEach(el=>{el.addEventListener('input',render);});
+render();
+</script>
+</body>
+</html>

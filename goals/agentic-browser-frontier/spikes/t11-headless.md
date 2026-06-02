@@ -95,3 +95,41 @@ No reshape to Electron-app-only automation is needed based on this spike.
 ## Gate Status
 
 SPIKE-T11 evidence supports proceeding, but the plan requires a human go/no-go before T11 implementation. Stop here until the user approves T11.
+
+## Gate Decision - 2026-06-01
+
+Human decision: `go-direct-cdp-headless` - implement the direct-CDP headless
+adapter and full agent loop.
+
+Implementation constraints carried forward:
+
+- Build target discovery, page websocket session ownership, and reconnect
+  proof into the runtime path.
+- Reuse `ElectronWsCdpSession`, `AgentRuntimeFactory`, and the canonical
+  snapshot contract.
+- Provide a self-contained snapshot script artifact for direct-CDP execution
+  instead of relying on Node-side function stringification.
+- Keep the extension path separate from the headless/direct-CDP runtime.
+
+## Implementation Evidence - 2026-06-01
+
+Implemented the approved direct-CDP headless runtime path in
+`src/bridge/headless/direct-cdp-runtime.ts`.
+
+Evidence:
+
+- The adapter discovers page targets from `/json/list` and connects to the
+  page-level websocket with `ElectronWsCdpSession`.
+- Snapshot execution uses `buildDirectCdpSnapshotExpression`, which wraps the
+  shared snapshot script with a local `__name` shim so it can run as a
+  self-contained direct-CDP browser expression.
+- The runtime exposes direct-CDP `page_snapshot`, `locate_by_role`, and
+  `ref_click` agent tools backed by `createAgentRuntime` with no UI
+  persistence.
+- `tests/integration/bridge/headless-direct-cdp-runtime.test.ts` launches
+  no-extension headless Chromium, runs an agent loop through snapshot to
+  locate to click to snapshot, then reconnects by the same CDP target id.
+
+Focused validation passed:
+
+- `npm run test:integration -- headless-direct-cdp-runtime`

@@ -91,3 +91,16 @@ No reshape is needed based on this spike. The infobar concern should remain a T1
 ## Gate Status
 
 SPIKE-T8 evidence supports proceeding, but the plan requires a human go/no-go before T8 implementation. Stop here until the user approves T8.
+
+## Gate Decision - 2026-06-01
+
+Human decision: `require-original-proof` - do not count the T8 gate until prior human approval evidence is found.
+
+Search result: no original human approval evidence was found in the repo,
+the T8 implementation commit context, or local Codex/Claude session logs. The
+implementation and automated-test evidence remain valid technical evidence,
+but they are not process proof under this decision.
+
+Current status: T8 gate credit is withheld. T8 must not count toward the
+frontier goal completion audit until original approval proof is recovered or
+the human decision is changed.
