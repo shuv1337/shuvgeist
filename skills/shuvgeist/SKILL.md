@@ -73,6 +73,15 @@ If you only need a quick human-readable check:
 shuvgeist status
 ```
 
+### Discovering commands
+
+Every command and flag is listed in the built-in help. Treat it as the authoritative reference:
+
+```bash
+shuvgeist --help       # full usage: all commands + global options
+shuvgeist --version    # CLI version (tracks the extension build)
+```
+
 ## Prerequisites
 
 ### Required
@@ -109,13 +118,23 @@ shuvgeist close
 
 ### Config resolution
 
-Bridge config is resolved in this order:
+The CLI talks to the local bridge over WebSocket. By default it connects to `ws://127.0.0.1:19285` (the `serve` listener binds `0.0.0.0:19285`). Connection settings resolve in this order:
 
-1. CLI flags: `--token`, `--url`, `--host`, `--port`
-2. Environment: `SHUVGEIST_BRIDGE_TOKEN`, `SHUVGEIST_BRIDGE_URL`, `SHUVGEIST_BRIDGE_HOST`, `SHUVGEIST_BRIDGE_PORT`
-3. Config file: `~/.shuvgeist/bridge.json`
+1. CLI flags: `--url`, `--token`, `--host`, `--port`
+2. Environment: `SHUVGEIST_BRIDGE_URL`, `SHUVGEIST_BRIDGE_TOKEN`, `SHUVGEIST_BRIDGE_HOST`, `SHUVGEIST_BRIDGE_PORT`
+3. Config file: `~/.shuvgeist/bridge.json` (keys: `url`, `token`, `host`, `port`, and an optional `otel` object)
+
+`--url ws://...` overrides host/port entirely.
 
 Browser and extension discovery for `launch` can also come from flags, env, config, local dev paths, or installed browser locations.
+
+#### Optional OpenTelemetry
+
+The bridge can emit OTEL traces. Configure via env or the `otel` block in `bridge.json`:
+
+- `SHUVGEIST_OTEL_ENABLED` (`true`/`false`) — `otel.enabled`
+- `SHUVGEIST_OTEL_INGEST_URL` (default `http://localhost:3474`) — `otel.ingestUrl`
+- `SHUVGEIST_OTEL_PRIVATE_INGEST_KEY` — `otel.privateIngestKey`
 
 ## Core command surface
 
@@ -163,6 +182,38 @@ Inspect windows and label the intended renderer when there are multiple candidat
 ```bash
 shuvgeist electron windows --json
 shuvgeist electron label e1 w1 main
+```
+
+Inspect the main process, tap IPC traffic, capture main-process network, and detach when done:
+
+```bash
+shuvgeist electron main e1 --json                       # main-process info
+shuvgeist electron ipc tap e1 --channel update --json   # stream IPC messages (filter by channel substring)
+shuvgeist electron ipc untap e1 --json                  # stop the IPC tap
+shuvgeist electron network-main start e1 --json         # capture main-process network
+shuvgeist electron network-main stop e1 --json
+shuvgeist electron launch vscode --inspect-main --json  # also expose a main-process inspector
+shuvgeist electron attach --pid 12345 --inspect-port 9229 --json
+shuvgeist electron detach e1 --json                     # disconnect the session
+```
+
+Read or extract the app's bundled source (asar / resources) for inspection:
+
+```bash
+shuvgeist electron source layout vscode --json                      # source directory tree
+shuvgeist electron source list vscode --json                        # list source files
+shuvgeist electron source read out/main.js vscode --json            # read one file (base64)
+shuvgeist electron source extract /tmp/vscode-src vscode --json      # extract sources to a dir (or --extract-to)
+shuvgeist electron source list --source-path /path/app.asar --json  # point at an explicit asar / resources path
+```
+
+Diagnose attach/launch problems and manage the auto-attach helper:
+
+```bash
+shuvgeist electron doctor vscode --json                  # diagnose setup (ports, paths, permissions)
+shuvgeist electron auto-attach status vscode --json
+shuvgeist electron auto-attach install vscode --json     # auto-attach when the app starts
+shuvgeist electron auto-attach uninstall vscode --json
 ```
 
 Target syntax:
@@ -304,6 +355,15 @@ Use `--json` for automation. A failed assertion is a successful bridge response 
 
 Before relying on assertions in CI, `status --json` should show a connected extension and include `page_assert` in extension capabilities. If `assert` reports `Unknown method: page_assert`, rebuild/reload the extension and CLI so the bridge surfaces match.
 
+Assertion options:
+
+- `--timeout <value>` (default `5s`) and `--interval <value>` control how long and how often `assert` retries before failing
+- `--visible` / `--enabled` require the matched element to be visible / enabled
+- `--exact` switches `text` and `url` matching from substring to exact
+- `--count <N>`, `--min-count <N>`, `--max-count <N>` assert how many elements match
+- `--name <text>` filters `role` assertions by accessible name; `--url-pattern <regex>` matches the URL by regex
+- `--tab-id` / `--frame-id` scope the assertion; `--world <user|main>` selects the `expr` evaluation world
+
 Expression assertions default to the user-script world. Use MAIN-world assertions only when app state is not visible from DOM/user-script context:
 
 ```bash
@@ -345,7 +405,10 @@ Use snapshots when you need a compact semantic representation of the current pag
 ```bash
 shuvgeist snapshot --json
 shuvgeist snapshot --tab-id 123 --frame-id 7 --max-entries 80 --json
+shuvgeist snapshot --include-hidden --json
 ```
+
+Options: `--max-entries <N>` caps how many entries are returned; `--include-hidden` adds hidden / `aria-hidden` elements (omitted by default).
 
 Snapshots return semantic entries, candidate selectors, page metadata, and stable `snapshotId` values. Each entry's `snapshotId` is the same value as the `refId` returned by `locate` — pass it directly to `shuvgeist ref click|fill <id>`.
 
@@ -357,7 +420,10 @@ Use locators when you know what an element means, not what selector it has.
 shuvgeist locate role button --name "Sign in" --json
 shuvgeist locate text "Add to cart" --json
 shuvgeist locate label "Email address" --json
+shuvgeist locate role link --name "Docs" --limit 5 --min-score 0.4 --json
 ```
+
+Options: `--name <text>` adds an accessible-name filter for `role` mode; `--limit <N>` caps results; `--min-score <0-1>` drops low-confidence matches.
 
 Locator results include ranked matches, scores, reasons, and `refId` values. `refId` is the canonical ref-handle name; `snapshot` calls the same value `snapshotId` for legacy compatibility.
 
@@ -447,6 +513,31 @@ shuvgeist perf trace-stop --json
 
 Use `perf metrics` for quick timing data and `trace-start/trace-stop` for deeper investigations.
 
+### Recording
+
+Capture a WebM video repro of a browser tab or Electron renderer. Requires `ffmpeg` installed locally for final encoding.
+
+```bash
+shuvgeist record start --out /tmp/repro.webm
+shuvgeist record start --out /tmp/repro.webm --max-duration 60s --fps 30 --quality 90
+shuvgeist record status --json
+shuvgeist record stop --json
+shuvgeist record start --target electron:e1:w1 --out /tmp/app.webm --max-duration 5s
+```
+
+Recording options:
+
+- `--out <path>` — output `.webm` file (required for `start`)
+- `--max-duration <value>` — recording length; default `30s`, hard cap `120s`
+- `--fps <n>` — frames per second, `1`–`30`
+- `--quality <n>` — capture JPEG quality, `1`–`100`
+- `--max-width <px>` / `--max-height <px>` — scale the output
+- `--video-bitrate <n>` — encoder bitrate (bits/sec)
+- `--mime-type <type>` — WebM codec, e.g. `video/webm;codecs=vp9` (vp8 also supported)
+- `--tab-id <N>` — record a specific tab; `stop` and `status` accept `--tab-id` to match the `start`
+
+Recording is bounded by `--max-duration`; use `record stop` to end early or `record status` to check whether a capture is active.
+
 ## Sidepanel session control
 
 Shuvgeist is not only low-level browser automation. It can also collaborate with the live sidepanel assistant session.
@@ -503,20 +594,16 @@ Prefer explicit routing when multiple tabs or frames are in play:
 --frame-id <id>
 ```
 
-Use them with:
+Use them with page-scoped commands, including:
 
-- `eval`
-- `snapshot`
-- `locate`
-- `ref click`
-- `ref fill`
-- `frame list`
-- `frame tree`
-- `network ...`
-- `device ...`
-- `perf ...`
+- `repl`, `eval`, `screenshot`
+- `assert`
+- `snapshot`, `locate`, `ref click`, `ref fill`
+- `frame list`, `frame tree`
+- `network ...`, `device ...`, `perf ...`
+- `record start` / `record stop` / `record status`
 
-Do not assume the currently focused browser window is the intended target.
+`--target <spec>` routes to a non-default surface (e.g. `electron:e1:w1`); Chrome/Edge is the default. Do not assume the currently focused browser window is the intended target.
 
 ## JSON mode
 
@@ -623,4 +710,6 @@ Use this when terminal automation and the sidepanel assistant should collaborate
 - Use `network` when request/response behavior matters more than rendered DOM.
 - Use `device` when layout or behavior depends on viewport, touch, or user agent.
 - Use `perf` when timing, runtime metrics, or traces matter.
+- Use `record` when you need a shareable video repro of a bug or flow.
+- Use `electron list/allow/attach/launch` plus `--target electron:...` to drive a local desktop app instead of a Chrome/Edge tab.
 - Use `session` / `inject` / `artifacts` when you need to collaborate with the Shuvgeist sidepanel assistant, not just automate the page.
