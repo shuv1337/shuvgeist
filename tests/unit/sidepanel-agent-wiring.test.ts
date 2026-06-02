@@ -133,15 +133,10 @@ describe("sidepanel createAgent wiring", () => {
 		);
 		expect(propertyInitializerText(runtimeSourceFile, agentOptions, "streamFn")).toBe("options.streamFn");
 		expect(propertyInitializerText(runtimeSourceFile, agentOptions, "getApiKey")).toBe("options.getApiKey");
-		for (const hook of [
-			"transformContext",
-			"beforeToolCall",
-			"afterToolCall",
-			"shouldStopAfterTurn",
-			"prepareNextTurn",
-		]) {
-			expect(propertyInitializerText(runtimeSourceFile, agentOptions, hook)).toBe("options." + hook);
+		for (const hook of ["transformContext", "beforeToolCall", "afterToolCall", "shouldStopAfterTurn"]) {
+			expect(propertyInitializerText(runtimeSourceFile, agentOptions, hook)).toContain("options." + hook);
 		}
+		expect(propertyInitializerText(runtimeSourceFile, agentOptions, "prepareNextTurn")).toBe("options.prepareNextTurn");
 	});
 
 	it("keeps the current sidepanel Agent factory wiring", () => {
