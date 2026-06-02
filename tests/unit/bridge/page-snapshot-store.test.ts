@@ -80,6 +80,11 @@ describe("PageSnapshotStore", () => {
 
 			expect(store.read({ tabId: 3, limit: 1 })).toEqual([newer]);
 			expect(store.read({ tabId: 3, frameId: 2 })).toEqual([newer]);
+			expect(store.read({ snapshotId: "snapshot-entry-1" }).map((record) => record.id)).toEqual([
+				"electron:e1:w1:frame:0:snapshot:3",
+				"chrome:3:3:frame:2:snapshot:2",
+				"chrome:3:3:frame:0:snapshot:1",
+			]);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}

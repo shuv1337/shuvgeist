@@ -18,6 +18,7 @@ export interface PageSnapshotRecord {
 
 export interface PageSnapshotReadQuery {
 	id?: string;
+	snapshotId?: string;
 	tabId?: number;
 	frameId?: number;
 	limit?: number;
@@ -70,6 +71,11 @@ export class PageSnapshotStore {
 		}
 		if (typeof query.frameId === "number") {
 			records = records.filter((record) => record.frameId === query.frameId);
+		}
+		if (query.snapshotId) {
+			records = records.filter((record) =>
+				record.raw.entries.some((entry) => entry.snapshotId === query.snapshotId),
+			);
 		}
 		records.sort((left, right) => right.capturedAt.localeCompare(left.capturedAt));
 		return typeof query.limit === "number" ? records.slice(0, query.limit) : records;

@@ -123,6 +123,7 @@ declare global {
 		runtime: { getURL: ReturnType<typeof vi.fn> };
 		webNavigation: { getAllFrames: ReturnType<typeof vi.fn> };
 		userScripts: { configureWorld: ReturnType<typeof vi.fn>; execute: ReturnType<typeof vi.fn> };
+		cookies: { set: ReturnType<typeof vi.fn> };
 	};
 }
 
@@ -140,6 +141,9 @@ globalThis.chrome = {
 	userScripts: {
 		configureWorld: vi.fn(),
 		execute: vi.fn(),
+	},
+	cookies: {
+		set: vi.fn(),
 	},
 };
 
@@ -168,6 +172,7 @@ describe("BrowserCommandExecutor", () => {
 		chrome.webNavigation.getAllFrames.mockReset();
 		chrome.userScripts.configureWorld.mockReset();
 		chrome.userScripts.execute.mockReset();
+		chrome.cookies.set.mockReset();
 	});
 
 	it("returns status with active tab and capabilities", async () => {
@@ -298,6 +303,39 @@ describe("BrowserCommandExecutor", () => {
 		);
 		await expect(enabled.cookies({})).resolves.toEqual({ value: [{ name: "auth_token", value: "secret" }] });
 		expect(debuggerExecute).toHaveBeenCalledWith("bridge", { action: "cookies" }, undefined, undefined);
+	});
+
+	it("applies imported cookies only when sensitive access is enabled", async () => {
+		const disabled = new BrowserCommandExecutor({ windowId: 1, sensitiveAccessEnabled: false });
+		await expect(disabled.applyCookieImport({ cookies: [] })).rejects.toMatchObject({ code: -32008 });
+		chrome.cookies.set.mockResolvedValue({});
+		const enabled = new BrowserCommandExecutor({ windowId: 1, sensitiveAccessEnabled: true });
+		await expect(
+			enabled.applyCookieImport({
+				cookies: [
+					{
+						url: "https://example.test/",
+						name: "sid",
+						value: "secret",
+						domain: ".example.test",
+						path: "/",
+						secure: true,
+						httpOnly: true,
+						expirationDate: 1893456000,
+					},
+				],
+			}),
+		).resolves.toMatchObject({ ok: true, imported: 1, skipped: 0 });
+		expect(chrome.cookies.set).toHaveBeenCalledWith({
+			url: "https://example.test/",
+			name: "sid",
+			value: "secret",
+			domain: ".example.test",
+			path: "/",
+			secure: true,
+			httpOnly: true,
+			expirationDate: 1893456000,
+		});
 	});
 
 	it("dispatches record requests through the recording router", async () => {

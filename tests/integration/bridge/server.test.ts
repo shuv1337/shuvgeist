@@ -316,8 +316,11 @@ describe("BridgeServer", () => {
 	let server: BridgeServer;
 	let port: number;
 	let baseUrl: string;
+	let snapshotStoreDir: string;
 
 	beforeEach(async () => {
+		snapshotStoreDir = mkdtempSync(join(tmpdir(), "shuvgeist-bridge-snapshots-"));
+		process.env.SHUVGEIST_PAGE_SNAPSHOT_STORE = join(snapshotStoreDir, "page-snapshots.json");
 		port = await getAvailablePort();
 		baseUrl = `ws://127.0.0.1:${port}/ws`;
 		server = new BridgeServer({ host: "127.0.0.1", port, token: "secret-token" });
@@ -326,6 +329,8 @@ describe("BridgeServer", () => {
 
 	afterEach(async () => {
 		await server.stop();
+		delete process.env.SHUVGEIST_PAGE_SNAPSHOT_STORE;
+		rmSync(snapshotStoreDir, { recursive: true, force: true });
 	});
 
 	it("returns a bootstrap token only for hardened loopback requests", async () => {
@@ -643,6 +648,298 @@ describe("BridgeServer", () => {
 
 		extension.ws.close();
 		cli.ws.close();
+	});
+
+	it("stores chrome page snapshots server-side and reads them back by snapshot id", async () => {
+		const extension = await openRegisteredClient(baseUrl, "secret-token", "extension", {
+			windowId: 63,
+			capabilities: ["page_snapshot"],
+		});
+		const cli = await openRegisteredClient(baseUrl, "secret-token", "cli", { name: "snapshot-store-cli" });
+		const storeResponse = sendRequestAndReadResponse(cli.ws, {
+			id: 88,
+			method: "snapshot_store",
+			params: { tabId: 42, frameId: 7, maxEntries: 25, query: "save" },
+		});
+		const relayed = await readMessage<{ id: number; method: string; params?: unknown; target?: unknown }>(extension.ws);
+		expect(relayed).toEqual({
+			id: 1,
+			method: "page_snapshot",
+			params: {
+				maxEntries: 25,
+				includeHidden: false,
+				query: "save",
+				tabId: 42,
+				tabRef: undefined,
+				windowId: undefined,
+				frameId: 7,
+			},
+			target: { kind: "chrome-tab" },
+		});
+		extension.ws.send(
+			JSON.stringify({
+				id: relayed.id,
+				result: {
+					tabId: 42,
+					frameId: 7,
+					query: "save",
+					url: "https://example.test/settings",
+					title: "Settings",
+					generatedAt: 12345,
+					totalCandidates: 9,
+					truncated: false,
+					entries: [{ snapshotId: "e1", tabId: 42, frameId: 7, role: "button", name: "Save" }],
+				},
+			}),
+		);
+		const stored = await storeResponse;
+		expect(stored).toMatchObject({
+			id: 88,
+			result: {
+				record: {
+					id: "chrome:active:42:frame:7:snapshot:12345",
+					tabId: 42,
+					frameId: 7,
+					url: "https://example.test/settings",
+					title: "Settings",
+					query: "save",
+					entryCount: 1,
+					totalCandidates: 9,
+					truncated: false,
+				},
+			},
+		});
+		expect(JSON.stringify(stored)).not.toContain("entries");
+
+		const recordId = (stored.result as { record: { id: string } }).record.id;
+		await expect(
+			sendRequestAndReadResponse(cli.ws, { id: 89, method: "snapshot_read", params: { id: recordId } }),
+		).resolves.toMatchObject({
+			id: 89,
+			result: {
+				records: [
+					{
+						id: recordId,
+						tabId: 42,
+						frameId: 7,
+						raw: {
+							entries: [{ snapshotId: "e1", tabId: 42, frameId: 7, role: "button", name: "Save" }],
+						},
+					},
+				],
+			},
+		});
+		await expect(
+			sendRequestAndReadResponse(cli.ws, { id: 90, method: "snapshot_read", params: { snapshotId: "e1" } }),
+		).resolves.toMatchObject({
+			id: 90,
+			result: {
+				records: [
+					{
+						id: recordId,
+						raw: { entries: [{ snapshotId: "e1" }] },
+					},
+				],
+			},
+		});
+
+		extension.ws.close();
+		cli.ws.close();
+	});
+
+	it("imports consented site cookies through the extension relay", async () => {
+		const cookieDir = mkdtempSync(join(tmpdir(), "shuvgeist-cookie-import-"));
+		const sourcePath = join(cookieDir, "cookies.txt");
+		writeFileSync(
+			sourcePath,
+			[
+				"# Netscape HTTP Cookie File",
+				".example.test\tTRUE\t/\tTRUE\t1893456000\tsid\tsecret",
+				"#HttpOnly_.example.test\tTRUE\t/account\tFALSE\t0\thttp\tonly",
+				".other.test\tTRUE\t/\tTRUE\t1893456000\tignored\tvalue",
+			].join("\n"),
+		);
+		const cli = await openRegisteredClient(baseUrl, "secret-token", "cli", { name: "cookie-import-cli" });
+
+		await expect(
+			sendRequestAndReadResponse(cli.ws, {
+				id: 91,
+				method: "cookie_import",
+				params: { sourcePath, siteUrl: "https://app.example.test/settings", consent: false },
+			}),
+		).resolves.toMatchObject({
+			id: 91,
+			error: {
+				code: ErrorCodes.EXECUTION_ERROR,
+				message: expect.stringContaining("explicit per-site consent"),
+			},
+		});
+
+		const extension = await openRegisteredClient(baseUrl, "secret-token", "extension", {
+			windowId: 65,
+			capabilities: ["cookie_import_apply"],
+		});
+		await expect(readMessage(cli.ws)).resolves.toMatchObject({
+			type: "event",
+			event: "extension_connected",
+			data: { windowId: 65 },
+		});
+		const importResponse = sendRequestAndReadResponse(cli.ws, {
+			id: 92,
+			method: "cookie_import",
+			params: { sourcePath, siteUrl: "https://app.example.test/settings", consent: true },
+			target: { kind: "chrome-tab", tabRef: "window:65" },
+		});
+		const relayed = await readMessage<{
+			id: number;
+			method: string;
+			params?: { cookies?: Array<{ domain: string; name: string; value: string; httpOnly?: boolean }> };
+			target?: unknown;
+		}>(extension.ws);
+		expect(relayed).toMatchObject({
+			method: "cookie_import_apply",
+			target: { kind: "chrome-tab", tabRef: "window:65" },
+			params: {
+				cookies: [
+					{ domain: ".example.test", name: "sid", value: "secret", httpOnly: false },
+					{ domain: ".example.test", name: "http", value: "only", httpOnly: true },
+				],
+			},
+		});
+		expect(relayed.params?.cookies).toHaveLength(2);
+		expect(relayed.params?.cookies?.map((cookie) => cookie.domain)).not.toContain(".other.test");
+
+		extension.ws.send(JSON.stringify({ id: relayed.id, result: { ok: true, imported: 2, skipped: 0, errors: [] } }));
+		await expect(importResponse).resolves.toMatchObject({
+			id: 92,
+			result: {
+				ok: true,
+				imported: 2,
+				skipped: 0,
+				errors: [],
+				selected: 2,
+				siteUrl: "https://app.example.test/settings",
+			},
+		});
+
+		extension.ws.close();
+		cli.ws.close();
+		rmSync(cookieDir, { recursive: true, force: true });
+	});
+
+	it("fronts the bridge with MCP tools over authenticated HTTP", async () => {
+		const initialize = await fetch(`http://127.0.0.1:${port}/mcp`, {
+			method: "POST",
+			headers: { authorization: "Bearer secret-token", "content-type": "application/json" },
+			body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} }),
+		});
+		await expect(initialize.json()).resolves.toMatchObject({
+			id: 1,
+			result: { capabilities: { tools: {} }, serverInfo: { name: "shuvgeist-bridge" } },
+		});
+
+		const toolsResponse = await fetch(`http://127.0.0.1:${port}/mcp`, {
+			method: "POST",
+			headers: { authorization: "Bearer secret-token", "content-type": "application/json" },
+			body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} }),
+		});
+		await expect(toolsResponse.json()).resolves.toMatchObject({
+			id: 2,
+			result: { tools: expect.arrayContaining([expect.objectContaining({ name: "shuvgeist_observe" })]) },
+		});
+
+		const extension = await openRegisteredClient(baseUrl, "secret-token", "extension", {
+			windowId: 64,
+			capabilities: ["page_snapshot", "ref_click"],
+		});
+		const callPromise = fetch(`http://127.0.0.1:${port}/mcp`, {
+			method: "POST",
+			headers: { authorization: "Bearer secret-token", "content-type": "application/json" },
+			body: JSON.stringify({
+				jsonrpc: "2.0",
+				id: 3,
+				method: "tools/call",
+				params: {
+					name: "shuvgeist_observe",
+					arguments: { query: "save", maxEntries: 10, target: { kind: "chrome-tab", tabRef: "window:64" } },
+				},
+			}),
+		});
+		const relayed = await readMessage<{ id: number; method: string; params?: unknown; target?: unknown }>(extension.ws);
+		expect(relayed).toMatchObject({
+			method: "page_snapshot",
+			params: { query: "save", maxEntries: 10 },
+			target: { kind: "chrome-tab", tabRef: "window:64" },
+		});
+		extension.ws.send(
+			JSON.stringify({
+				id: relayed.id,
+				result: {
+					tabId: 64,
+					frameId: 0,
+					url: "https://example.test",
+					title: "Example",
+					generatedAt: 1,
+					totalCandidates: 1,
+					truncated: false,
+					entries: [{ snapshotId: "e1", tabId: 64, frameId: 0, role: "button", name: "Save" }],
+				},
+			}),
+		);
+		const callJson = await (await callPromise).json();
+		expect(callJson).toMatchObject({
+			id: 3,
+			result: {
+				structuredContent: {
+					task: { kind: "shuvgeist_observe", status: "succeeded" },
+					result: { tabId: 64, entries: [{ snapshotId: "e1" }] },
+				},
+			},
+		});
+		const actPromise = fetch(`http://127.0.0.1:${port}/mcp`, {
+			method: "POST",
+			headers: { authorization: "Bearer secret-token", "content-type": "application/json" },
+			body: JSON.stringify({
+				jsonrpc: "2.0",
+				id: 4,
+				method: "tools/call",
+				params: {
+					name: "shuvgeist_act",
+					arguments: { action: "click", refId: "e1", target: { kind: "chrome-tab", tabRef: "window:64" } },
+				},
+			}),
+		});
+		const actRelayed = await readMessage<{ id: number; method: string; params?: unknown; target?: unknown }>(extension.ws);
+		expect(actRelayed).toMatchObject({
+			method: "ref_click",
+			params: { refId: "e1" },
+			target: { kind: "chrome-tab", tabRef: "window:64" },
+		});
+		extension.ws.send(JSON.stringify({ id: actRelayed.id, result: { ok: true, refId: "e1" } }));
+		await expect((await actPromise).json()).resolves.toMatchObject({
+			id: 4,
+			result: {
+				structuredContent: {
+					task: { kind: "shuvgeist_act", status: "succeeded" },
+					result: { ok: true, refId: "e1" },
+				},
+			},
+		});
+		const tasksResponse = await fetch(`http://127.0.0.1:${port}/mcp`, {
+			method: "POST",
+			headers: { authorization: "Bearer secret-token", "content-type": "application/json" },
+			body: JSON.stringify({ jsonrpc: "2.0", id: 5, method: "tasks/list", params: {} }),
+		});
+		await expect(tasksResponse.json()).resolves.toMatchObject({
+			id: 5,
+			result: {
+				tasks: [
+					expect.objectContaining({ kind: "shuvgeist_observe", status: "succeeded" }),
+					expect.objectContaining({ kind: "shuvgeist_act", status: "succeeded" }),
+				],
+			},
+		});
+		extension.ws.close();
 	});
 
 	it("runs eval and screenshot through an attached electron CDP session", async () => {

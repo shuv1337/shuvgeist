@@ -201,6 +201,33 @@ export interface CookiesParams {
 	url?: string;
 }
 
+export interface CookieImportParams {
+	sourcePath: string;
+	siteUrl: string;
+	consent: boolean;
+}
+
+export interface CookieImportApplyParams {
+	cookies: Array<{
+		url: string;
+		name: string;
+		value: string;
+		domain: string;
+		path: string;
+		secure: boolean;
+		httpOnly: boolean;
+		expirationDate?: number;
+	}>;
+}
+
+export interface CookieImportResult {
+	ok: true;
+	siteUrl: string;
+	imported: number;
+	skipped: number;
+	errors: string[];
+}
+
 export interface SelectElementParams {
 	message?: string;
 }
@@ -227,6 +254,16 @@ export interface PageSnapshotBridgeParams extends TargetedBridgeParams {
 	maxEntries?: number;
 	includeHidden?: boolean;
 	query?: string;
+}
+
+export interface SnapshotStoreParams extends PageSnapshotBridgeParams {}
+
+export interface SnapshotReadParams {
+	id?: string;
+	snapshotId?: string;
+	tabId?: number;
+	frameId?: number;
+	limit?: number;
 }
 
 export type PageAssertKind = "expression" | "text" | "selector" | "role" | "label" | "url";
@@ -572,6 +609,28 @@ export interface PageSnapshotBridgeResult {
 	totalCandidates: number;
 	truncated: boolean;
 	entries: BridgeSnapshotEntry[];
+}
+
+export interface PageSnapshotRecordSummary {
+	id: string;
+	capturedAt: string;
+	target: BridgeTarget;
+	tabId: number;
+	frameId: number;
+	url: string;
+	title: string;
+	query?: string;
+	entryCount: number;
+	totalCandidates: number;
+	truncated: boolean;
+}
+
+export interface SnapshotStoreResult {
+	record: PageSnapshotRecordSummary;
+}
+
+export interface SnapshotReadResult {
+	records: Array<PageSnapshotRecordSummary & { raw: PageSnapshotBridgeResult }>;
 }
 
 export interface SnapshotLocatorMatchResult {

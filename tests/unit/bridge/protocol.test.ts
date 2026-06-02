@@ -12,10 +12,12 @@ import {
 import { BridgeCommandCatalog, getBridgeCommandMetadata } from "../../../src/bridge/command-catalog.js";
 
 describe("bridge protocol", () => {
-	it("returns eval/cookies capabilities only when sensitive access is enabled", () => {
+	it("returns sensitive capabilities only when sensitive access is enabled", () => {
 		expect(getBridgeCapabilities(true)).toEqual(BridgeCapabilities);
 		expect(getBridgeCapabilities(false)).not.toContain("eval");
 		expect(getBridgeCapabilities(false)).not.toContain("cookies");
+		expect(getBridgeCapabilities(false)).not.toContain("cookie_import");
+		expect(getBridgeCapabilities(false)).not.toContain("cookie_import_apply");
 		expect(getBridgeCapabilities(false)).not.toContain("network_get");
 		expect(getBridgeCapabilities(false)).not.toContain("network_body");
 		expect(getBridgeCapabilities(false)).not.toContain("network_curl");
@@ -28,6 +30,8 @@ describe("bridge protocol", () => {
 				(cap) =>
 					cap !== "eval" &&
 					cap !== "cookies" &&
+					cap !== "cookie_import" &&
+					cap !== "cookie_import_apply" &&
 					cap !== "network_get" &&
 					cap !== "network_body" &&
 					cap !== "network_curl" &&

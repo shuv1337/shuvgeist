@@ -52,6 +52,20 @@ export const BridgeCommandCatalog = [
 		sensitive: true,
 	},
 	{
+		method: "cookie_import",
+		capabilities: ["cookie_import"],
+		route: "server-local",
+		defaultTimeout: "slow",
+		sensitive: true,
+	},
+	{
+		method: "cookie_import_apply",
+		capabilities: ["cookie_import_apply"],
+		route: "extension",
+		defaultTimeout: "slow",
+		sensitive: true,
+	},
+	{
 		method: "select_element",
 		capabilities: ["select_element"],
 		route: "extension",
@@ -78,6 +92,18 @@ export const BridgeCommandCatalog = [
 		route: "extension",
 		cliCommands: ["snapshot"],
 		defaultTimeout: "slow",
+	},
+	{
+		method: "snapshot_store",
+		capabilities: ["snapshot_store"],
+		route: "server-local",
+		defaultTimeout: "slow",
+	},
+	{
+		method: "snapshot_read",
+		capabilities: ["snapshot_read"],
+		route: "server-local",
+		defaultTimeout: "request",
 	},
 	{
 		method: "page_assert",

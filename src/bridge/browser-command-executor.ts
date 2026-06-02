@@ -36,6 +36,8 @@ import type {
 	BridgeReplResult,
 	BridgeScreenshotResult,
 	BridgeStatusResult,
+	CookieImportApplyParams,
+	CookieImportResult,
 	CookiesParams,
 	DeviceEmulateParams,
 	DeviceResetParams,
@@ -197,6 +199,9 @@ export class BrowserCommandExecutor {
 					break;
 				case "cookies":
 					result = await this.cookies((params ?? {}) as CookiesParams, signal, span?.context);
+					break;
+				case "cookie_import_apply":
+					result = await this.applyCookieImport((params ?? {}) as unknown as CookieImportApplyParams);
 					break;
 				case "select_element":
 					result = await this.selectElement((params ?? {}) as SelectElementParams, signal);
@@ -421,6 +426,43 @@ export class BrowserCommandExecutor {
 				? await debuggerTool.executeBridge("bridge", { action: "cookies" }, signal, traceContext)
 				: await debuggerTool.execute("bridge", { action: "cookies" }, signal);
 		return result.details;
+	}
+
+	async applyCookieImport(params: CookieImportApplyParams): Promise<CookieImportResult> {
+		if (!this.sensitiveAccessEnabled) {
+			const error = new Error("Cookie import is disabled unless sensitive browser data access is enabled");
+			(error as Error & { code?: number }).code = ErrorCodes.CAPABILITY_DISABLED;
+			throw error;
+		}
+		if (!chrome.cookies) {
+			throw new Error("Cookie import requires the chrome.cookies permission.");
+		}
+		const errors: string[] = [];
+		let imported = 0;
+		for (const cookie of params.cookies) {
+			try {
+				await chrome.cookies.set({
+					url: cookie.url,
+					name: cookie.name,
+					value: cookie.value,
+					domain: cookie.domain,
+					path: cookie.path,
+					secure: cookie.secure,
+					httpOnly: cookie.httpOnly,
+					...(typeof cookie.expirationDate === "number" ? { expirationDate: cookie.expirationDate } : {}),
+				});
+				imported++;
+			} catch (error) {
+				errors.push(cookie.name + ": " + (error instanceof Error ? error.message : String(error)));
+			}
+		}
+		return {
+			ok: true,
+			siteUrl: params.cookies[0]?.url ?? "",
+			imported,
+			skipped: params.cookies.length - imported,
+			errors,
+		};
 	}
 
 	async selectElement(params: SelectElementParams, signal?: AbortSignal): Promise<unknown> {
