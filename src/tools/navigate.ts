@@ -365,9 +365,12 @@ export class NavigateTool implements AgentTool<typeof navigateSchema, NavigateRe
 		}
 
 		try {
-			const skillsRepo = getShuvgeistStorage().skills;
+			const storage = getShuvgeistStorage();
+			const skillsRepo = storage.skills;
 			const matchingSkills = await skillsRepo.getSkillsForUrl(url);
-			const { newOrUpdated, unchanged, formattedText } = formatSkills(matchingSkills);
+			const { newOrUpdated, unchanged, formattedText } = await formatSkills(matchingSkills, {
+				getMemoriesForSkill: (skill) => storage.memories.getForSkill(skill.name),
+			});
 			const skills = [
 				...newOrUpdated.map((s) => ({
 					name: s.name,

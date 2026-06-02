@@ -5,6 +5,7 @@ import { SessionsStore } from "@mariozechner/pi-web-ui/storage/stores/sessions-s
 import { SettingsStore } from "@mariozechner/pi-web-ui/storage/stores/settings-store.js";
 import { CostStore } from "./stores/cost-store.js";
 import { CustomProvidersStore } from "./stores/custom-providers-store.js";
+import { MemoryStore } from "./stores/memory-store.js";
 import { ShuvgeistSessionsStore } from "./stores/sessions-store.js";
 import { SkillsStore } from "./stores/skills-store.js";
 
@@ -14,6 +15,7 @@ import { SkillsStore } from "./stores/skills-store.js";
 export class ShuvgeistAppStorage extends BaseAppStorage {
 	readonly skills: SkillsStore;
 	readonly costs: CostStore;
+	readonly memories: MemoryStore;
 
 	constructor() {
 		// 1. Create all stores (no backend yet)
@@ -23,6 +25,7 @@ export class ShuvgeistAppStorage extends BaseAppStorage {
 		const customProviders = new CustomProvidersStore();
 		const skills = new SkillsStore();
 		const costs = new CostStore();
+		const memories = new MemoryStore();
 
 		// 2. Gather configs from all stores
 		const configs = [
@@ -33,12 +36,13 @@ export class ShuvgeistAppStorage extends BaseAppStorage {
 			sessions.getConfig(),
 			skills.getConfig(),
 			costs.getConfig(),
+			memories.getConfig(),
 		];
 
 		// 3. Create backend with all configs
 		const backend = new IndexedDBStorageBackend({
 			dbName: "shuvgeist-storage",
-			version: 3, // Increment version to add custom-providers store
+			version: 4,
 			stores: configs,
 		});
 
@@ -49,6 +53,7 @@ export class ShuvgeistAppStorage extends BaseAppStorage {
 		sessions.setBackend(backend);
 		skills.setBackend(backend);
 		costs.setBackend(backend);
+		memories.setBackend(backend);
 
 		// 5. Pass base stores to parent
 		super(settings, providerKeys, sessions, customProviders, backend);
@@ -56,6 +61,7 @@ export class ShuvgeistAppStorage extends BaseAppStorage {
 		// 6. Store references to shuvgeist-specific stores
 		this.skills = skills;
 		this.costs = costs;
+		this.memories = memories;
 	}
 }
 

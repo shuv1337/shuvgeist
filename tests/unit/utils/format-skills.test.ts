@@ -27,9 +27,9 @@ describe("formatSkills", () => {
 		shownSkills.clear();
 	});
 
-	it("returns full details for new skills and marks them as shown", () => {
+	it("returns full details for new skills and marks them as shown", async () => {
 		const alpha = makeSkill("alpha", "2026-03-22T00:00:00.000Z");
-		const result = formatSkills([alpha]);
+		const result = await formatSkills([alpha]);
 
 		expect(result.newOrUpdated).toEqual([alpha]);
 		expect(result.unchanged).toEqual([]);
@@ -38,18 +38,33 @@ describe("formatSkills", () => {
 		expect(shownSkills.get("alpha")).toBe(alpha.lastUpdated);
 	});
 
-	it("returns compact output for previously seen skills", () => {
+	it("returns compact output for previously seen skills", async () => {
 		const alpha = makeSkill("alpha", "2026-03-22T00:00:00.000Z");
 		shownSkills.set("alpha", alpha.lastUpdated);
 
-		const result = formatSkills([alpha]);
+		const result = await formatSkills([alpha]);
 		expect(result.newOrUpdated).toEqual([]);
 		expect(result.unchanged).toEqual([alpha]);
 		expect(result.formattedText).toContain("Previously Seen Skills");
 		expect(result.formattedText).toContain("- alpha: alpha short");
 	});
 
-	it("returns a sentinel string when no skills exist", () => {
-		expect(formatSkills([]).formattedText).toBe("none found");
+	it("returns a sentinel string when no skills exist", async () => {
+		await expect(formatSkills([]).then((result) => result.formattedText)).resolves.toBe("none found");
+	});
+
+	it("includes cross-session memories with full skill details", async () => {
+		const alpha = makeSkill("alpha", "2026-03-22T00:00:00.000Z");
+		const result = await formatSkills([alpha], {
+			getMemoriesForSkill: async () => [
+				{
+					note: "Prefer the semantic compose button before fallback selectors.",
+					createdAt: "2026-06-01T10:00:00.000Z",
+				},
+			],
+		});
+
+		expect(result.formattedText).toContain("Cross-session memory");
+		expect(result.formattedText).toContain("Prefer the semantic compose button before fallback selectors.");
 	});
 });

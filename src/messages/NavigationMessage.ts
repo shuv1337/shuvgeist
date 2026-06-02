@@ -127,9 +127,12 @@ export async function createNavigationMessage(
 	snapshot?: PageSnapshotResult,
 ): Promise<NavigationMessage> {
 	// Get skills for this URL and format them
-	const skillsRepo = getShuvgeistStorage().skills;
+	const storage = getShuvgeistStorage();
+	const skillsRepo = storage.skills;
 	const matchingSkills = await skillsRepo.getSkillsForUrl(url);
-	const { formattedText: skillsOutput } = formatSkills(matchingSkills);
+	const { formattedText: skillsOutput } = await formatSkills(matchingSkills, {
+		getMemoriesForSkill: (skill) => storage.memories.getForSkill(skill.name),
+	});
 
 	return {
 		role: "navigation",

@@ -1,6 +1,18 @@
 import type { Skill } from "../storage/stores/skills-store.js";
 import { getShownSkills } from "./shown-skills.js";
 
+export interface SkillMemoryContext {
+	note: string;
+	createdAt: string;
+	source?: string;
+}
+
+export type SkillMemoryLookup = (skill: Skill) => Promise<SkillMemoryContext[]> | SkillMemoryContext[];
+
+export interface FormatSkillsOptions {
+	getMemoriesForSkill?: SkillMemoryLookup;
+}
+
 export interface FormattedSkills {
 	newOrUpdated: Skill[];
 	unchanged: Skill[];
@@ -11,7 +23,7 @@ export interface FormattedSkills {
  * Formats skills for display, tracking which have been shown before.
  * Returns full details for new/updated skills, short form for previously seen skills.
  */
-export function formatSkills(skills: Skill[]): FormattedSkills {
+export async function formatSkills(skills: Skill[], options: FormatSkillsOptions = {}): Promise<FormattedSkills> {
 	const shownSkills = getShownSkills();
 
 	// Separate into new/updated vs already shown
@@ -35,21 +47,24 @@ export function formatSkills(skills: Skill[]): FormattedSkills {
 
 	if (newOrUpdated.length > 0) {
 		formattedText += "New/Updated Skills (full details):\n";
-		formattedText += newOrUpdated
-			.map(
-				(s) => `
+		const skillBlocks = await Promise.all(
+			newOrUpdated.map(async (s) => {
+				const memories = await options.getMemoriesForSkill?.(s);
+				return `
 <skill>
 ${s.name}
 Domain Patterns: ${s.domainPatterns.join(", ")}
 ${s.description}
+${formatSkillMemories(memories)}
 ## Examples
 \`\`\`javascript
 ${s.examples}
 \`\`\`
 </skill>
-`,
-			)
-			.join("\n---\n");
+`;
+			}),
+		);
+		formattedText += skillBlocks.join("\n---\n");
 	}
 
 	if (unchanged.length > 0) {
@@ -67,4 +82,11 @@ ${s.examples}
 		unchanged,
 		formattedText,
 	};
+}
+
+function formatSkillMemories(memories: SkillMemoryContext[] | undefined): string {
+	if (!memories || memories.length === 0) return "";
+	return ["\n## Cross-session memory", ...memories.map((memory) => `- ${memory.note} (${memory.createdAt})`), ""].join(
+		"\n",
+	);
 }

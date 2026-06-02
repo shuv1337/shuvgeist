@@ -15,6 +15,7 @@ import {
 } from "@mariozechner/pi-web-ui";
 import { html, render } from "lit";
 import { Crosshair, History, Plus, Settings, Volume2 } from "lucide";
+import { buildSkillMemoryWrites } from "./agent/skill-memory.js";
 import { BrowserCommandExecutor } from "./bridge/browser-command-executor.js";
 import {
 	BRIDGE_STATE_KEY,
@@ -99,7 +100,7 @@ import { BrowserJsRuntimeProvider, NavigateRuntimeProvider } from "./tools/repl/
 import { checkUserScriptsAvailability } from "./tools/repl/userscripts-helpers.js";
 import { registerSkillRenderer } from "./tools/skill-renderer.js";
 import * as port from "./utils/port.js";
-import { clearShownSkills } from "./utils/shown-skills.js";
+import { clearShownSkills, getShownSkills } from "./utils/shown-skills.js";
 import "./utils/i18n-extension.js";
 import "./utils/live-reload.js";
 import { type AgentRuntimeInitialState, createAgentRuntime, DEFAULT_AGENT_THINKING_LEVEL } from "./agent/runtime.js";
@@ -780,6 +781,7 @@ const createAgent = async (options: SidepanelCreateAgentOptions = {}, shouldSave
 		plannerValidator: plannerValidatorEnabled ? {} : false,
 	});
 	agent = agentSessionContext.agent;
+	let persistedValidatorNoteCount = 0;
 
 	await updateAuthLabel();
 
@@ -799,6 +801,29 @@ const createAgent = async (options: SidepanelCreateAgentOptions = {}, shouldSave
 					event: "session_run_state",
 					data: { sessionId: currentSessionId, state: "idle" },
 				});
+				const memoryWrites = buildSkillMemoryWrites({
+					plannerValidator: agentSessionContext.plannerValidator,
+					skillNames: getShownSkills().keys(),
+					sessionId: currentSessionId,
+					fromNoteIndex: persistedValidatorNoteCount,
+				});
+				persistedValidatorNoteCount =
+					agentSessionContext.plannerValidator?.validatorNotes.length ?? persistedValidatorNoteCount;
+				if (memoryWrites.length > 0) {
+					Promise.all(
+						memoryWrites.map((memory) =>
+							storage.memories.add({
+								skillName: memory.skillName,
+								sessionId: memory.sessionId,
+								createdAt: memory.createdAt,
+								source: "planner-validator",
+								note: memory.note,
+								toolName: memory.toolName,
+								turn: memory.turn,
+							}),
+						),
+					).catch((err) => console.error("Failed to persist skill memories:", err));
+				}
 				void agent
 					.waitForIdle()
 					.then(() => {
