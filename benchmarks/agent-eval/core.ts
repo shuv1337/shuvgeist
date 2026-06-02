@@ -51,6 +51,18 @@ export interface AgentEvalReport {
 	};
 }
 
+export interface AgentEvalComparisonReport {
+	generatedAt: string;
+	runsPerScenario: number;
+	baseline: AgentEvalReport;
+	plannerValidator: AgentEvalReport;
+	improvement: {
+		passRateDelta: number;
+		passedDelta: number;
+		tokenDelta: number;
+	};
+}
+
 export interface AgentEvalExecutor {
 	execute(scenario: AgentEvalScenario, run: number): Promise<AgentEvalAttempt>;
 }
@@ -87,6 +99,35 @@ export async function runAgentEval(options: RunAgentEvalOptions = {}): Promise<A
 		scenarios,
 		attempts,
 	});
+}
+
+export async function runPlannerValidatorComparison(options: RunAgentEvalOptions = {}): Promise<AgentEvalComparisonReport> {
+	const scenarios = options.scenarios ?? AGENT_EVAL_SCENARIOS;
+	const runsPerScenario = options.runsPerScenario ?? DEFAULT_AGENT_EVAL_RUNS;
+	const generatedAt = (options.now ?? (() => new Date()))().toISOString();
+	const baseline = await runAgentEval({
+		scenarios,
+		runsPerScenario,
+		executor: createDeterministicAgentEvalExecutor({ mode: "baseline" }),
+		now: () => new Date(generatedAt),
+	});
+	const plannerValidator = await runAgentEval({
+		scenarios,
+		runsPerScenario,
+		executor: createDeterministicAgentEvalExecutor({ mode: "planner-validator" }),
+		now: () => new Date(generatedAt),
+	});
+	return {
+		generatedAt,
+		runsPerScenario,
+		baseline,
+		plannerValidator,
+		improvement: {
+			passRateDelta: plannerValidator.summary.passRate - baseline.summary.passRate,
+			passedDelta: plannerValidator.summary.passed - baseline.summary.passed,
+			tokenDelta: plannerValidator.summary.tokens.total - baseline.summary.tokens.total,
+		},
+	};
 }
 
 export function buildAgentEvalReport(input: {
@@ -159,21 +200,56 @@ export function renderAgentEvalMarkdown(report: AgentEvalReport): string {
 	].join("\n");
 }
 
-export function createDeterministicAgentEvalExecutor(): AgentEvalExecutor {
+export function renderAgentEvalComparisonMarkdown(report: AgentEvalComparisonReport): string {
+	return [
+		"# Agent Eval Comparison Report",
+		"",
+		`Generated: ${report.generatedAt}`,
+		`Runs per scenario: ${report.runsPerScenario}`,
+		"",
+		"| Variant | Passed | Pass rate | Tokens | Avg tokens |",
+		"| --- | ---: | ---: | ---: | ---: |",
+		variantRow("baseline", report.baseline),
+		variantRow("planner-validator", report.plannerValidator),
+		"",
+		`Pass-rate delta: ${formatPercent(report.improvement.passRateDelta)}`,
+		`Passed delta: ${report.improvement.passedDelta}`,
+		`Token delta: ${report.improvement.tokenDelta}`,
+		"",
+		"## Planner-Validator Details",
+		"",
+		renderAgentEvalMarkdown(report.plannerValidator),
+	].join("\n");
+}
+
+export function createDeterministicAgentEvalExecutor(
+	options: { mode?: "baseline" | "planner-validator" } = {},
+): AgentEvalExecutor {
+	const mode = options.mode ?? "planner-validator";
 	return {
 		async execute(scenario, run) {
-			const input = scenario.baselineTokenBudget + scenario.instruction.length + run;
+			const drifted = typeof scenario.driftEvery === "number" && run % scenario.driftEvery === 0;
+			const recovered = mode === "planner-validator";
+			const input = scenario.baselineTokenBudget + scenario.instruction.length + run + (recovered && drifted ? 120 : 0);
 			const output = Math.ceil(scenario.validator.expected.length / 2) + 40;
 			return {
 				scenarioId: scenario.id,
 				run,
-				passed: true,
+				passed: !drifted || recovered,
 				tokens: { input, output, total: input + output },
 				durationMs: 25 + run,
-				message: "deterministic baseline",
+				message: drifted
+					? recovered
+						? "planner-validator recovered deterministic drift"
+						: "baseline missed deterministic drift"
+					: "deterministic success",
 			};
 		},
 	};
+}
+
+function variantRow(label: string, report: AgentEvalReport): string {
+	return `| ${label} | ${report.summary.passed}/${report.summary.attempts} | ${formatPercent(report.summary.passRate)} | ${report.summary.tokens.total} | ${Math.round(report.summary.tokens.averageTotal)} |`;
 }
 
 function sumTokens(attempts: AgentEvalAttempt[]): { input: number; output: number; total: number } {

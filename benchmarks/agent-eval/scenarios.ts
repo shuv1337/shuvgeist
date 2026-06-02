@@ -8,6 +8,7 @@ export interface AgentEvalScenario {
 		expected: string;
 	};
 	baselineTokenBudget: number;
+	driftEvery?: number;
 }
 
 export const AGENT_EVAL_SCENARIOS: AgentEvalScenario[] = [
@@ -26,6 +27,7 @@ export const AGENT_EVAL_SCENARIOS: AgentEvalScenario[] = [
 		instruction: "Find the email field by label, fill it with test@example.com, and submit the form.",
 		validator: { kind: "state", expected: "submitted:test@example.com" },
 		baselineTokenBudget: 2200,
+		driftEvery: 4,
 	},
 	{
 		id: "navigation-recovery",
@@ -34,5 +36,6 @@ export const AGENT_EVAL_SCENARIOS: AgentEvalScenario[] = [
 		instruction: "Navigate to the details view, re-observe after navigation, and click Continue.",
 		validator: { kind: "url", expected: "fixture://navigation/details/continue" },
 		baselineTokenBudget: 2600,
+		driftEvery: 3,
 	},
 ];

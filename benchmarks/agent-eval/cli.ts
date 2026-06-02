@@ -1,6 +1,6 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { renderAgentEvalMarkdown, runAgentEval } from "./core.js";
+import { renderAgentEvalComparisonMarkdown, runPlannerValidatorComparison } from "./core.js";
 
 interface CliOptions {
 	runsPerScenario?: number;
@@ -10,13 +10,13 @@ interface CliOptions {
 
 async function main(): Promise<void> {
 	const options = parseArgs(process.argv.slice(2));
-	const report = await runAgentEval({ runsPerScenario: options.runsPerScenario });
+	const report = await runPlannerValidatorComparison({ runsPerScenario: options.runsPerScenario });
 	const jsonOut = options.jsonOut ?? "benchmarks/agent-eval/reports/latest.json";
 	const markdownOut = options.markdownOut ?? "benchmarks/agent-eval/reports/latest.md";
 	writeText(jsonOut, JSON.stringify(report, null, 2) + "\n");
-	writeText(markdownOut, renderAgentEvalMarkdown(report));
+	writeText(markdownOut, renderAgentEvalComparisonMarkdown(report));
 	console.log(
-		`Agent eval complete: ${report.summary.passed}/${report.summary.attempts} passed, ${report.summary.tokens.total} tokens`,
+		`Agent eval comparison complete: baseline ${report.baseline.summary.passed}/${report.baseline.summary.attempts}, planner-validator ${report.plannerValidator.summary.passed}/${report.plannerValidator.summary.attempts}, pass-rate delta ${(report.improvement.passRateDelta * 100).toFixed(1)}%`,
 	);
 	console.log(`JSON: ${jsonOut}`);
 	console.log(`Markdown: ${markdownOut}`);
