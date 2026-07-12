@@ -62,6 +62,30 @@ describe("cli-core", () => {
 				result: { ok: false, kind: "text", message: "missing", attempts: 3 },
 			}),
 		).toBe(1);
+		expect(
+			exitCodeForResponse({
+				id: 1,
+				result: { ok: false, closedTabIds: [], skipped: [{ tabId: 9, reason: "missing" }] },
+			}),
+		).toBe(1);
+		expect(
+			exitCodeForResponse({
+				id: 1,
+				result: { ok: true, closedTabIds: [9] },
+			}),
+		).toBe(0);
+		expect(
+			exitCodeForResponse({
+				id: 1,
+				result: { ok: false, closedWindowIds: [], skipped: [{ windowId: 1, reason: "missing" }] },
+			}),
+		).toBe(1);
+		expect(
+			exitCodeForResponse({
+				id: 1,
+				result: { ok: true, closedWindowIds: [3], closedTabIds: [1, 2] },
+			}),
+		).toBe(0);
 		expect(exitCodeForResponse({ id: 1, error: { code: -32000, message: "No extension" } })).toBe(2);
 		expect(exitCodeForResponse({ id: 1, error: { code: -32001, message: "Auth" } })).toBe(3);
 		expect(exitCodeForResponse({ id: 1, error: { code: -32003, message: "Exec" } })).toBe(1);
@@ -80,6 +104,105 @@ describe("cli-core", () => {
 			params: { listTabs: true },
 			defaultTimeoutMs: 60_000,
 		});
+		expect(createCommandPlan("tabs", ["list"], {}, readFileText)).toEqual({
+			kind: "one-shot",
+			method: "navigate",
+			params: { listTabs: true },
+			defaultTimeoutMs: 60_000,
+		});
+		expect(createCommandPlan("tabs", ["close", "9", "10"], {}, readFileText)).toEqual({
+			kind: "one-shot",
+			method: "navigate",
+			params: { closeTabs: [9, 10] },
+			defaultTimeoutMs: 60_000,
+		});
+		expect(createCommandPlan("tabs", ["close", "9"], {}, readFileText)).toEqual({
+			kind: "one-shot",
+			method: "navigate",
+			params: { closeTab: 9 },
+			defaultTimeoutMs: 60_000,
+		});
+		expect(createCommandPlan("tabs", ["close"], { titleMatch: "x" }, readFileText)).toEqual({
+			kind: "usage-error",
+			message: expect.stringContaining("Filter close requires --dry-run"),
+		});
+		expect(createCommandPlan("tabs", ["close"], { titleMatch: "x", dryRun: true }, readFileText)).toEqual({
+			kind: "one-shot",
+			method: "navigate",
+			params: {
+				closeTabFilter: { titleIncludes: "x" },
+				dryRun: true,
+			},
+			defaultTimeoutMs: 60_000,
+		});
+		expect(createCommandPlan("tabs", ["close"], { titleMatch: "x", yes: true }, readFileText)).toEqual({
+			kind: "one-shot",
+			method: "navigate",
+			params: {
+				closeTabFilter: { titleIncludes: "x" },
+			},
+			defaultTimeoutMs: 60_000,
+		});
+		expect(
+			createCommandPlan(
+				"tabs",
+				["close"],
+				{
+					urlMatch: "localhost",
+					titlePattern: "end$",
+					urlPattern: "https://",
+					windowId: "7",
+					includePinned: true,
+					includeProtected: true,
+					requireMatch: true,
+					yes: true,
+				},
+				readFileText,
+			),
+		).toEqual({
+			kind: "one-shot",
+			method: "navigate",
+			params: {
+				closeTabFilter: {
+					urlIncludes: "localhost",
+					titlePattern: "end$",
+					urlPattern: "https://",
+					windowId: 7,
+					includePinned: true,
+					includeProtected: true,
+				},
+				requireMatch: true,
+			},
+			defaultTimeoutMs: 60_000,
+		});
+		expect(createCommandPlan("tabs", ["close", "9"], { titleMatch: "x", yes: true }, readFileText)).toEqual({
+			kind: "usage-error",
+			message: expect.stringContaining("either tab IDs or filter flags"),
+		});
+		expect(createCommandPlan("windows", [], {}, readFileText)).toEqual({
+			kind: "one-shot",
+			method: "navigate",
+			params: { listWindows: true },
+			defaultTimeoutMs: 60_000,
+		});
+		expect(createCommandPlan("windows", ["close", "42"], { yes: true }, readFileText)).toEqual({
+			kind: "one-shot",
+			method: "navigate",
+			params: { closeWindow: 42 },
+			defaultTimeoutMs: 60_000,
+		});
+		expect(createCommandPlan("windows", ["close", "42"], {}, readFileText)).toEqual({
+			kind: "usage-error",
+			message: expect.stringContaining("Window close requires --dry-run"),
+		});
+		expect(createCommandPlan("windows", ["close", "42"], { dryRun: true }, readFileText)).toEqual({
+			kind: "one-shot",
+			method: "navigate",
+			params: { closeWindow: 42, dryRun: true },
+			defaultTimeoutMs: 60_000,
+		});
+		// Top-level `close` remains launch teardown, not tab close
+		expect(createCommandPlan("close", ["9"], {}, readFileText)).toEqual({ kind: "close" });
 		expect(createCommandPlan("switch", ["17"], {}, readFileText)).toEqual({
 			kind: "one-shot",
 			method: "navigate",

@@ -75,7 +75,7 @@ The CLI bridge exposes the browser to terminal tools, scripts, and coding agents
 Current CLI surface:
 
 - browser lifecycle: `launch`, `close`, `status`
-- navigation: `navigate`, `tabs`, `switch`
+- navigation: `navigate`, `tabs`, `tabs close`, `switch`, `windows`
 - page execution: `repl`, `eval`, `screenshot`, `cookies`, `select`
 - page assertions: `assert expr`, `assert text`, `assert selector`, `assert role`, `assert label`, `assert url`
 - deterministic workflows: `workflow run`, `workflow validate`
@@ -197,6 +197,10 @@ Basic examples:
 shuvgeist status
 shuvgeist navigate "https://example.com"
 shuvgeist tabs --json
+shuvgeist tabs close 123 --json
+shuvgeist tabs close --title-match shuvplan --dry-run --json
+shuvgeist tabs close --title-match shuvplan --yes --json
+shuvgeist windows --json
 shuvgeist screenshot --out page.png
 shuvgeist record start --out /tmp/example.webm --max-duration 5s
 shuvgeist repl 'return await browserjs(() => document.title)'

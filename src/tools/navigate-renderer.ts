@@ -20,6 +20,19 @@ function getFallbackFavicon(url: string): string {
 	}
 }
 
+function isCloseParams(params: NavigateParams): boolean {
+	return (
+		params.closeTab !== undefined ||
+		(params.closeTabs !== undefined && params.closeTabs.length > 0) ||
+		params.closeTabFilter !== undefined ||
+		params.closeWindow !== undefined
+	);
+}
+
+function isUrlNavigateParams(params: NavigateParams): boolean {
+	return typeof params.url === "string" && params.url.length > 0;
+}
+
 export const navigateRenderer: ToolRenderer<NavigateParams, NavigateResult> = {
 	render(
 		params: NavigateParams | undefined,
@@ -29,13 +42,30 @@ export const navigateRenderer: ToolRenderer<NavigateParams, NavigateResult> = {
 		// Loading state (params but no result)
 		if (params && !result) {
 			let displayText = "";
-			if ("url" in params && params.url) {
+			let prefix = "";
+			if (isUrlNavigateParams(params) && params.url) {
+				prefix = i18n("Navigating to");
 				displayText = params.url;
-			} else if ("listTabs" in params) {
+			} else if ("listTabs" in params && params.listTabs) {
 				displayText = "Listing tabs...";
-			} else if ("switchToTab" in params) {
+			} else if ("listWindows" in params && params.listWindows) {
+				displayText = "Listing windows...";
+			} else if ("switchToTab" in params && params.switchToTab !== undefined) {
 				displayText = `Switching to tab ${params.switchToTab}`;
+			} else if (isCloseParams(params)) {
+				if (params.dryRun) {
+					displayText = params.closeWindow !== undefined ? "Previewing window close..." : "Would close tab(s)...";
+				} else if (params.closeWindow !== undefined) {
+					displayText = `Closing window ${params.closeWindow}...`;
+				} else {
+					displayText = "Closing tab(s)...";
+				}
+			} else {
+				prefix = i18n("Navigating to");
+				displayText = "...";
 			}
+
+			const label = prefix ? `${prefix} ${displayText}` : displayText;
 
 			return {
 				content: html`
@@ -46,7 +76,7 @@ export const navigateRenderer: ToolRenderer<NavigateParams, NavigateResult> = {
 							<div class="w-4 h-4 flex-shrink-0 flex items-center justify-center">
 								${icon(Loader2, "sm", "animate-spin")}
 							</div>
-							<span class="truncate font-medium">${i18n("Navigating to")} ${displayText}</span>
+							<span class="truncate font-medium">${label}</span>
 						</div>
 					</div>
 				`,
@@ -56,15 +86,94 @@ export const navigateRenderer: ToolRenderer<NavigateParams, NavigateResult> = {
 
 		// Complete state (with result)
 		if (result && !result.isError && result.details) {
-			const { finalUrl, title, favicon, skills, tabs } = result.details;
+			const { finalUrl, title, favicon, skills, tabs, windows, closedTabIds, closedWindowIds, dryRun, skipped, ok } =
+				result.details;
 
-			// Handle tab listing
-			if (tabs) {
+			// Handle close results
+			if (closedTabIds !== undefined || closedWindowIds !== undefined) {
+				const nTabs = closedTabIds?.length ?? 0;
+				const nWindows = closedWindowIds?.length ?? 0;
+				const failed = ok === false;
+				let label: string;
+				if (dryRun) {
+					if (nWindows > 0) label = `Would close ${nWindows} window(s) (${nTabs} tabs)`;
+					else label = `Would close ${nTabs} tab(s)`;
+				} else {
+					if (nWindows > 0) label = `Closed ${nWindows} window(s)`;
+					else label = `Closed ${nTabs} tab(s)`;
+				}
+				if (failed) {
+					label = dryRun ? `Preview incomplete: ${label}` : `Close incomplete: ${label}`;
+				}
+				const skipNote =
+					skipped && skipped.length > 0
+						? html`<span class="${failed ? "text-sm text-destructive" : "text-sm text-muted-foreground"}"
+								>(${skipped.length} skipped${
+									failed && skipped[0]
+										? `: ${skipped
+												.slice(0, 3)
+												.map((s) => `${s.tabId ?? s.windowId ?? "?"}: ${s.reason}`)
+												.join("; ")}${skipped.length > 3 ? "…" : ""}`
+										: ""
+								})</span>`
+						: "";
 				return {
 					content: html`
 						<div class="flex items-center gap-2 flex-wrap">
-							<span class="text-sm text-muted-foreground">${i18n("Open tabs")}</span>
-							${tabs.map((tab) => TabPill(tab, true))}
+							<span class="${failed ? "text-sm text-destructive" : "text-sm text-muted-foreground"}"
+								>${label}</span
+							>
+							${skipNote}
+							${
+								tabs && tabs.length > 0
+									? html`
+										<span class="text-sm text-muted-foreground">Remaining:</span>
+										${tabs.map((tab) => TabPill(tab, true))}
+									`
+									: ""
+							}
+						</div>
+					`,
+					isCustom: false,
+				};
+			}
+
+			// Handle tab / window listing
+			if (tabs || windows) {
+				return {
+					content: html`
+						<div class="flex flex-col gap-2">
+							${
+								tabs
+									? html`
+										<div class="flex items-center gap-2 flex-wrap">
+											<span class="text-sm text-muted-foreground">${i18n("Open tabs")}</span>
+											${tabs.map((tab) => TabPill(tab, true))}
+										</div>
+									`
+									: ""
+							}
+							${
+								windows && windows.length > 0
+									? html`
+										<div class="flex items-center gap-2 flex-wrap">
+											<span class="text-sm text-muted-foreground">Windows</span>
+											${windows.map(
+												(w) => html`
+													<span
+														class="inline-flex items-center gap-1 px-2 py-1 text-xs bg-card border border-border rounded-md text-muted-foreground"
+														title="window ${w.id}"
+													>
+														#${w.id}${w.focused ? " ●" : ""} · ${w.tabCount} tab(s)${
+															w.type ? ` · ${w.type}` : ""
+														}
+													</span>
+												`,
+											)}
+										</div>
+									`
+									: ""
+							}
 						</div>
 					`,
 					isCustom: false,

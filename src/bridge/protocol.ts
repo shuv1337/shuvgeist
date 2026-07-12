@@ -177,11 +177,29 @@ export type BridgeMessage =
 // Command-specific parameter types
 // ---------------------------------------------------------------------------
 
+export interface NavigateCloseTabFilter {
+	titleIncludes?: string;
+	titlePattern?: string;
+	urlIncludes?: string;
+	urlPattern?: string;
+	windowId?: number;
+	includePinned?: boolean;
+	includeProtected?: boolean;
+}
+
 export interface NavigateParams {
 	url?: string;
 	newTab?: boolean;
+	tabId?: number;
 	listTabs?: boolean;
 	switchToTab?: number;
+	closeTab?: number;
+	closeTabs?: number[];
+	closeTabFilter?: NavigateCloseTabFilter;
+	dryRun?: boolean;
+	requireMatch?: boolean;
+	listWindows?: boolean;
+	closeWindow?: number;
 }
 
 export interface ReplParams extends TargetedBridgeParams {

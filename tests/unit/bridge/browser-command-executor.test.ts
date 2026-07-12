@@ -539,6 +539,44 @@ describe("BrowserCommandExecutor", () => {
 			expect(capturePageSnapshot).not.toHaveBeenCalled();
 		});
 
+		it("invalidates stored refs for each closed tab id", async () => {
+			const snapshot = buildRefSnapshot();
+			pageSnapshotExecute.mockResolvedValue({ details: snapshot });
+			capturePageSnapshot.mockResolvedValue(snapshot);
+			navigateExecute.mockResolvedValue({
+				details: { closedTabIds: [42], skipped: [], dryRun: false, ok: true },
+			});
+			const executor = new BrowserCommandExecutor({ windowId: 7, sensitiveAccessEnabled: false });
+
+			await executor.pageSnapshot({ tabId: 42, frameId: 7 });
+			await executor.navigate({ closeTab: 42 });
+
+			await expect(executor.refClick({ refId: "login-input" })).rejects.toThrow(
+				"Reference login-input does not exist",
+			);
+		});
+
+		it("does not invalidate refs on dry-run close", async () => {
+			const snapshot = buildRefSnapshot();
+			pageSnapshotExecute.mockResolvedValue({ details: snapshot });
+			capturePageSnapshot.mockResolvedValue(snapshot);
+			chrome.userScripts.execute.mockResolvedValue([
+				{ result: { success: true, value: { ok: true }, console: [] } },
+			]);
+			navigateExecute.mockResolvedValue({
+				details: { closedTabIds: [42], skipped: [], dryRun: true, ok: true },
+			});
+			const executor = new BrowserCommandExecutor({ windowId: 7, sensitiveAccessEnabled: false });
+
+			await executor.pageSnapshot({ tabId: 42, frameId: 7 });
+			await executor.navigate({ closeTab: 42, dryRun: true });
+
+			await expect(executor.refClick({ refId: "login-input" })).resolves.toMatchObject({
+				ok: true,
+				refId: "login-input",
+			});
+		});
+
 	it("waits for bounded same-tab stability when requested after ref click", async () => {
 		const snapshot = buildRefSnapshot();
 		pageSnapshotExecute.mockResolvedValue({ details: snapshot });

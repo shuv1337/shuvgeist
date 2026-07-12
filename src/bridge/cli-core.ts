@@ -71,6 +71,15 @@ export interface CliFlags {
 	headless?: boolean;
 	foreground?: boolean;
 	noViewportJson?: boolean;
+	yes?: boolean;
+	titleMatch?: string;
+	urlMatch?: string;
+	titlePattern?: string;
+	// urlPattern already exists
+	windowId?: string;
+	includePinned?: boolean;
+	includeProtected?: boolean;
+	requireMatch?: boolean;
 }
 
 export interface CliEnvironment {
@@ -159,6 +168,72 @@ function createOneShotPlan(
 		defaultTimeoutMs: catalogDefaultTimeoutMs(method),
 		target,
 	};
+}
+
+function createTabsClosePlan(positionals: string[], flags: CliFlags, target?: BridgeTarget): CliCommandPlan {
+	const ids = positionals.filter((p) => /^\d+$/.test(p)).map((p) => Number.parseInt(p, 10));
+	const nonIdPositionals = positionals.filter((p) => !/^\d+$/.test(p));
+	if (nonIdPositionals.length > 0) {
+		return {
+			kind: "usage-error",
+			message: `Unexpected argument(s): ${nonIdPositionals.join(" ")}. Usage: shuvgeist tabs close <tabId...> | --title-match … [--yes|--dry-run]`,
+		};
+	}
+
+	const hasFilter =
+		!!flags.titleMatch || !!flags.urlMatch || !!flags.titlePattern || !!flags.urlPattern || !!flags.windowId;
+
+	if (ids.length === 0 && !hasFilter) {
+		return {
+			kind: "usage-error",
+			message:
+				"Usage: shuvgeist tabs close <tabId...> | --title-match <s> | --url-match <s> | --title-pattern <re> | --url-pattern <re> | --window-id <n> [--yes] [--dry-run]",
+		};
+	}
+
+	if (ids.length > 0 && hasFilter) {
+		return {
+			kind: "usage-error",
+			message: "tabs close: pass either tab IDs or filter flags, not both",
+		};
+	}
+
+	// Filter closes require --yes or --dry-run (explicit ids never need --yes)
+	if (hasFilter && !flags.yes && !flags.dryRun) {
+		return {
+			kind: "usage-error",
+			message:
+				"Filter close requires --dry-run (preview matches) or --yes (apply). Example: shuvgeist tabs close --title-match shuvplan --dry-run --json",
+		};
+	}
+
+	const params: Record<string, unknown> = {};
+	if (flags.dryRun) params.dryRun = true;
+	if (flags.requireMatch) params.requireMatch = true;
+
+	if (ids.length === 1) {
+		params.closeTab = ids[0];
+	} else if (ids.length > 1) {
+		params.closeTabs = ids;
+	} else {
+		const filter: Record<string, unknown> = {};
+		if (flags.titleMatch) filter.titleIncludes = flags.titleMatch;
+		if (flags.urlMatch) filter.urlIncludes = flags.urlMatch;
+		if (flags.titlePattern) filter.titlePattern = flags.titlePattern;
+		if (flags.urlPattern) filter.urlPattern = flags.urlPattern;
+		if (flags.windowId) {
+			const parsed = Number.parseInt(flags.windowId, 10);
+			if (!Number.isFinite(parsed)) {
+				return { kind: "usage-error", message: "--window-id must be a number" };
+			}
+			filter.windowId = parsed;
+		}
+		if (flags.includePinned) filter.includePinned = true;
+		if (flags.includeProtected) filter.includeProtected = true;
+		params.closeTabFilter = filter;
+	}
+
+	return createOneShotPlan("navigate", params, target);
 }
 
 function parsePositiveIntegerFlag(
@@ -315,7 +390,9 @@ export function isNetworkOrConfigError(err: unknown): boolean {
 
 export function exitCodeForResponse(response: BridgeResponse): number {
 	if (!response.error) {
-		return isAssertionResult(response.result) && response.result.ok === false ? 1 : 0;
+		if (isAssertionResult(response.result) && response.result.ok === false) return 1;
+		if (isNavigateCloseResult(response.result) && response.result.ok === false) return 1;
+		return 0;
 	}
 	if (response.error.code === ErrorCodes.NO_EXTENSION_TARGET) return 2;
 	if (
@@ -340,6 +417,17 @@ function isAssertionResult(value: unknown): value is { ok: boolean; kind: string
 	);
 }
 
+/** Navigate close/window-close results set ok:false on partial/explicit failures. */
+function isNavigateCloseResult(value: unknown): value is { ok: boolean; closedTabIds?: number[] } {
+	return (
+		typeof value === "object" &&
+		value !== null &&
+		"ok" in value &&
+		typeof (value as { ok?: unknown }).ok === "boolean" &&
+		("closedTabIds" in value || "closedWindowIds" in value)
+	);
+}
+
 export function createCommandPlan(
 	command: string,
 	positionals: string[],
@@ -359,8 +447,50 @@ export function createCommandPlan(
 			if (!url) return { kind: "usage-error", message: "Usage: shuvgeist navigate <url> [--new-tab]" };
 			return createOneShotPlan("navigate", flags.newTab ? { url, newTab: true } : { url }, target);
 		}
-		case "tabs":
-			return createOneShotPlan("navigate", { listTabs: true }, target);
+		case "tabs": {
+			const sub = positionals[0];
+			if (!sub || sub === "list") {
+				return createOneShotPlan("navigate", { listTabs: true }, target);
+			}
+			if (sub === "close") {
+				return createTabsClosePlan(positionals.slice(1), flags, target);
+			}
+			return {
+				kind: "usage-error",
+				message: "Usage: shuvgeist tabs [list|close] …  (see shuvgeist --help)",
+			};
+		}
+		case "windows": {
+			const sub = positionals[0];
+			if (!sub || sub === "list") {
+				return createOneShotPlan("navigate", { listWindows: true }, target);
+			}
+			if (sub === "close") {
+				const windowIdRaw = positionals[1];
+				if (!windowIdRaw || !/^\d+$/.test(windowIdRaw)) {
+					return {
+						kind: "usage-error",
+						message: "Usage: shuvgeist windows close <windowId> [--yes|--dry-run] [--json]",
+					};
+				}
+				const windowId = Number.parseInt(windowIdRaw, 10);
+				if (!flags.yes && !flags.dryRun) {
+					return {
+						kind: "usage-error",
+						message:
+							"Window close requires --dry-run (preview) or --yes (apply). Example: shuvgeist windows close <id> --yes --json",
+					};
+				}
+				const params: Record<string, unknown> = { closeWindow: windowId };
+				if (flags.dryRun) params.dryRun = true;
+				if (flags.requireMatch) params.requireMatch = true;
+				return createOneShotPlan("navigate", params, target);
+			}
+			return {
+				kind: "usage-error",
+				message: "Usage: shuvgeist windows [list|close] …",
+			};
+		}
 		case "switch": {
 			const tabId = positionals[0];
 			if (!tabId) return { kind: "usage-error", message: "Usage: shuvgeist switch <tabId>" };

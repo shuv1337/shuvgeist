@@ -1,6 +1,6 @@
 ---
 name: shuvgeist
-description: "Control Chrome/Edge through the Shuvgeist extension and CLI bridge, or allowed local Electron apps through bridge-local CDP targets. Use whenever the user needs real browser automation, authenticated page access, Electron app inspection, page-context JavaScript, semantic element targeting, workflows, screenshots, network inspection, device emulation, performance tracing, recording, or sidepanel session/artifact control from the terminal. Prefer this as the default browser skill."
+description: "Control Chrome/Edge through the Shuvgeist extension and CLI bridge, allowed local Electron apps through bridge-local CDP targets, or no-extension headless Chromium through the direct-CDP runtime. Use whenever the user needs real browser automation, authenticated page access, Electron app inspection, page-context JavaScript, semantic element targeting, workflows, screenshots, MCP observe/act/extract/agent control, network inspection, device emulation, performance tracing, recording, cookie import with consent, or sidepanel session/artifact control from the terminal. Prefer this as the default browser skill."
 ---
 
 # Shuvgeist
@@ -26,10 +26,14 @@ Use Shuvgeist for browser tasks such as:
 - locating elements semantically instead of guessing brittle CSS selectors
 - working across tabs and iframes
 - running deterministic multi-step workflows
+- exposing browser targets to MCP clients as observe/act/extract/agent tools
 - capturing network requests and exporting curl reproductions
+- importing consented cookies into an isolated Chrome profile
 - emulating mobile devices or custom viewport/user-agent settings
 - collecting performance metrics or traces
 - recording browser or Electron target video repros
+- inspecting Electron main-process metadata, IPC taps, main-process network taps, app source layouts, doctor probes, and auto-attach shims
+- using the repo's no-extension direct-CDP headless runtime when the extension is not part of the target surface
 - interacting with the live sidepanel chat session from the terminal
 - listing or retrieving Shuvgeist-generated artifacts
 
@@ -37,11 +41,13 @@ Prefer this skill when the user mentions browser automation, using their logged-
 
 ## Mental model
 
-Shuvgeist has two layers:
+Shuvgeist has several related layers:
 
 - **Extension layer:** the browser sidepanel assistant, local skills, artifacts, provider/model selection, session history, inspect-element UI, and other browser-native features
 - **CLI bridge layer:** terminal commands that talk to the extension background worker and active tab
 - **Electron target layer:** bridge-local CDP commands for explicitly allowed local Electron apps, routed without a Chrome/Edge extension target
+- **MCP/HTTP layer:** authenticated Streamable HTTP tools that front extension-routed bridge targets as `shuvgeist_observe`, `shuvgeist_act`, `shuvgeist_extract`, and `shuvgeist_agent`
+- **Direct-CDP headless layer:** repo runtime code for no-extension Chromium page targets; this is not a top-level CLI command yet
 
 Important operational facts:
 
@@ -51,6 +57,7 @@ Important operational facts:
 - **Session commands** such as `session`, `inject`, `new-session`, `set-model`, and `artifacts` depend on the sidepanel session surface.
 - Sensitive commands are gated by Bridge settings.
 - Chrome/Edge is the default target. Electron commands require `--target electron:...` unless they are `shuvgeist electron ...` management commands.
+- Some bridge methods are server-local or MCP-only and do not have a first-class CLI wrapper. Do not invent CLI commands for `snapshot_store`, `snapshot_read`, `cookie_import`, or the direct-CDP headless adapter.
 
 ## First command
 
@@ -182,6 +189,8 @@ Attach to an already running CDP-enabled app, or launch a known app with a debug
 shuvgeist electron attach vscode --json
 shuvgeist electron attach --pid 12345 --json
 shuvgeist electron attach --port 9229 --json
+shuvgeist electron launch vscode --inspect-main --json
+shuvgeist electron attach vscode --inspect-port 9230 --json
 shuvgeist electron launch vscode --json
 ```
 
@@ -190,6 +199,7 @@ Inspect windows and label the intended renderer when there are multiple candidat
 ```bash
 shuvgeist electron windows --json
 shuvgeist electron label e1 w1 main
+shuvgeist electron main e1 --json
 ```
 
 Inspect the main process, tap IPC traffic, capture main-process network, and detach when done:
@@ -244,11 +254,37 @@ shuvgeist ref click <refId> --target electron:e1:w1
 shuvgeist record start --target electron:e1:w1 --out /tmp/electron.webm --max-duration 5s
 ```
 
+Deeper Electron diagnostics and source inspection:
+
+```bash
+shuvgeist electron ipc tap e1 --channel auth --json
+shuvgeist electron ipc untap e1 --json
+shuvgeist electron network-main start e1 --json
+shuvgeist electron network-main stop e1 --json
+shuvgeist electron source layout vscode --json
+shuvgeist electron source list vscode --json
+shuvgeist electron source read src/main.js vscode --json
+shuvgeist electron source extract /tmp/app-source vscode --json
+shuvgeist electron doctor vscode --json
+shuvgeist electron auto-attach status vscode --json
+shuvgeist electron auto-attach install vscode --json
+shuvgeist electron auto-attach uninstall vscode --json
+shuvgeist electron detach e1 --json
+```
+
+Electron safety notes:
+
+- Main-process inspection, IPC taps, main-network taps, and source extraction can expose sensitive local app state. Use only on apps the user has explicitly asked to inspect.
+- `electron ipc tap` and `electron network-main start` are diagnostic instrumentation. Stop them when done.
+- `electron source extract` can copy app source or ASAR contents. Choose a deliberate destination and avoid publishing extracted secrets.
+- `electron auto-attach install` modifies launch behavior for that local app; use `auto-attach status` first and `auto-attach uninstall` when the shim is no longer needed.
+
 Troubleshooting:
 
 - Unknown app: run `shuvgeist electron list --json` and use a listed ID or alias.
 - Not allowlisted: run `shuvgeist electron allow <app-id-or-alias>`.
 - No CDP port: restart the app with `--remote-debugging-port=<port>` and pass `--port <port>`.
+- Main process unavailable: relaunch with `--inspect-main` or attach with `--inspect-port`.
 - Wrong window: run `shuvgeist electron windows --json`, label the window, then target the label.
 - Extension disconnected errors: add an Electron `--target`; Chrome/Edge is the default route.
 
@@ -258,10 +294,75 @@ Troubleshooting:
 shuvgeist navigate "https://example.com"
 shuvgeist navigate "https://example.com" --new-tab
 shuvgeist tabs --json
+shuvgeist tabs list --json
 shuvgeist switch <tabId>
 ```
 
-Use `tabs --json` to capture stable `tabId` values for later `--tab-id` targeting.
+Use `tabs --json` to capture stable `tabId` values for later `--tab-id` targeting. Each tab includes `windowId`, `index`, `pinned`, and `status`. Multiple `"active": true` rows are normal (one focused tab per window). A `windows` summary is included.
+
+### Tab lifecycle (close tabs / windows)
+
+Prefer first-class tab close. Never improvise with `eval window.close()`, `nativePress("Control+w")`, or OS/compositor kill on the browser PID (that can destroy every window sharing the Chromium process).
+
+```bash
+# Close by explicit Chrome tab IDs (no --yes required)
+shuvgeist tabs close 1825584691 1825584692 --json
+
+# Filter close: always preview, then apply with --yes
+shuvgeist tabs close --title-match shuvplan --dry-run --json
+shuvgeist tabs close --title-match shuvplan --yes --json
+
+# Other filters
+shuvgeist tabs close --url-match localhost:43393 --yes --json
+shuvgeist tabs close --title-pattern 'shuvplan$' --yes --json
+shuvgeist tabs close --window-id 1825584693 --yes --json
+
+# Optional: include pinned or chrome:// / extension pages in filter matches
+shuvgeist tabs close --title-match Settings --include-pinned --include-protected --yes --json
+
+# Windows (browser API — closes one window's tabs only)
+shuvgeist windows --json
+shuvgeist windows close <windowId> --dry-run --json
+shuvgeist windows close <windowId> --yes --json
+```
+
+Safety:
+
+- Explicit numeric tab IDs never need `--yes`.
+- Filter closes without `--yes` or `--dry-run` fail with a usage error.
+- Filters skip pinned tabs and protected URLs (`chrome://`, extension pages, `about:*` except bare `about:blank`, etc.) unless overridden with `--include-pinned` / `--include-protected`.
+- Bare `about:blank` is closable via filters without `--include-protected`.
+- Closing the last tab in a window closes that window only (Chrome behavior), not the browser process.
+- `shuvgeist close` still means quit a CLI-launched browser process — do not overload it for tabs.
+
+Agent / navigate tool equivalents:
+
+```json
+{ "listTabs": true }
+{ "closeTab": 123 }
+{ "closeTabs": [123, 456] }
+{ "closeTabFilter": { "titleIncludes": "shuvplan" }, "dryRun": true }
+{ "closeTabFilter": { "titleIncludes": "shuvplan" } }
+{ "listWindows": true }
+{ "closeWindow": 99, "dryRun": true }
+```
+
+Workflow steps may pass `closeTabFilter` without CLI `--yes` (workflow JSON is explicit agent intent):
+
+```json
+{
+  "steps": [
+    { "method": "navigate", "params": { "listTabs": true }, "as": "tabs" },
+    {
+      "method": "navigate",
+      "params": {
+        "closeTabFilter": { "titleIncludes": "shuvplan" },
+        "dryRun": false
+      }
+    }
+  ]
+}
+```
 
 Ref handles: `refId` from `locate` and `snapshotId` from `snapshot` are the same identifier. Use `refId` as the canonical name.
 
@@ -333,6 +434,33 @@ shuvgeist cookies --json
 ```
 
 This can expose current-site cookies, including HttpOnly cookies.
+
+### Consented cookie import
+
+Cookie import is a bridge/server-local capability, not a top-level CLI command and not a current MCP tool. Use it only from raw bridge integrations or custom bridge clients that can send bridge requests.
+
+Requirements:
+
+- sensitive browser access enabled in Bridge settings
+- a Chrome extension target connected
+- explicit per-site consent in the request
+- a source cookie database/profile path and a site URL
+
+Bridge method shape:
+
+```json
+{
+  "method": "cookie_import",
+  "params": {
+    "sourcePath": "/path/to/source/profile-or-cookie-db",
+    "siteUrl": "https://app.example.test/settings",
+    "consent": true
+  },
+  "target": { "kind": "chrome-tab", "tabRef": "window:65" }
+}
+```
+
+The server filters cookies to the requested site and relays `cookie_import_apply` to the extension target. Do not use this for broad profile copying; keep it site-scoped and consented.
 
 ### Interactive element picking
 
@@ -406,6 +534,32 @@ Workflow model highlights:
 
 Use workflows when repeated round trips would be brittle or wasteful.
 
+### MCP control plane
+
+The bridge exposes authenticated Streamable HTTP MCP at `/mcp` for external agents. It currently supports extension-routed browser targets; server-local and Electron-target bridge methods return an invalid-target error through MCP.
+
+MCP tools:
+
+- `shuvgeist_observe` -> `page_snapshot`
+- `shuvgeist_act` -> `ref_click` or `ref_fill`
+- `shuvgeist_extract` -> `repl`
+- `shuvgeist_agent` -> `workflow_run`
+
+Operational notes:
+
+- Use the same bridge token as the CLI; HTTP requests require `Authorization: Bearer <token>`.
+- Use `target` objects to pin a Chrome tab/window instead of relying on focus.
+- Use MCP when another agent or tool host needs a browser tool surface without shelling out to the CLI for every step.
+
+Minimal request pattern:
+
+```bash
+curl -sS -H "Authorization: Bearer $SHUVGEIST_BRIDGE_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' \
+  http://127.0.0.1:8787/mcp
+```
+
 ### Page snapshots
 
 Use snapshots when you need a compact semantic representation of the current page.
@@ -419,6 +573,22 @@ shuvgeist snapshot --include-hidden --json
 Options: `--max-entries <N>` caps how many entries are returned; `--include-hidden` adds hidden / `aria-hidden` elements (omitted by default).
 
 Snapshots return semantic entries, candidate selectors, page metadata, and stable `snapshotId` values. Each entry's `snapshotId` is the same value as the `refId` returned by `locate` — pass it directly to `shuvgeist ref click|fill <id>`.
+
+### Server-side snapshot store
+
+The normal CLI `snapshot --json` returns the current compact snapshot directly. The bridge also has server-local `snapshot_store` and `snapshot_read` methods for clients that need to persist raw pre-filter snapshot records without dumping them into every response.
+
+This is not exposed as a top-level CLI command and is not a current MCP tool. Use it from raw bridge integrations or custom WebSocket clients.
+
+Bridge method shapes:
+
+```json
+{ "method": "snapshot_store", "params": { "tabId": 42, "frameId": 7, "maxEntries": 80, "query": "save" } }
+{ "method": "snapshot_read", "params": { "id": "chrome:active:42:frame:7:snapshot:12345" } }
+{ "method": "snapshot_read", "params": { "snapshotId": "e1" } }
+```
+
+`snapshot_store` relays `page_snapshot` to the target, stores the raw result in the local bridge, and returns a record summary. `snapshot_read` returns matching stored records with raw entries.
 
 ### Semantic locate
 
@@ -545,6 +715,36 @@ Recording options:
 - `--tab-id <N>` — record a specific tab; `stop` and `status` accept `--tab-id` to match the `start`
 
 Recording is bounded by `--max-duration`; use `record stop` to end early or `record status` to check whether a capture is active.
+
+## Direct-CDP headless runtime
+
+Shuvgeist 2.0.0 includes a repo-level no-extension direct-CDP runtime for headless Chromium. This is a code/runtime surface, not a public CLI command.
+
+Use it when the task is to develop or test Shuvgeist itself against a Chromium target where no extension is present. For normal browser automation, prefer `shuvgeist launch --headless`, which still loads the extension and exposes the CLI bridge.
+
+Key files:
+
+- `src/bridge/headless/direct-cdp-runtime.ts`
+- `src/bridge/headless/trusted-input-provider.ts`
+- `tests/integration/bridge/headless-direct-cdp-runtime.test.ts`
+- `tests/unit/bridge/trusted-input-provider.test.ts`
+- `tests/unit/bridge/direct-cdp-vision-baseline.test.ts`
+
+Capabilities:
+
+- discover page targets from `/json/list`
+- connect to page websocket targets through `ElectronWsCdpSession`
+- run a full agent loop: `page_snapshot` -> `locate_by_role` -> `ref_click` -> `page_snapshot`
+- dispatch trusted clicks through `Input.dispatchMouseEvent`
+- keep `Runtime.enable` off the direct-CDP action path
+- capture screenshots and pair them with structured candidate JSON for vision-capable fallback
+
+Vision baseline constraints:
+
+- Requires a `Model.input` containing `image`.
+- Requires an explicit fallback trigger: `planner-validator-failure` or `ambiguous-ref`.
+- Does not add numbered badge overlays.
+- Does not prove live model accuracy by itself; live model comparison remains separate evidence.
 
 ## Sidepanel session control
 
@@ -709,8 +909,11 @@ Use this when terminal automation and the sidepanel assistant should collaborate
 
 - Use `launch` when no suitable browser session exists yet.
 - Use `navigate` / `tabs` / `switch` for straightforward browser movement.
+- Use `tabs close` to dispose tabs; use `windows close` for an entire browser window.
+- Use `shuvgeist close` only to quit a browser started by `shuvgeist launch`.
+- Never close tabs via `eval window.close()`, `nativePress Control+w`, hyprctl/ydotool, or kill on the browser PID.
 - Use `repl` when you know the DOM operations or need custom page logic.
-- Use REPL native input helpers when sites reject synthetic DOM events.
+- Use REPL native input helpers when sites reject synthetic DOM events (not for tab close).
 - Use `eval` when the needed data only exists in MAIN world.
 - Use `snapshot` + `locate` + `ref` when selectors are unknown, fragile, or dynamic.
 - Use `frame list/tree` before touching iframe-heavy pages.
@@ -721,3 +924,22 @@ Use this when terminal automation and the sidepanel assistant should collaborate
 - Use `record` when you need a shareable video repro of a bug or flow.
 - Use `electron list/allow/attach/launch` plus `--target electron:...` to drive a local desktop app instead of a Chrome/Edge tab.
 - Use `session` / `inject` / `artifacts` when you need to collaborate with the Shuvgeist sidepanel assistant, not just automate the page.
+
+### Tab / window disposal decision tree
+
+```text
+Need to dispose browser UI state?
+├─ Close specific tabs by id
+│    → shuvgeist tabs close <id> [id…] --json
+├─ Close tabs matching title/url (e.g. "shuvplan")
+│    → shuvgeist tabs close --title-match shuvplan --dry-run --json
+│    → shuvgeist tabs close --title-match shuvplan --yes --json
+├─ Close entire browser window (all its tabs)
+│    → shuvgeist windows close <windowId> --yes --json
+├─ Quit a browser started by `shuvgeist launch`
+│    → shuvgeist close
+└─ NEVER
+     → eval window.close()
+     → nativePress Control+w as tab close
+     → hyprctl / ydotool / kill on browser PID
+```

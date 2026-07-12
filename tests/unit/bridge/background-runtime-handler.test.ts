@@ -186,4 +186,27 @@ describe("handleBgBrowserJs", () => {
 			},
 		});
 	});
+
+	it("preserves close/list fields in background navigate responses", async () => {
+		navigateExecute.mockResolvedValue({
+			details: {
+				closedTabIds: [9, 10],
+				skipped: [],
+				dryRun: false,
+				ok: true,
+				tabs: [{ id: 1, url: "https://left.test", title: "Left", active: true, windowId: 1, index: 0, pinned: false }],
+			},
+		});
+
+		await expect(handleBgNavigate({ closeTabs: [9, 10] }, undefined)).resolves.toEqual({
+			success: true,
+			result: {
+				closedTabIds: [9, 10],
+				skipped: [],
+				dryRun: false,
+				ok: true,
+				tabs: [{ id: 1, url: "https://left.test", title: "Left", active: true, windowId: 1, index: 0, pinned: false }],
+			},
+		});
+	});
 });

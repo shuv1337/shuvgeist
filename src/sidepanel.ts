@@ -775,7 +775,21 @@ const createAgent = async (options: SidepanelCreateAgentOptions = {}, shouldSave
 		},
 		transformContext: options.transformContext,
 		beforeToolCall: options.beforeToolCall,
-		afterToolCall: options.afterToolCall,
+		afterToolCall: async (context, signal) => {
+			// Invalidate snapshot refs for tabs closed via the navigate tool (not dry-run).
+			// Bridge executor does this for CLI; sidepanel agent calls NavigateTool directly.
+			if (!context.isError && context.toolCall?.name === "navigate") {
+				const details = context.result?.details as { dryRun?: boolean; closedTabIds?: number[] } | undefined;
+				if (details && details.dryRun !== true && Array.isArray(details.closedTabIds)) {
+					for (const closedId of details.closedTabIds) {
+						if (typeof closedId === "number") {
+							sidepanelRefRegistry.onNavigated({ tabId: closedId });
+						}
+					}
+				}
+			}
+			return options.afterToolCall?.(context, signal);
+		},
 		shouldStopAfterTurn: options.shouldStopAfterTurn,
 		prepareNextTurn: options.prepareNextTurn,
 		plannerValidator: plannerValidatorEnabled ? {} : false,

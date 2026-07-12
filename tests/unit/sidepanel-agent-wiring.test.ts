@@ -161,15 +161,16 @@ describe("sidepanel createAgent wiring", () => {
 		expect(propertyInitializerText(sidepanelSourceFile, runtimeOptions, "getApiKey")).toContain(
 			"getApiKeyForProvider(provider)",
 		);
-		for (const hook of [
-			"transformContext",
-			"beforeToolCall",
-			"afterToolCall",
-			"shouldStopAfterTurn",
-			"prepareNextTurn",
-		]) {
+		for (const hook of ["transformContext", "beforeToolCall", "shouldStopAfterTurn", "prepareNextTurn"]) {
 			expect(propertyInitializerText(sidepanelSourceFile, runtimeOptions, hook)).toBe("options." + hook);
 		}
+		// afterToolCall is intentionally wrapped: invalidate sidepanel refs on real tab close, then call through.
+		const afterToolCallText = propertyInitializerText(sidepanelSourceFile, runtimeOptions, "afterToolCall");
+		expect(afterToolCallText).toContain("options.afterToolCall");
+		expect(afterToolCallText).toContain("sidepanelRefRegistry.onNavigated");
+		expect(afterToolCallText).toContain("closedTabIds");
+		expect(afterToolCallText).toContain("dryRun");
+		expect(afterToolCallText).toContain('toolCall?.name === "navigate"');
 		expect(propertyInitializerText(sidepanelSourceFile, runtimeOptions, "plannerValidator")).toBe(
 			"plannerValidatorEnabled ? {} : false",
 		);

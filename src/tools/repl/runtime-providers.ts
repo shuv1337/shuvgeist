@@ -409,13 +409,10 @@ export class NavigateRuntimeProvider implements SandboxRuntimeProvider {
 			// Call the navigate tool
 			const result = await this.navigateTool.execute(`navigate_${Date.now()}`, message.args as NavigateParams);
 
+			// Full details (close/list/windows/navigate) so REPL navigate() callers see closedTabIds, etc.
 			respond({
 				success: true,
-				result: {
-					finalUrl: result.details.finalUrl,
-					title: result.details.title,
-					skills: result.details.skills,
-				},
+				result: result.details,
 			});
 		} catch (error: any) {
 			console.error("[NavigateRuntimeProvider] Error:", error);

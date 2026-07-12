@@ -272,19 +272,24 @@ await createOrUpdateArtifact('results.json', results);
 
 export const NAVIGATE_TOOL_DESCRIPTION = `# Navigate
 
-Navigate to URLs and manage tabs.
+Navigate to URLs and manage tabs/windows.
 
 ## Actions
 - { url: "https://example.com" } - Navigate to URL in current tab
 - { url: "https://example.com", newTab: true } - Open URL in new tab
-- { listTabs: true } - List all open tabs with IDs, URLs, and titles
+- { listTabs: true } - List all open tabs (includes windowId, index, pinned, status) and windows summary
 - { switchToTab: <tabId> } - Switch to a specific tab by its ID
+- { closeTab: <tabId> } - Close one tab by Chrome tab ID
+- { closeTabs: [<tabId>, ...] } - Close multiple tabs by ID
+- { closeTabFilter: { titleIncludes?, urlIncludes?, titlePattern?, urlPattern?, windowId?, includePinned?, includeProtected? }, dryRun? } - Close tabs matching filters
+- { listWindows: true } - List browser windows with tab counts
+- { closeWindow: <windowId>, dryRun? } - Close one browser window (all its tabs)
 
 ## Returns
-Final URL, page title, tab ID, and available skills.
+Final URL, page title, tab ID, skills; or tabs/windows inventory; or closedTabIds/skipped for close ops.
 
 ## Critical
-Use this tool for ALL navigation. NEVER use window.location, history.back/forward, or any navigation code in repl.`;
+Use this tool for ALL navigation and tab lifecycle. NEVER use window.location, history.back/forward, window.close(), native Ctrl+W, or OS/compositor process kill for tab management.`;
 
 // ============================================================================
 // Ask User Which Element Tool

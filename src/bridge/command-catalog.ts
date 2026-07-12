@@ -24,7 +24,8 @@ export const BridgeCommandCatalog = [
 		method: "navigate",
 		capabilities: ["navigate", "tabs"],
 		route: "extension",
-		cliCommands: ["navigate", "tabs", "switch"],
+		// tabs close / windows list|close also map to navigate
+		cliCommands: ["navigate", "tabs", "switch", "windows"],
 		defaultTimeout: "request",
 	},
 	{ method: "repl", capabilities: ["repl"], route: "extension", cliCommands: ["repl"], defaultTimeout: "slow" },

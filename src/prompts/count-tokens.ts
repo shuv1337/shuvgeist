@@ -98,6 +98,44 @@ export const TOOL_DEFINITIONS = [
 					type: "number",
 					description: "Tab ID to switch to (get IDs from listTabs)",
 				},
+				closeTab: {
+					type: "number",
+					description: "Close a single tab by Chrome tab ID",
+				},
+				closeTabs: {
+					type: "array",
+					items: { type: "number" },
+					description: "Close multiple tabs by Chrome tab IDs",
+				},
+				closeTabFilter: {
+					type: "object",
+					description: "Filter-based tab close (title/url match, window, pinned/protected flags)",
+					properties: {
+						titleIncludes: { type: "string" },
+						titlePattern: { type: "string" },
+						urlIncludes: { type: "string" },
+						urlPattern: { type: "string" },
+						windowId: { type: "number" },
+						includePinned: { type: "boolean" },
+						includeProtected: { type: "boolean" },
+					},
+				},
+				dryRun: {
+					type: "boolean",
+					description: "Preview close without removing tabs/windows",
+				},
+				requireMatch: {
+					type: "boolean",
+					description: "Treat zero closed tabs as failure",
+				},
+				listWindows: {
+					type: "boolean",
+					description: "List browser windows",
+				},
+				closeWindow: {
+					type: "number",
+					description: "Close a browser window by Chrome window ID",
+				},
 			},
 		},
 	},

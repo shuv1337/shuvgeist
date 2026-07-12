@@ -1287,7 +1287,14 @@ Usage:
   shuvgeist close
   shuvgeist status [--json] [--timeout 10s]
   shuvgeist navigate <url> [--new-tab] [--json] [--timeout 60s]
-  shuvgeist tabs [--json] [--timeout 60s]
+  shuvgeist tabs [list] [--json] [--timeout 60s]
+  shuvgeist tabs close <tabId...> [--json]
+  shuvgeist tabs close --title-match <s> | --url-match <s> | --title-pattern <re>
+                       | --url-pattern <re> | --window-id <n>
+                       [--yes | --dry-run] [--include-pinned] [--include-protected]
+                       [--require-match] [--json]
+  shuvgeist windows [list] [--json]
+  shuvgeist windows close <windowId> [--yes | --dry-run] [--json]
   shuvgeist switch <tabId> [--json] [--timeout 60s]
   shuvgeist repl <code> [--tab-id N] [--frame-id N] [--json] [--write-files <dir>] [--timeout 120s]
   shuvgeist repl -f <file.js> [--tab-id N] [--frame-id N] [--json] [--write-files <dir>] [--timeout 120s]
@@ -1531,6 +1538,10 @@ async function main(): Promise<void> {
 		if (arg === "--json") globalFlags.json = true;
 		else if (arg === "--new-tab") globalFlags.newTab = true;
 		else if (arg === "--dry-run") globalFlags.dryRun = true;
+		else if (arg === "--yes") globalFlags.yes = true;
+		else if (arg === "--include-pinned") globalFlags.includePinned = true;
+		else if (arg === "--include-protected") globalFlags.includeProtected = true;
+		else if (arg === "--require-match") globalFlags.requireMatch = true;
 		else if (arg === "--follow") globalFlags.follow = true;
 		else if (arg === "--include-hidden") globalFlags.includeHidden = true;
 		else if (arg === "--include-sensitive") globalFlags.includeSensitive = true;
@@ -1578,6 +1589,10 @@ async function main(): Promise<void> {
 		else if (arg === "--min-count" && i + 1 < rest.length) globalFlags.minCount = rest[++i];
 		else if (arg === "--max-count" && i + 1 < rest.length) globalFlags.maxCount = rest[++i];
 		else if (arg === "--url-pattern" && i + 1 < rest.length) globalFlags.urlPattern = rest[++i];
+		else if (arg === "--title-match" && i + 1 < rest.length) globalFlags.titleMatch = rest[++i];
+		else if (arg === "--url-match" && i + 1 < rest.length) globalFlags.urlMatch = rest[++i];
+		else if (arg === "--title-pattern" && i + 1 < rest.length) globalFlags.titlePattern = rest[++i];
+		else if (arg === "--window-id" && i + 1 < rest.length) globalFlags.windowId = rest[++i];
 		else if (arg === "--search" && i + 1 < rest.length) globalFlags.search = rest[++i];
 		else if (arg === "--preset" && i + 1 < rest.length) globalFlags.preset = rest[++i];
 		else if (arg === "--width" && i + 1 < rest.length) globalFlags.width = rest[++i];

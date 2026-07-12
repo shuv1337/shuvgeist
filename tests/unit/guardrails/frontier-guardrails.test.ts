@@ -8,7 +8,7 @@ const EXPECTED_BRIDGE_SURFACE = [
 		method: "navigate",
 		route: "extension",
 		capabilities: ["navigate", "tabs"],
-		cliCommands: ["navigate", "tabs", "switch"],
+		cliCommands: ["navigate", "tabs", "switch", "windows"],
 		sensitive: false,
 		write: false,
 	},

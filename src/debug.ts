@@ -19,7 +19,7 @@ const models = [
 	getModel("openai", "gpt-5-codex"),
 	getModel("google", "gemini-2.5-pro"),
 	getModel("openrouter", "z-ai/glm-4.6"),
-];
+].filter((model): model is NonNullable<typeof model> => model != null);
 
 // Initialize AppStorage so tools relying on Shuvgeist storage can operate in debug page
 const storage = new ShuvgeistAppStorage();

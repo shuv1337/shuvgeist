@@ -267,14 +267,10 @@ export async function handleBgNavigate(
 		const navigateTool = new NavigateTool({ windowId });
 		const args = (payload?.args ?? payload) as NavigateParams;
 		const result = await navigateTool.execute(`bg_navigate_${Date.now()}`, args);
+		// Pass through full details so list/close/windows fields reach REPL and CLI clients.
 		return {
 			success: true,
-			result: {
-				finalUrl: result.details.finalUrl,
-				title: result.details.title,
-				tabId: result.details.tabId,
-				skills: result.details.skills,
-			},
+			result: result.details,
 		};
 	} catch (err: unknown) {
 		return {

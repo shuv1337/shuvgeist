@@ -6,6 +6,9 @@
 
 ### Added
 
+- Tab lifecycle: close tabs by Chrome tab ID or title/url filter via navigate tool and `shuvgeist tabs close`, with dry-run and `--yes` safety for filters.
+- Tab list enrichment: `windowId`, `index`, `pinned`, `status`, plus optional windows summary on `listTabs`.
+- Browser window list/close via `shuvgeist windows` / `shuvgeist windows close` (maps to navigate `listWindows` / `closeWindow`).
 - Sidepanel navigation context now includes a compact semantic page snapshot and exposes the page snapshot tool to the agent.
 - Snapshot refs now carry stable element IDs and navigation-generation checks so stale refs fail cleanly after navigation.
 - Page snapshots now apply query filtering on Chrome and Electron while preserving ancestor hierarchy.

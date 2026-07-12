@@ -340,6 +340,17 @@ export class BrowserCommandExecutor {
 		if (typeof result.details.tabId === "number") {
 			this.refRegistry.onNavigated({ tabId: result.details.tabId });
 		}
+		// Dry-run close only previews ids — do not wipe live refs for tabs still open.
+		if (result.details.dryRun !== true) {
+			const closedTabIds = result.details.closedTabIds;
+			if (Array.isArray(closedTabIds)) {
+				for (const closedId of closedTabIds) {
+					if (typeof closedId === "number") {
+						this.refRegistry.onNavigated({ tabId: closedId });
+					}
+				}
+			}
+		}
 		return result.details;
 	}
 
