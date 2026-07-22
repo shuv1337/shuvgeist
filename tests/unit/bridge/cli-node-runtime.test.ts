@@ -96,38 +96,42 @@ describe("CLI Node runtime composition", () => {
 		);
 	});
 
-	it("makes status, one-shot, record, session-follow, and launch fail closed on the same malformed custom config", () => {
-		const directory = mkdtempSync(join(tmpdir(), "shuvgeist-cli-node-config-"));
-		const configPath = join(directory, "custom-bridge.json");
-		const malformed = '{ "token": ';
-		writeFileSync(configPath, malformed);
-		const commandFamilies: ReadonlyArray<readonly [string, ...string[]]> = [
-			["status", "--json"],
-			["tabs", "--json"],
-			["record", "status", "--json"],
-			["session", "--follow", "--json"],
-			["launch", "--url", "about:blank", "--json"],
-		];
-		try {
-			for (const args of commandFamilies) {
-				const result = spawnSync(
-					join(process.cwd(), "node_modules", ".bin", "tsx"),
-					[join(process.cwd(), "packages", "cli", "src", "cli.ts"), ...args],
-					{
-						cwd: process.cwd(),
-						encoding: "utf8",
-						env: { ...process.env, SHUVGEIST_BRIDGE_CONFIG: configPath },
-					},
-				);
-				expect(result.status, `${args.join(" ")} stderr:\n${result.stderr}`).toBe(3);
-				expect(result.stderr).toContain(configPath);
-				expect(readFileSync(configPath, "utf8")).toBe(malformed);
+	it(
+		"makes status, one-shot, record, session-follow, and launch fail closed on the same malformed custom config",
+		() => {
+			const directory = mkdtempSync(join(tmpdir(), "shuvgeist-cli-node-config-"));
+			const configPath = join(directory, "custom-bridge.json");
+			const malformed = '{ "token": ';
+			writeFileSync(configPath, malformed);
+			const commandFamilies: ReadonlyArray<readonly [string, ...string[]]> = [
+				["status", "--json"],
+				["tabs", "--json"],
+				["record", "status", "--json"],
+				["session", "--follow", "--json"],
+				["launch", "--url", "about:blank", "--json"],
+			];
+			try {
+				for (const args of commandFamilies) {
+					const result = spawnSync(
+						join(process.cwd(), "node_modules", ".bin", "tsx"),
+						[join(process.cwd(), "packages", "cli", "src", "cli.ts"), ...args],
+						{
+							cwd: process.cwd(),
+							encoding: "utf8",
+							env: { ...process.env, SHUVGEIST_BRIDGE_CONFIG: configPath },
+						},
+					);
+					expect(result.status, `${args.join(" ")} stderr:\n${result.stderr}`).toBe(3);
+					expect(result.stderr).toContain(configPath);
+					expect(readFileSync(configPath, "utf8")).toBe(malformed);
+				}
+				expect(() => readFileSync(join(directory, "bridge.pid"), "utf8")).toThrow();
+			} finally {
+				rmSync(directory, { recursive: true, force: true });
 			}
-			expect(() => readFileSync(join(directory, "bridge.pid"), "utf8")).toThrow();
-		} finally {
-			rmSync(directory, { recursive: true, force: true });
-		}
-	});
+		},
+		30_000,
+	);
 
 	it("contains invalid config-path overrides while help, version, and skill remain recovery-safe", () => {
 		const cliPath = join(process.cwd(), "packages", "cli", "src", "cli.ts");

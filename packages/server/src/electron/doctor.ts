@@ -49,6 +49,7 @@ export interface ElectronDoctorParams {
 	configOwner?: NodeConfigOwner;
 	listProcesses?: () => Promise<ElectronProcessRow[]>;
 	listeningPidsForPort?: (port: number) => Promise<number[] | undefined>;
+	processMatchesApp?: (processRow: ElectronProcessRow, app: ElectronApp) => boolean;
 }
 
 async function probeCdpPort(port: number): Promise<ElectronRunningCdpApp | undefined> {
@@ -81,12 +82,13 @@ async function discoverOwnedCdpPortsForApp(
 	app: ElectronApp,
 	processLoader: () => Promise<ElectronProcessRow[]>,
 	listenerLoader: (port: number) => Promise<number[] | undefined>,
+	processMatcher: (processRow: ElectronProcessRow, app: ElectronApp) => boolean,
 ): Promise<{ ports: number[]; ownershipUnavailable: boolean }> {
 	const ports = new Set<number>();
 	let ownershipUnavailable = false;
 	const processes = await processLoader();
 	for (const processRow of processes) {
-		if (!processMatchesElectronApp(processRow, app)) continue;
+		if (!processMatcher(processRow, app)) continue;
 		const port = parseRemoteDebuggingPort(processRow.command);
 		if (!port) continue;
 		const owners = await resolveElectronPortOwners(port, {
@@ -229,6 +231,7 @@ export async function runElectronDoctor(params: ElectronDoctorParams = {}): Prom
 				requestedApp,
 				params.listProcesses ?? listElectronProcesses,
 				params.listeningPidsForPort ?? findListeningPidsForPort,
+				params.processMatchesApp ?? processMatchesElectronApp,
 			)
 		: undefined;
 	if (targetedDiscovery?.ownershipUnavailable) {

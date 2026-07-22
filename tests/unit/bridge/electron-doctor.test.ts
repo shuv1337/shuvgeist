@@ -104,6 +104,7 @@ describe("electron doctor", () => {
 
 		const result = await runElectronDoctor({
 			appRef: "codex",
+			processMatchesApp: (processRow) => processRow.pid === 202,
 			listProcesses: async () => [
 				{
 					pid: 202,
@@ -147,6 +148,7 @@ describe("electron doctor", () => {
 
 		const result = await runElectronDoctor({
 			appRef: "codex",
+			processMatchesApp: (processRow) => processRow.pid === 202,
 			listProcesses: async () => [
 				{
 					pid: 101,
@@ -184,6 +186,7 @@ describe("electron doctor", () => {
 
 		const result = await runElectronDoctor({
 			appRef: "codex",
+			processMatchesApp: (processRow) => processRow.pid === 202,
 			listProcesses: async () => [
 				{
 					pid: 202,

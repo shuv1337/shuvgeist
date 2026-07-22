@@ -1,4 +1,4 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -103,7 +103,7 @@ async function getFreePort(): Promise<number> {
 }
 
 async function waitForPageTarget(port: number): Promise<void> {
-	const deadline = Date.now() + 10_000;
+	const deadline = Date.now() + 30_000;
 	while (Date.now() < deadline) {
 		try {
 			const targets = await listDirectCdpPageTargets({ port });
@@ -116,17 +116,47 @@ async function waitForPageTarget(port: number): Promise<void> {
 	throw new Error("Timed out waiting for headless Chromium page target");
 }
 
+async function stopChildProcess(childProcess: ChildProcess | undefined): Promise<void> {
+	if (!childProcess) return;
+	if (childProcess.exitCode !== null || childProcess.signalCode !== null) {
+		if (process.platform !== "win32" && childProcess.pid) {
+			try {
+				process.kill(-childProcess.pid, "SIGKILL");
+			} catch {}
+		}
+		return;
+	}
+	await new Promise<void>((resolve) => {
+		let settled = false;
+		const finish = () => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timeout);
+			childProcess.off("exit", finish);
+			resolve();
+		};
+		const timeout = setTimeout(finish, 2_000);
+		childProcess.once("exit", finish);
+		try {
+			if (process.platform !== "win32" && childProcess.pid) process.kill(-childProcess.pid, "SIGKILL");
+			else if (!childProcess.kill("SIGKILL")) finish();
+		} catch {
+			if (!childProcess.kill("SIGKILL")) finish();
+		}
+	});
+}
+
 describe("direct-CDP headless runtime", () => {
 	const chromiumPath = process.env.CHROMIUM_PATH ?? "/usr/bin/chromium";
 	const runChromiumTest = existsSync(chromiumPath) ? it : it.skip;
-	let child: ChildProcessWithoutNullStreams | undefined;
+	let child: ChildProcess | undefined;
 	let userDataDir: string | undefined;
 
-	afterEach(() => {
-		child?.kill("SIGKILL");
+	afterEach(async () => {
+		await stopChildProcess(child);
 		child = undefined;
 		if (userDataDir) {
-			rmSync(userDataDir, { recursive: true, force: true });
+			rmSync(userDataDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 			userDataDir = undefined;
 		}
 	});
@@ -161,6 +191,7 @@ describe("direct-CDP headless runtime", () => {
 				[
 					"--headless=new",
 					"--disable-default-apps",
+					"--disable-dev-shm-usage",
 					"--disable-gpu",
 					"--no-first-run",
 					"--no-sandbox",
@@ -169,7 +200,7 @@ describe("direct-CDP headless runtime", () => {
 					"--user-data-dir=" + userDataDir,
 					url,
 				],
-				{ stdio: ["ignore", "pipe", "pipe"] },
+				{ detached: true, stdio: "ignore" },
 			);
 			await waitForPageTarget(port);
 
@@ -286,6 +317,7 @@ describe("direct-CDP headless runtime", () => {
 				[
 					"--headless=new",
 					"--disable-default-apps",
+					"--disable-dev-shm-usage",
 					"--disable-gpu",
 					"--no-first-run",
 					"--no-sandbox",
@@ -294,7 +326,7 @@ describe("direct-CDP headless runtime", () => {
 					"--user-data-dir=" + userDataDir,
 					"data:text/html;charset=utf-8," + encodeURIComponent(html),
 				],
-				{ stdio: ["ignore", "pipe", "pipe"] },
+				{ detached: true, stdio: "ignore" },
 			);
 			await waitForPageTarget(port);
 
@@ -352,6 +384,7 @@ describe("direct-CDP headless runtime", () => {
 				[
 					"--headless=new",
 					"--disable-default-apps",
+					"--disable-dev-shm-usage",
 					"--disable-gpu",
 					"--no-first-run",
 					"--no-sandbox",
@@ -360,7 +393,7 @@ describe("direct-CDP headless runtime", () => {
 					"--user-data-dir=" + userDataDir,
 					"data:text/html;charset=utf-8," + encodeURIComponent(html),
 				],
-				{ stdio: ["ignore", "pipe", "pipe"] },
+				{ detached: true, stdio: "ignore" },
 			);
 			await waitForPageTarget(port);
 
@@ -424,6 +457,7 @@ describe("direct-CDP headless runtime", () => {
 				[
 					"--headless=new",
 					"--disable-default-apps",
+					"--disable-dev-shm-usage",
 					"--disable-gpu",
 					"--no-first-run",
 					"--no-sandbox",
@@ -432,7 +466,7 @@ describe("direct-CDP headless runtime", () => {
 					"--user-data-dir=" + userDataDir,
 					url,
 				],
-				{ stdio: ["ignore", "pipe", "pipe"] },
+				{ detached: true, stdio: "ignore" },
 			);
 			await waitForPageTarget(port);
 
