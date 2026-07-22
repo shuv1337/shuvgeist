@@ -1,7 +1,5 @@
 # Shuvgeist
 
-![Shuvgeist browser automation workspace](media/hero.png)
-
 Shuvgeist is a Chrome/Edge sidepanel extension for browser-native AI assistance and browser automation. It gives an LLM a controlled toolset for navigating pages, running page-context JavaScript, extracting structured data, working with attachments and artifacts, and reusing domain-specific skills you teach it over time.
 
 This repo also ships:
