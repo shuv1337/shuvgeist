@@ -27,7 +27,9 @@ jobs:
             exit 0
           fi
 
-          allowed_paths='^(\.github/workflows/(build|test)\.yml|AGENTS\.md|CHANGELOG\.md|CLAUDE\.md|README\.md|package(-lock)?\.json|packages/[^/]+/(package|tsconfig)(-lock)?\.json|proxy/package(-lock)?\.json|site/package(-lock)?\.json|site/src/frontend/.*|packages/extension/src/messages/.*|static/manifest\.chrome\.json)$'
+          # Workspace manifests are excluded: check:boundaries validates them and
+          # runs only in fast-checks, which this flag would skip.
+          allowed_paths='^(\.github/workflows/(build|test)\.yml|AGENTS\.md|CHANGELOG\.md|CLAUDE\.md|README\.md|package(-lock)?\.json|proxy/package(-lock)?\.json|site/package(-lock)?\.json|site/src/frontend/.*|static/manifest\.chrome\.json)$'
 
           if git diff --name-only "${{ github.event.pull_request.base.sha }}" "${{ github.sha }}" | grep -Ev "$allowed_paths" >/dev/null; then
             echo "content_only=false" >> "$GITHUB_OUTPUT"

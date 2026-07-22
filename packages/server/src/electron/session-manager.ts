@@ -541,7 +541,13 @@ export class ElectronSessionManager {
 	}
 
 	async assert(target: BridgeTarget, params: PageAssertParams): Promise<PageAssertResult> {
-		const { state, pageTarget } = await this.resolvePageRuntime(target, params.frameId, "page assertion");
+		// Expression assertions run arbitrary renderer JS, same reach as evaluate().
+		const { state, pageTarget } = await this.resolvePageRuntime(
+			target,
+			params.frameId,
+			"page assertion",
+			params.kind === "expression" ? "eval" : undefined,
+		);
 		if (params.world === "main") {
 			throw new Error("Electron assertions do not support --world main; use renderer/user-world assertions.");
 		}
@@ -1000,6 +1006,7 @@ export class ElectronSessionManager {
 		target: BridgeTarget,
 		frameId?: number,
 		operation = "page command",
+		capability?: Parameters<ElectronSessionManager["assertCapabilityAllowed"]>[1],
 	): Promise<{
 		resolved: { session: ElectronSession; window: ElectronWindow };
 		state: ElectronPageDriverState;
@@ -1009,6 +1016,7 @@ export class ElectronSessionManager {
 		const resolved = await this.resolveLiveTarget(target);
 		if (!resolved) throw noSessionError(target);
 		this.assertPageWindow(resolved.window);
+		if (capability) this.assertCapabilityAllowed(resolved.session, capability);
 		const pageTarget = this.resolvedElectronTarget(resolved);
 		const state = await this.pageDriverFor(resolved);
 		return { resolved, state, pageTarget };

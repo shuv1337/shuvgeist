@@ -810,6 +810,9 @@ describe("electron session manager", () => {
 		await expect(manager.evaluate(target, "document.title")).rejects.toThrow(
 			"Electron capability 'eval' is disabled",
 		);
+		await expect(manager.assert(target, { kind: "expression", expression: "document.title" })).rejects.toThrow(
+			"Electron capability 'eval' is disabled",
+		);
 		await expect(manager.mainInfo(session.id)).rejects.toThrow("Electron capability 'main_inspect' is disabled");
 		await expect(manager.startIpcTap(session.id)).rejects.toThrow("Electron capability 'ipc_tap' is disabled");
 		await expect(manager.startMainNetworkTap(session.id)).rejects.toThrow(
