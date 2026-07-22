@@ -22,7 +22,7 @@
 		"test:unit": "vitest run tests/unit proxy/tests",
 		"test:integration": "vitest run tests/integration",
 		"test:component": "vitest run --environment happy-dom tests/component",
-		"test:coverage": "vitest run tests/unit tests/integration proxy/tests --coverage",
+		"test:coverage": "vitest run tests/unit tests/integration proxy/tests --coverage --exclude tests/integration/bridge/headless-direct-cdp-runtime.test.ts",
 		"test:e2e": "playwright test",
 		"test:e2e:extension": "playwright test tests/e2e/extension",
 		"test:e2e:site": "playwright test tests/e2e/site",
