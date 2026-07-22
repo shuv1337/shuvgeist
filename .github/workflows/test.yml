@@ -72,7 +72,7 @@ jobs:
   browser-smoke:
     needs: changes
     if: github.event_name != 'pull_request' || needs.changes.outputs.content_only != 'true'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, shuv-ci]
     steps:
       - uses: actions/checkout@v4
 
