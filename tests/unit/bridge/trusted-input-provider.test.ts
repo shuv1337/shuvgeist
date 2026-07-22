@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { TrustedInputProvider } from "../../../src/bridge/headless/trusted-input-provider.js";
+import { TrustedInputProvider } from "@shuvgeist/driver/trusted-input-provider";
 import type {
 	CdpSession,
 	CdpSessionCloseListener,
@@ -8,7 +8,7 @@ import type {
 	CdpSessionEventListener,
 	CdpSessionTarget,
 	CdpSessionTraceOptions,
-} from "../../../src/tools/helpers/cdp-session.js";
+} from "@shuvgeist/driver/cdp-session";
 
 class FakeCdpSession implements CdpSession {
 	readonly target: CdpSessionTarget = { kind: "electron-ws", id: "fake" };

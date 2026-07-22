@@ -1,3 +1,4 @@
+import { SNAPSHOT_INJECTED_ARTIFACT } from "@shuvgeist/driver/driver-artifacts-generated";
 import {
 	buildRefLocatorBundle,
 	capturePageSnapshot,
@@ -5,9 +6,8 @@ import {
 	locateByRole,
 	locateByText,
 	PageSnapshotTool,
-	SNAPSHOT_PAGE_SCRIPT,
 	type PageSnapshotResult,
-} from "../../../src/tools/page-snapshot.js";
+} from "@shuvgeist/extension/tools/page-snapshot";
 
 declare global {
 	// biome-ignore lint/style/noVar: test-only global augmentation
@@ -118,8 +118,6 @@ describe("PageSnapshotTool", () => {
 	});
 
 	it("captures snapshot data through chrome.userScripts", async () => {
-		expect(SNAPSHOT_PAGE_SCRIPT.toString()).toContain("shuvgeistSnapshotPageScript");
-		expect(SNAPSHOT_PAGE_SCRIPT.toString()).toContain("setAttribute(primaryAttribute, generated)");
 		chrome.userScripts.execute.mockResolvedValue([
 			{
 				result: pageExecutionResult({
@@ -130,6 +128,7 @@ describe("PageSnapshotTool", () => {
 						generatedAt: 10,
 						totalCandidates: 2,
 						truncated: false,
+						omissions: { total: 0, byCategory: {}, byRegion: {} },
 						entries: [
 								{
 									snapshotId: "e1",
@@ -160,6 +159,7 @@ describe("PageSnapshotTool", () => {
 			generatedAt: 10,
 			totalCandidates: 2,
 			truncated: false,
+			omissions: { total: 0, byCategory: {}, byRegion: {} },
 			entries: [
 				{
 					snapshotId: "e1",
@@ -185,8 +185,13 @@ describe("PageSnapshotTool", () => {
 			worldId: "shuvgeist-page-snapshot",
 			messaging: true,
 		});
-			expect(chrome.userScripts.execute).toHaveBeenCalled();
-		});
+		expect(chrome.userScripts.execute).toHaveBeenCalled();
+		const executeConfig = chrome.userScripts.execute.mock.calls[0]?.[0] as {
+			js?: Array<{ code?: string }>;
+		};
+		expect(executeConfig.js?.[0]?.code).toContain(SNAPSHOT_INJECTED_ARTIFACT.globalName);
+		expect(executeConfig.js?.[0]?.code).not.toContain("const __name = (fn) => fn");
+	});
 
 	it("filters query snapshots before returning them", async () => {
 		chrome.userScripts.execute.mockResolvedValue([
@@ -199,6 +204,7 @@ describe("PageSnapshotTool", () => {
 						generatedAt: 10,
 						totalCandidates: 2,
 						truncated: false,
+						omissions: { total: 0, byCategory: {}, byRegion: {} },
 						entries: [
 							{
 								snapshotId: "save",
@@ -234,8 +240,13 @@ describe("PageSnapshotTool", () => {
 
 		await expect(capturePageSnapshot({ tabId: 55, query: "settings", maxEntries: 1 })).resolves.toMatchObject({
 			query: "settings",
+			omissions: { total: 0, byCategory: {}, byRegion: {} },
 			entries: [{ snapshotId: "save" }],
 		});
+		const executeConfig = chrome.userScripts.execute.mock.calls[0]?.[0] as {
+			js?: Array<{ code?: string }>;
+		};
+		expect(executeConfig.js?.[0]?.code).toContain('"query":"settings"');
 	});
 
 	it("resolves active tab fallback in tool execution", async () => {
@@ -258,9 +269,14 @@ describe("PageSnapshotTool", () => {
 
 		const tool = new PageSnapshotTool();
 		tool.windowId = 7;
-		await expect(tool.execute("tool-call", {}, undefined)).resolves.toMatchObject({
+		const execution = await tool.execute("tool-call", {}, undefined);
+		expect(execution).toMatchObject({
 			details: { tabId: 90, frameId: 0 },
 		});
+		expect(execution.content[0]?.text).toContain(
+			"candidates total=0, returned=0, omitted=0; budget-omitted=0, query-filtered=0",
+		);
+		expect(execution.content[0]?.text).toContain("omitted categories: none; omitted regions: none");
 		expect(chrome.tabs.query).toHaveBeenCalledWith({ active: true, windowId: 7 });
 	});
 

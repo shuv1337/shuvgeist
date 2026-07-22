@@ -1,17 +1,58 @@
 import {
+	BRIDGE_PROTOCOL_MIN_VERSION,
+	BRIDGE_PROTOCOL_VERSION,
 	BridgeCapabilities,
 	BridgeDefaults,
 	BridgeMethods,
 	ErrorCodes,
 	getBridgeCapabilities,
 	isExtensionRelayedMethod,
+	isBridgeProtocolCompatible,
 	isServerLocalMethod,
 	isTargetDispatchedMethod,
 	isWriteMethod,
-} from "../../../src/bridge/protocol.js";
-import { BridgeCommandCatalog, getBridgeCommandMetadata } from "../../../src/bridge/command-catalog.js";
+	type RecordFrameEventData,
+	type RefClickParams,
+	type ResolvedPageTarget,
+	type BridgeEvent,
+	type TypedBridgeRequest,
+} from "@shuvgeist/protocol/protocol";
+import { BridgeCommandCatalog, getBridgeCommandMetadata } from "@shuvgeist/protocol/command-catalog";
 
 describe("bridge protocol", () => {
+	it("correlates parameter optionality with the command schema", () => {
+		type HasRequiredParams<T> = T extends { params: unknown } ? true : false;
+		expectTypeOf<HasRequiredParams<TypedBridgeRequest<"eval">>>().toEqualTypeOf<true>();
+		expectTypeOf<HasRequiredParams<TypedBridgeRequest<"status">>>().toEqualTypeOf<false>();
+	});
+
+	it("exposes target-aware page contracts and trusted ref input", () => {
+		expectTypeOf<RefClickParams>().toMatchTypeOf<{ refId: string; native?: boolean; trusted?: boolean }>();
+		expectTypeOf<ResolvedPageTarget>().toEqualTypeOf<
+		| { kind: "chrome-tab"; tabId: number; frameId?: number }
+		| { kind: "electron-window"; sessionId: string; windowRef: string; targetId: string; frameId?: number }
+	>();
+		expectTypeOf<RecordFrameEventData>().toMatchTypeOf<{
+		target: ResolvedPageTarget;
+		navigationGeneration: number;
+		tabId?: number;
+		frameId?: number;
+	}>();
+	});
+
+	it("models dynamic capability updates as a canonical bridge event", () => {
+		const event: BridgeEvent = {
+			type: "event",
+			event: "capabilities_update",
+			data: { capabilities: ["status", "repl"] },
+		};
+		expect(event).toEqual({
+			type: "event",
+			event: "capabilities_update",
+			data: { capabilities: ["status", "repl"] },
+		});
+	});
+
 	it("returns sensitive capabilities only when sensitive access is enabled", () => {
 		expect(getBridgeCapabilities(true)).toEqual(BridgeCapabilities);
 		expect(getBridgeCapabilities(false)).not.toContain("eval");
@@ -52,7 +93,11 @@ describe("bridge protocol", () => {
 
 	it("derives protocol method and capability metadata from the command catalog", () => {
 		expect(BridgeMethods).toEqual(BridgeCommandCatalog.map((entry) => entry.method));
-		expect(BridgeCapabilities).toEqual(BridgeCommandCatalog.flatMap((entry) => entry.capabilities));
+		expect(BridgeCapabilities).toEqual(
+			BridgeCommandCatalog.filter((entry) => entry.route === "extension").flatMap((entry) => entry.capabilities),
+		);
+		expect(BridgeCapabilities).not.toContain("electron_list");
+		expect(BridgeCapabilities).not.toContain("cookie_import");
 		expect(new Set(BridgeMethods).size).toBe(BridgeMethods.length);
 		expect(new Set(BridgeCapabilities).size).toBe(BridgeCapabilities.length);
 		expect(getBridgeCommandMetadata("navigate")).toMatchObject({
@@ -73,8 +118,9 @@ describe("bridge protocol", () => {
 		expect(isServerLocalMethod("navigate")).toBe(false);
 		expect(isExtensionRelayedMethod("navigate")).toBe(true);
 		expect(isTargetDispatchedMethod("navigate")).toBe(true);
-		expect(isTargetDispatchedMethod("electron_windows")).toBe(true);
-		expect(isTargetDispatchedMethod("session_history")).toBe(false);
+		expect(isTargetDispatchedMethod("electron_windows")).toBe(false);
+		expect(isTargetDispatchedMethod("session_history")).toBe(true);
+		expect(isTargetDispatchedMethod("perf_trace_start", "electron-window")).toBe(false);
 	});
 
 	it("exposes stable defaults and error codes", () => {
@@ -83,5 +129,15 @@ describe("bridge protocol", () => {
 		expect(ErrorCodes.NO_EXTENSION_TARGET).toBeLessThan(0);
 		expect(ErrorCodes.WRITE_LOCKED).toBeLessThan(0);
 		expect(BridgeCapabilities).toContain("cookies");
+	});
+
+	it("negotiates overlapping protocol ranges", () => {
+		expect(BRIDGE_PROTOCOL_VERSION).toBe(4);
+		expect(BRIDGE_PROTOCOL_MIN_VERSION).toBe(4);
+		expect(isBridgeProtocolCompatible(BRIDGE_PROTOCOL_VERSION, BRIDGE_PROTOCOL_MIN_VERSION)).toBe(true);
+		expect(isBridgeProtocolCompatible(BRIDGE_PROTOCOL_MIN_VERSION, BRIDGE_PROTOCOL_MIN_VERSION)).toBe(true);
+		expect(isBridgeProtocolCompatible(BRIDGE_PROTOCOL_MIN_VERSION - 1, BRIDGE_PROTOCOL_MIN_VERSION - 1)).toBe(false);
+		expect(isBridgeProtocolCompatible(BRIDGE_PROTOCOL_VERSION + 2, BRIDGE_PROTOCOL_VERSION + 1)).toBe(false);
+		expect(isBridgeProtocolCompatible(BRIDGE_PROTOCOL_VERSION, undefined)).toBe(false);
 	});
 });

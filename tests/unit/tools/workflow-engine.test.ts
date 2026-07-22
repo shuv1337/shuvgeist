@@ -1,4 +1,4 @@
-import { WorkflowEngine } from "../../../src/tools/workflow-engine.js";
+import { WorkflowEngine } from "@shuvgeist/extension/tools/workflow-engine";
 
 describe("WorkflowEngine", () => {
 	it("applies exact-token substitution with type preservation and string interpolation", async () => {
@@ -374,5 +374,31 @@ describe("WorkflowEngine", () => {
 		const step = result.steps.find((entry) => entry.method === "repl");
 		expect(typeof step?.result).toBe("string");
 		expect(step?.result).toContain("[truncated");
+	});
+
+	it("normalizes recorded results to recursive JSON wire values", async () => {
+		const dispatch = vi.fn().mockResolvedValue({
+			finalUrl: "https://example.com",
+			tabId: 42,
+			optional: undefined,
+			nested: { kept: true, missing: undefined },
+			list: [1, undefined],
+			bigint: 2n,
+		});
+		const engine = new WorkflowEngine({ dispatch });
+		const result = await engine.run({
+			steps: [{ method: "navigate", params: { url: "https://example.com" }, as: "navigation" }],
+		});
+
+		const expected = {
+			finalUrl: "https://example.com",
+			tabId: 42,
+			nested: { kept: true },
+			list: [1, null],
+			bigint: "2",
+		};
+		expect(result.steps[0]?.result).toEqual(expected);
+		expect(result.captured.navigation).toEqual(expected);
+		expect(() => JSON.stringify(result)).not.toThrow();
 	});
 });

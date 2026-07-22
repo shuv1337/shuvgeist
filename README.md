@@ -94,7 +94,7 @@ Run `shuvgeist --help` for the full command reference.
 
 High-level flow:
 
-`Chrome/Edge sidepanel UI -> Agent/tool runtime -> Background service worker -> Active tab(s)`
+`Chrome/Edge sidepanel UI -> Background coordinator -> Offscreen agent/tool runtime -> Background-authorized active tab(s)`
 
 CLI flow:
 
@@ -106,14 +106,13 @@ Electron CLI flow:
 
 Electron requests are handled bridge-local and do not require a connected Chrome/Edge extension target. Chrome remains the default target when `--target` is omitted.
 
-Important entry points:
+Important package boundaries:
 
-- `src/sidepanel.ts`: main UI, agent wiring, tool registration, session handling
-- `src/background.ts`: bridge ownership, offscreen execution fallback, session routing
-- `src/bridge/`: CLI, protocol, server, session bridge, workflow support
-- `src/tools/`: navigation, REPL, skills, snapshots, network capture, perf tools, debugger helpers
-- `src/dialogs/`: settings tabs and first-run dialogs
-- `src/storage/`: IndexedDB-backed sessions, skills, providers, and cost tracking
+- `packages/protocol/`: schema-first commands, wire contracts, targets, and shared protocol metadata
+- `packages/driver/`: target-neutral PageDriver, semantic refs, capture engines, and injected driver artifacts
+- `packages/extension/`: sidepanel, offscreen agent runtime, background coordinator, settings UI, and Chrome adapters
+- `packages/server/`: bridge server, Electron sessions, MCP, Node configuration, and local target execution
+- `packages/cli/`: public `shuvgeist` CLI, discovery, launch/autostart, and direct-CDP runtime
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for a deeper code-oriented walkthrough. For the local-first TTS overlay and Kokoro read-along flow, see [docs/tts.md](docs/tts.md).
 
@@ -182,12 +181,15 @@ Load `dist-chrome/` as an unpacked extension.
 
 ### CLI bridge
 
-Build and optionally link the CLI:
+Build and stage the installable CLI package:
 
 ```bash
-npm run build:cli
-npm link
+npm run package:cli
+package_version="$(node -p 'require("./static/manifest.chrome.json").version')"
+npm install -g "./shuvgeist-${package_version}.tgz"
 ```
+
+The source workspace is intentionally not directly packable: `npm pack --workspace shuvgeist` fails closed because its development manifest contains private workspace dependencies. Always use `npm run package:cli`, which emits the dependency-free six-file public package.
 
 Basic examples:
 
@@ -231,14 +233,15 @@ Use workflow target pinning for multi-step tests so focus changes do not move th
 }
 ```
 
-For native trusted input through semantic refs:
+Semantic refs use DOM actions by default. Chrome keeps the legacy `--native` mode; use `--trusted` (alias `--cdp-input`) for renderer-scoped CDP input on either supported target:
 
 ```bash
 shuvgeist locate label "Email" --json
 shuvgeist ref fill <refId> --value "user@example.com" --native
+shuvgeist ref fill <refId> --value "user@example.com" --trusted
 ```
 
-`ref fill` also handles `<select>` controls by option value or visible label and dispatches bubbling input/change events. For clicks that trigger async same-tab navigation, pass a bounded wait:
+`--native` and `--trusted` are mutually exclusive. Trusted ref actions never fall back to DOM events. `ref fill` handles text inputs, textareas, selects, and editable elements including empty and `plaintext-only` `contenteditable` values. It preserves explicit ARIA role precedence and dispatches cancelable `beforeinput` followed by `input`; a canceled `beforeinput` is reported as a failed action. For clicks that trigger async same-tab navigation, pass a bounded wait:
 
 ```bash
 shuvgeist ref fill <selectRefId> --value "Low to High" --json
@@ -256,7 +259,17 @@ shuvgeist electron list --json
 shuvgeist electron allow vscode
 ```
 
-Known app aliases include `vscode`, `shuvscode`, `slack`, `legcord`, `signal`, `signal-desktop`, and `obsidian`.
+Known app references include `vscode`, `shuvscode`, `codex`, `codex-desktop`, `slack`, `legcord`, `signal`, `signal-desktop`, and `obsidian`.
+
+For Codex Desktop on Linux, the registry recognizes the packaged launcher at `/usr/bin/codex-desktop` and the Electron runtime at `/opt/codex-desktop/codex-desktop-electron`. Allow, diagnose, and attach by alias:
+
+```bash
+shuvgeist electron allow codex
+shuvgeist electron doctor codex --json
+shuvgeist electron attach codex --json
+```
+
+The targeted doctor requires an exact Codex Desktop executable match and confirms that process owns its listening `--remote-debugging-port` before probing the loopback endpoint, even when it is outside the configured Shuvgeist launch range.
 
 Use `launch` when Shuvgeist should start a known Electron app with a remote debugging port:
 
@@ -286,14 +299,34 @@ shuvgeist screenshot --target electron:e1:w1 --out /tmp/electron.png
 shuvgeist eval "document.title" --target electron:e1:main --json
 shuvgeist snapshot --target electron:e1:w1 --json
 shuvgeist locate role button --name "Run" --target electron:e1:w1 --json
+shuvgeist ref click <refId> --trusted --target electron:e1:w1 --json
 shuvgeist record start --target electron:e1:w1 --out /tmp/electron.webm --max-duration 5s
 ```
+
+Electron trusted input is renderer-scoped CDP synthesis, not operating-system input. It is fail-closed and must be enabled for the exact app in `~/.shuvgeist/bridge.json`:
+
+```json
+{
+  "electron": {
+    "capabilities": {
+      "com.microsoft.VSCode": { "cdp_input": true }
+    }
+  }
+}
+```
+
+`--cdp-input` is an alias for `--trusted`. Electron `--native` is intentionally unsupported because Shuvgeist does not synthesize OS-level mouse or keyboard input.
+
+Target-scoped JSON results identify the resolved page as either a Chrome tab or an Electron session/window/target and include its `navigationGeneration`. Top-level `tabId` and `frameId` remain optional Chrome compatibility fields; Electron results never use negative tab sentinels.
 
 Security notes:
 
 - Only allow apps you intend to inspect. The allowlist is stored in `~/.shuvgeist/bridge.json`.
 - Electron commands operate over local CDP and can read renderer DOM, screenshots, page state, and recording frames.
+- `shuvgeist cookies` remains a Chrome/Edge extension command and is not routed to Electron targets. The parsed Electron `cookies` capability key is retained for configuration compatibility but does not enable Electron cookie access.
+- Renderer input requires the separate per-app `cdp_input` capability and is re-authorized against the live session/window before dispatch.
 - `record start` still requires `ffmpeg` on PATH because the CLI encodes received CDP frames into WebM.
+- Recording JSON distinguishes raw captured-frame bytes (`sourceBytes`) from the final WebM file size (`encodedSizeBytes`); deprecated `sizeBytes`, when present, is the encoded size.
 
 Troubleshooting:
 
@@ -303,11 +336,14 @@ Troubleshooting:
 - Wrong window: run `shuvgeist electron windows --json`, label the intended window, then target the label.
 - Extension disconnected errors on Electron commands usually mean the command was not given an Electron `--target`; Chrome is the default target.
 
+`shuvgeist status` reports browser-extension connectivity and server-verified Electron liveness separately. Cached sessions whose CDP endpoint or renderer page has disappeared are reported as stale; a disconnected extension does not block a live Electron session.
+
 The CLI auto-starts the local bridge when needed. Bridge config is resolved from:
 
 1. command-line flags
 2. environment variables
 3. `~/.shuvgeist/bridge.json`
+4. built-in defaults
 
 Supported env vars:
 
@@ -315,6 +351,16 @@ Supported env vars:
 - `SHUVGEIST_BRIDGE_HOST`
 - `SHUVGEIST_BRIDGE_PORT`
 - `SHUVGEIST_BRIDGE_TOKEN`
+- `SHUVGEIST_BRIDGE_CONFIG` (override the bridge config path)
+- `SHUVGEIST_OTEL_ENABLED`
+- `SHUVGEIST_OTEL_INGEST_URL`
+- `SHUVGEIST_OTEL_PRIVATE_INGEST_KEY`
+
+Automatic startup is deliberately narrower than connection support. It requires the exact `/ws` path with no query or fragment, plain `ws://` transport, and exactly `localhost`, `127.0.0.1`, or `::1`; it binds that approved loopback host and port and runs `<repo>/node_modules/.bin/tsx <repo>/packages/cli/src/cli.ts serve`. Every other endpoint—including TLS, remote, wildcard, alternate loopback, and custom-path URLs—must be started explicitly. A manual `shuvgeist serve` resolves its bind host and port independently from the client `url`, so a persisted remote connection URL is never reused as a local listener.
+
+When a flag or environment variable temporarily selects a different local endpoint, provide `--token` or `SHUVGEIST_BRIDGE_TOKEN` for reusable or concurrent access. An automatically generated token is returned only to the process that started that transient endpoint and is never written over credentials for an unrelated persisted URL.
+
+Browser and extension discovery uses `~/.shuvgeist/config.json` (override with `SHUVGEIST_CONFIG`; `SHUVGEIST_DISCOVERY_CONFIG` is retained as an alias). Missing flag, environment, or file candidates fall through in order; malformed configuration stops discovery with the exact failing path.
 
 Exit codes:
 
@@ -412,22 +458,19 @@ npm run test:coverage
 - after extension UI/runtime changes, rebuild with `npm run build` so `dist-chrome/` is current
 - after CLI bridge changes, rebuild with `npm run build:cli`
 - linked `../mini-lit` or `../pi-mono` changes must be rebuilt in those repos before rebuilding Shuvgeist
+- preserve the repository's intentional dependency forms and lockstep pins described in [docs/dependencies.md](docs/dependencies.md)
 - the bridge is managed automatically; do not run it as a separate ad-hoc shell process
 
 ## Project layout
 
 ```text
-src/
-  background.ts              extension background worker
-  sidepanel.ts               main extension UI and agent wiring
-  bridge/                    CLI, protocol, server, workflows, session bridge
-  dialogs/                   settings tabs and setup dialogs
-  oauth/                     subscription login flows
-  storage/                   IndexedDB-backed stores
-  tools/                     browser automation and diagnostics tools
-  messages/                  custom agent message types/renderers
-  prompts/                   system prompt and token helpers
-  components/                UI components
+packages/
+  protocol/                  shared wire schemas, commands, targets, and version contract
+  driver/                    target-neutral PageDriver and injected driver artifacts
+  extension/                 Chrome extension UI, background, offscreen runtime, and adapters
+  server/                    local bridge server, Electron, MCP, and Node configuration
+  cli/                       public CLI, discovery, autostart, and direct-CDP runtime
+scripts/                     root boundary checks and cross-package artifact generation
 static/
   manifest.chrome.json       extension manifest and version source
 site/
@@ -471,7 +514,7 @@ The deploy script uses SSH/rsync to `slayer.marioslab.io` by default.
 
 ## Release process
 
-Versioning is driven by `static/manifest.chrome.json`, `package.json`, `site/package.json`, and `proxy/package.json`.
+The core release version is driven by `static/manifest.chrome.json` and kept in parity with the private root plus the five packages under `packages/`. The `site/` and `proxy/` workspaces retain independent package versions and nested lockfiles.
 
 To cut a release:
 

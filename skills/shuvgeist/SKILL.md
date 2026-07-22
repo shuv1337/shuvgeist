@@ -47,14 +47,14 @@ Shuvgeist has several related layers:
 - **CLI bridge layer:** terminal commands that talk to the extension background worker and active tab
 - **Electron target layer:** bridge-local CDP commands for explicitly allowed local Electron apps, routed without a Chrome/Edge extension target
 - **MCP/HTTP layer:** authenticated Streamable HTTP tools that front extension-routed bridge targets as `shuvgeist_observe`, `shuvgeist_act`, `shuvgeist_extract`, and `shuvgeist_agent`
-- **Direct-CDP headless layer:** repo runtime code for no-extension Chromium page targets; this is not a top-level CLI command yet
+- **Direct-CDP headless layer:** supported library/runtime entry for no-extension Chromium page targets; this is not a top-level CLI command
 
 Important operational facts:
 
 - The CLI can auto-start the local bridge when needed.
 - Most browser commands work even when the sidepanel is closed.
 - REPL execution can run with the sidepanel closed through the offscreen runtime.
-- **Session commands** such as `session`, `inject`, `new-session`, `set-model`, and `artifacts` depend on the sidepanel session surface.
+- **Session commands** such as `session`, `inject`, `new-session`, `set-model`, and `artifacts` require an accepted offscreen-backed session. Once created, that session remains available while its sidepanel is closed.
 - Sensitive commands are gated by Bridge settings.
 - Chrome/Edge is the default target. Electron commands require `--target electron:...` unless they are `shuvgeist electron ...` management commands.
 - Some bridge methods are server-local or MCP-only and do not have a first-class CLI wrapper. Do not invent CLI commands for `snapshot_store`, `snapshot_read`, `cookie_import`, or the direct-CDP headless adapter.
@@ -70,6 +70,7 @@ shuvgeist status --json
 Use this to confirm:
 
 - extension connectivity
+- active bridge-local Electron sessions and renderer-window health
 - current capabilities
 - target window/tab state
 - whether a sidepanel session is available
@@ -99,10 +100,17 @@ shuvgeist skill path             # print the install path
 
 ## Prerequisites
 
-### Required
+### Required for Chrome/Edge targets
 
 - Shuvgeist extension installed or built and loaded in Chrome/Edge
 - A browser target connected to the extension
+
+### Required for Electron targets
+
+- A known local Electron app with a CDP-enabled renderer
+- The app explicitly added to the Shuvgeist Electron allowlist
+
+Electron targets do not require the Chrome/Edge extension to be installed or connected.
 
 ### Usually not required manually
 
@@ -181,7 +189,17 @@ shuvgeist electron list --json
 shuvgeist electron allow vscode
 ```
 
-Known app aliases include `vscode`, `shuvscode`, `slack`, `legcord`, `signal`, `signal-desktop`, and `obsidian`.
+Known app references include `vscode`, `shuvscode`, `codex`, `codex-desktop`, `slack`, `legcord`, `signal`, `signal-desktop`, and `obsidian`.
+
+Codex Desktop on Linux is registered through the packaged `/usr/bin/codex-desktop` launcher and `/opt/codex-desktop/codex-desktop-electron` runtime. Use the alias for the minimal attach flow:
+
+```bash
+shuvgeist electron allow codex
+shuvgeist electron doctor codex --json
+shuvgeist electron attach codex --json
+```
+
+Targeted doctor checks require an exact registered-app process match and confirm that process owns its listening `--remote-debugging-port`, so they can find Codex Desktop outside the configured Shuvgeist launch range without probing unrelated apps. `shuvgeist status` reports extension and live Electron health separately; a disconnected extension does not block bridge-local Electron control.
 
 Attach to an already running CDP-enabled app, or launch a known app with a debugging port:
 
@@ -229,6 +247,7 @@ Diagnose attach/launch problems and manage the auto-attach helper:
 
 ```bash
 shuvgeist electron doctor vscode --json                  # diagnose setup (ports, paths, permissions)
+shuvgeist electron doctor codex --json                   # discover a running Codex Desktop CDP endpoint
 shuvgeist electron auto-attach status vscode --json
 shuvgeist electron auto-attach install vscode --json     # auto-attach when the app starts
 shuvgeist electron auto-attach uninstall vscode --json
@@ -251,8 +270,23 @@ shuvgeist screenshot --target electron:e1:w1 --out /tmp/electron.png
 shuvgeist snapshot --target electron:e1:w1 --json
 shuvgeist locate role button --name "Run" --target electron:e1:w1 --json
 shuvgeist ref click <refId> --target electron:e1:w1
+shuvgeist ref click <refId> --trusted --target electron:e1:w1
 shuvgeist record start --target electron:e1:w1 --out /tmp/electron.webm --max-duration 5s
 ```
+
+Electron trusted input is renderer-scoped CDP synthesis, not OS input. `--trusted` and `--cdp-input` are aliases and require the exact app's `cdp_input` capability to be `true` in `~/.shuvgeist/bridge.json`:
+
+```json
+{
+  "electron": {
+    "capabilities": {
+      "com.microsoft.VSCode": { "cdp_input": true }
+    }
+  }
+}
+```
+
+Electron `--native` is explicitly unsupported. Do not treat trusted CDP input as an OS mouse/keyboard action or silently fall back to DOM events.
 
 Deeper Electron diagnostics and source inspection:
 
@@ -275,6 +309,7 @@ shuvgeist electron detach e1 --json
 Electron safety notes:
 
 - Main-process inspection, IPC taps, main-network taps, and source extraction can expose sensitive local app state. Use only on apps the user has explicitly asked to inspect.
+- `shuvgeist cookies` is a Chrome/Edge extension command, not an Electron target command. The parsed Electron `cookies` capability key is compatibility-only and does not enable Electron cookie access.
 - `electron ipc tap` and `electron network-main start` are diagnostic instrumentation. Stop them when done.
 - `electron source extract` can copy app source or ASAR contents. Choose a deliberate destination and avoid publishing extracted secrets.
 - `electron auto-attach install` modifies launch behavior for that local app; use `auto-attach status` first and `auto-attach uninstall` when the shim is no longer needed.
@@ -616,18 +651,24 @@ shuvgeist ref fill <refId> --value "Low to High"
 shuvgeist ref click <refId> --timeout 5s
 shuvgeist ref click <refId> --native
 shuvgeist ref fill <refId> --value "user@example.com" --native
+shuvgeist ref click <refId> --trusted
+shuvgeist ref fill <refId> --value "user@example.com" --cdp-input
 ```
 
 Ref caveats:
 
-- refs are scoped to `tabId + frameId`
+- refs are scoped to the resolved session/window/page/frame and its navigation generation
 - refs are in-memory only
 - navigation invalidates refs
 - stale or ambiguous refs should fail instead of guessing
-- `ref fill` handles text inputs, textareas, and select controls; select values can be option values or visible labels
+- `ref fill` handles text inputs, textareas, selects, and editable elements (`contenteditable`, empty `contenteditable`, and `contenteditable="plaintext-only"`); explicit ARIA roles take precedence
+- editable fills focus and replace the current content, dispatch cancelable `beforeinput` before `input`, and report a canceled `beforeinput` as failure
 - `ref click --timeout <duration>` waits for bounded same-tab page stability and reports the final URL in JSON output
-- `--native` uses trusted debugger-backed input and does not fall back to synthetic DOM events
-- native refs can target iframe refs when Shuvgeist can resolve frame coordinates; inaccessible frames fail clearly
+- `--native` is the legacy Chrome debugger-backed mode; it is intentionally unsupported for Electron because Shuvgeist does not synthesize OS input
+- `--trusted` and `--cdp-input` are the same renderer-scoped `Input.*` mode, never fall back to DOM events, and are mutually exclusive with `--native`
+- Electron trusted actions are fail-closed unless the per-app `cdp_input` policy is exactly `true`
+- trusted refs can target iframe refs when Shuvgeist can resolve frame coordinates; inaccessible frames fail clearly
+- structured failures include the reason and safe match diagnostics, but never expose the internal selector or raw input point
 
 ### Frame inspection
 
@@ -660,6 +701,7 @@ Important:
 
 - capture is explicit and bounded in memory
 - capture continues until `network stop`
+- JSON results include the resolved target and navigation generation; `network list` returns `requests`, and `network get` returns one `request`, inside that scoped result
 - `curl` redacts sensitive headers by default
 - `network get`, `network body`, and `network curl` are sensitive capabilities
 
@@ -716,16 +758,18 @@ Recording options:
 
 Recording is bounded by `--max-duration`; use `record stop` to end early or `record status` to check whether a capture is active.
 
+Recording JSON reports `sourceBytes` as the decoded JPEG/PNG bytes received from CDP and `encodedSizeBytes` as the final ffmpeg WebM size. Deprecated `sizeBytes`, when present, means encoded output size; never compare it to `sourceBytes` as though they were the same measurement.
+
 ## Direct-CDP headless runtime
 
-Shuvgeist 2.0.0 includes a repo-level no-extension direct-CDP runtime for headless Chromium. This is a code/runtime surface, not a public CLI command.
+Shuvgeist 2.0.0 includes a supported no-extension direct-CDP library/runtime entry for headless Chromium. It composes the same PageDriver as Chrome and Electron; it is not a top-level CLI command.
 
 Use it when the task is to develop or test Shuvgeist itself against a Chromium target where no extension is present. For normal browser automation, prefer `shuvgeist launch --headless`, which still loads the extension and exposes the CLI bridge.
 
 Key files:
 
-- `src/bridge/headless/direct-cdp-runtime.ts`
-- `src/bridge/headless/trusted-input-provider.ts`
+- `packages/cli/src/headless/direct-cdp-runtime.ts`
+- `packages/driver/src/trusted-input-provider.ts`
 - `tests/integration/bridge/headless-direct-cdp-runtime.test.ts`
 - `tests/unit/bridge/trusted-input-provider.test.ts`
 - `tests/unit/bridge/direct-cdp-vision-baseline.test.ts`
@@ -791,7 +835,7 @@ Use this to list artifacts created in the active sidepanel session.
 
 ### Session limitations
 
-Session commands are the main place where sidepanel availability matters. If the sidepanel session surface is unavailable, these commands should be treated as unavailable rather than retried blindly.
+Session commands are unavailable before any session has been accepted for the target browser window, or after that window and its runtime ownership have been released. Closing the sidepanel alone does not release the offscreen-backed session.
 
 ## Targeting flags
 

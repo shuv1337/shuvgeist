@@ -4,7 +4,7 @@ import type {
 	BeforeToolCallContext,
 	ShouldStopAfterTurnContext,
 } from "@shuv1337/pi-agent-core";
-import { createPlannerValidatorHooks, createPlannerValidatorState } from "../../../src/agent/planner-validator.js";
+import { createPlannerValidatorHooks, createPlannerValidatorState } from "@shuvgeist/driver/planner-validator";
 
 function userMessage(text: string): AgentMessage {
 	return { role: "user", content: [{ type: "text", text }], timestamp: 1 };

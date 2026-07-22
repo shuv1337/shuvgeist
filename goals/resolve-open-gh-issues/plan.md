@@ -93,11 +93,11 @@ Primary code and docs:
 
 Primary plans and code:
 
-- `PLAN-architecture-bridge-command-catalog.md`
-- `PLAN-architecture-bridge-target-execution.md`
-- `PLAN-architecture-sidepanel-session-runtime.md`
-- `PLAN-architecture-tts-playback-coordination.md`
-- `PLAN-architecture-electron-session-automation.md`
+- `docs/plans/architecture/PLAN-architecture-bridge-command-catalog.md`
+- `docs/plans/architecture/PLAN-architecture-bridge-target-execution.md`
+- `docs/plans/architecture/PLAN-architecture-sidepanel-session-runtime.md`
+- `docs/plans/architecture/PLAN-architecture-tts-playback-coordination.md`
+- `docs/plans/architecture/PLAN-architecture-electron-session-automation.md`
 - `src/bridge/cli-core.ts`
 - `src/bridge/protocol.ts`
 - `src/bridge/cli.ts`
@@ -225,7 +225,7 @@ These two issues are tightly coupled and should be handled as sequential small b
 
 Batch 3A: bridge command catalog (#30).
 
-- [ ] Follow `PLAN-architecture-bridge-command-catalog.md`.
+- [ ] Follow `docs/plans/architecture/PLAN-architecture-bridge-command-catalog.md`.
 - [ ] Characterize current CLI/protocol/help behavior before moving metadata.
 - [ ] Introduce catalog metadata without behavior changes.
 - [ ] Move CLI planning, protocol capability classification, sensitivity gates, write-method classification, and help alignment behind catalog-backed interfaces.
@@ -233,7 +233,7 @@ Batch 3A: bridge command catalog (#30).
 
 Batch 3B: bridge target execution (#31).
 
-- [ ] Follow `PLAN-architecture-bridge-target-execution.md`.
+- [ ] Follow `docs/plans/architecture/PLAN-architecture-bridge-target-execution.md`.
 - [ ] Characterize `BridgeServer` routing decisions.
 - [ ] Extract target capability metadata.
 - [ ] Introduce Chrome extension, Electron, and server-local execution adapters.
@@ -260,7 +260,7 @@ These can proceed independently after Step 3 unless they touch bridge session co
 
 Batch 4A: sidepanel session runtime (#32).
 
-- [ ] Follow `PLAN-architecture-sidepanel-session-runtime.md`.
+- [ ] Follow `docs/plans/architecture/PLAN-architecture-sidepanel-session-runtime.md`.
 - [ ] Extract session metadata helpers first.
 - [ ] Extract model resolution helpers.
 - [ ] Introduce a session runtime with storage/model/agent/bridge adapters.
@@ -268,7 +268,7 @@ Batch 4A: sidepanel session runtime (#32).
 
 Batch 4B: TTS playback coordination (#33).
 
-- [ ] Follow `PLAN-architecture-tts-playback-coordination.md`.
+- [ ] Follow `docs/plans/architecture/PLAN-architecture-tts-playback-coordination.md`.
 - [ ] Characterize current TTS runtime behavior.
 - [ ] Extract provider fallback policy.
 - [ ] Introduce coordinator state and fakeable offscreen/overlay adapters.
@@ -292,7 +292,7 @@ Expected outcome:
 
 Do this before reopening the full Electron feature stack so subsequent Electron issues land on better internals.
 
-- [ ] Follow `PLAN-architecture-electron-session-automation.md`.
+- [ ] Follow `docs/plans/architecture/PLAN-architecture-electron-session-automation.md`.
 - [ ] Add fake process and fake CDP characterization tests.
 - [ ] Extract session storage behind an internal module.
 - [ ] Extract Electron window execution.

@@ -4,7 +4,7 @@ import {
 	isKokoroHealthStale,
 	probeKokoroHealth,
 	refreshKokoroHealth,
-} from "../../../src/tts/kokoro-health.js";
+} from "@shuvgeist/extension/tts/kokoro-health";
 
 describe("kokoro-health", () => {
 	beforeEach(() => {

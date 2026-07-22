@@ -1,8 +1,8 @@
 import type { Agent, AgentMessage, AgentState } from "@shuv1337/pi-agent-core";
 import type { Model } from "@shuv1337/pi-ai";
-import { DEFAULT_AGENT_THINKING_LEVEL } from "../../src/agent/runtime.js";
-import { ErrorCodes, type SessionArtifactsResult } from "../../src/bridge/protocol.js";
-import { SidepanelSessionRuntime, type SidepanelSessionRuntimeDeps } from "../../src/sidepanel/session-runtime.js";
+import { DEFAULT_AGENT_THINKING_LEVEL } from "@shuvgeist/driver/runtime";
+import { ErrorCodes, type SessionArtifactsResult } from "@shuvgeist/protocol/protocol";
+import { SidepanelSessionRuntime, type SidepanelSessionRuntimeDeps } from "@shuvgeist/extension/sidepanel/session-runtime";
 
 function testModel(id = "model-1", provider = "provider-1"): Model<any> {
 	return { id, provider, api: "openai" } as Model<any>;

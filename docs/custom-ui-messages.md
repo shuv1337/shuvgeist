@@ -257,7 +257,7 @@ document.addEventListener("tutorial-selected", (e: CustomEvent) => {
 - `pi-mono/packages/web-ui/src/agent/agent.ts` - Transformation
 
 **Examples:**
-- `shuvgeist/src/messages/NavigationMessage.ts` - Navigation message
-- `shuvgeist/src/messages/WelcomeMessage.ts` - UI-only message
-- `shuvgeist/src/message-transformer.ts` - Message transformation
-- `shuvgeist/src/sidepanel.ts` - Agent setup and event handling
+- `shuvgeist/packages/extension/src/messages/NavigationMessage.ts` - Navigation message
+- `shuvgeist/packages/extension/src/messages/WelcomeMessage.ts` - UI-only message
+- `shuvgeist/packages/extension/src/messages/message-transformer.ts` - Message transformation
+- `shuvgeist/packages/extension/src/sidepanel.ts` - Presentation setup and event handling

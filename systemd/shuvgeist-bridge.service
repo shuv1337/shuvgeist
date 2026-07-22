@@ -6,7 +6,7 @@ After=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=/home/shuv/repos/shuvgeist
-ExecStart=/home/shuv/repos/shuvgeist/node_modules/.bin/tsx /home/shuv/repos/shuvgeist/src/bridge/cli.ts serve --host 0.0.0.0
+ExecStart=/home/shuv/repos/shuvgeist/node_modules/.bin/tsx /home/shuv/repos/shuvgeist/packages/cli/src/cli.ts serve --host 0.0.0.0
 Restart=always
 RestartSec=3
 Environment=HOME=/home/shuv

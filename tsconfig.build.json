@@ -1,22 +1,3 @@
 {
-	"compilerOptions": {
-		"rootDir": "./src",
-		"outDir": "./dist",
-		"lib": ["ES2022", "DOM", "DOM.Iterable"],
-		"module": "ESNext",
-		"moduleResolution": "Bundler",
-		"target": "ES2022",
-		"types": ["chrome"],
-		"strict": true,
-		"esModuleInterop": true,
-		"skipLibCheck": true,
-		"forceConsistentCasingInFileNames": true,
-		"resolveJsonModule": true,
-		"isolatedModules": true,
-		"noEmit": true,
-		"experimentalDecorators": true,
-		"useDefineForClassFields": false
-	},
-	"include": ["src/**/*.ts"],
-	"exclude": ["dist", "node_modules", "src/bridge/server.ts", "src/bridge/cli.ts"]
+	"extends": "./packages/extension/tsconfig.json"
 }

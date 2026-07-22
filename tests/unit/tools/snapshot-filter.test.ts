@@ -1,5 +1,5 @@
-import { filterSnapshotByKeywords } from "../../../src/tools/helpers/snapshot-filter.js";
-import type { PageSnapshotResult } from "../../../src/tools/page-snapshot.js";
+import { filterSnapshotByKeywords } from "@shuvgeist/extension/tools/helpers/snapshot-filter";
+import type { PageSnapshotResult } from "@shuvgeist/extension/tools/page-snapshot";
 
 describe("snapshot-filter", () => {
 	it("selects top keyword matches while preserving snapshot entry order", () => {
@@ -122,5 +122,26 @@ describe("snapshot-filter", () => {
 		const filtered = filterSnapshotByKeywords(snapshot, { query: "billing", limit: 1 });
 
 		expect(filtered.entries.map((entry) => entry.snapshotId)).toEqual(["section", "save"]);
+	});
+
+	it("preserves producer-accounted omission metadata after pre-cap query filtering", () => {
+		const snapshot = {
+			totalCandidates: 3,
+			truncated: false,
+			omissions: {
+				total: 2,
+				budgetOmitted: 0,
+				queryFiltered: 2,
+				byCategory: { "role:button": 2 },
+				byRegion: { unscoped: 2 },
+			},
+			entries: [{ snapshotId: "e2", name: "Billing settings", ordinalPath: [1] }],
+		};
+
+		const filtered = filterSnapshotByKeywords(snapshot, { query: "billing", limit: 1 });
+
+		expect(filtered.entries).toEqual(snapshot.entries);
+		expect(filtered.omissions).toEqual(snapshot.omissions);
+		expect(filtered.totalCandidates - filtered.entries.length).toBe(filtered.omissions.total);
 	});
 });

@@ -1,4 +1,4 @@
-import { NetworkCaptureEngine } from "../../../src/tools/network-capture.js";
+import { NetworkCaptureEngine } from "@shuvgeist/extension/tools/network-capture";
 
 type DebuggerListener = (
 	method: string,

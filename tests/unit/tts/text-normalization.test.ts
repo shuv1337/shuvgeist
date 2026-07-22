@@ -5,7 +5,7 @@ import {
 	getEffectiveTtsCharLimit,
 	normalizeReadableText,
 	textsEquivalent,
-} from "../../../src/tts/text-normalization.js";
+} from "@shuvgeist/extension/tts/text-normalization";
 
 describe("text-normalization", () => {
 	describe("normalizeReadableText", () => {

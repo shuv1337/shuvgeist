@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { installSkill, resolveSkillTargetDir } from "../../../src/bridge/skill-install.js";
+import { installSkill, resolveSkillTargetDir } from "shuvgeist/skill-install";
 
 const STAMP = ".shuvgeist-skill-version";
 

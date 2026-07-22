@@ -27,7 +27,9 @@ jobs:
             exit 0
           fi
 
-          allowed_paths='^(\.github/workflows/(build|test)\.yml|AGENTS\.md|CHANGELOG\.md|CLAUDE\.md|README\.md|package(-lock)?\.json|proxy/package(-lock)?\.json|site/package(-lock)?\.json|site/src/frontend/.*|src/messages/.*|static/manifest\.chrome\.json)$'
+          # Workspace manifests are excluded: check:boundaries validates them and
+          # runs only in fast-checks, which this flag would skip.
+          allowed_paths='^(\.github/workflows/(build|test)\.yml|AGENTS\.md|CHANGELOG\.md|CLAUDE\.md|README\.md|package(-lock)?\.json|proxy/package(-lock)?\.json|site/package(-lock)?\.json|site/src/frontend/.*|static/manifest\.chrome\.json)$'
 
           if git diff --name-only "${{ github.event.pull_request.base.sha }}" "${{ github.sha }}" | grep -Ev "$allowed_paths" >/dev/null; then
             echo "content_only=false" >> "$GITHUB_OUTPUT"
@@ -57,14 +59,6 @@ jobs:
 
       - name: Install mini-lit deps
         run: cd ../mini-lit && npm install --ignore-scripts
-
-      - name: Clone pi-mono
-        run: |
-          git config --local --unset-all http.https://github.com/.extraheader || true
-          git clone --depth 1 https://github.com/shuv1337/pi-mono.git ../pi-mono
-
-      - name: Install pi-mono
-        run: cd ../pi-mono && npm install && npm run build
 
       - name: Install root deps
         run: npm install
@@ -98,14 +92,6 @@ jobs:
       - name: Install mini-lit deps
         run: cd ../mini-lit && npm install --ignore-scripts
 
-      - name: Clone pi-mono
-        run: |
-          git config --local --unset-all http.https://github.com/.extraheader || true
-          git clone --depth 1 https://github.com/shuv1337/pi-mono.git ../pi-mono
-
-      - name: Install pi-mono
-        run: cd ../pi-mono && npm install && npm run build
-
       - name: Install root deps
         run: npm install
 
@@ -114,6 +100,16 @@ jobs:
 
       - name: Build extension
         run: npm run build:chrome
+        env:
+          SHUVGEIST_BUILD_TEST_SURFACES: "1"
+
+      - name: Build CLI
+        run: npm run build:cli
+        env:
+          SHUVGEIST_BUILD_TEST_SURFACES: "1"
+
+      - name: Verify E2E artifact surfaces
+        run: node ./scripts/check-injected-artifact-test-surface.mjs --test
 
       - name: Run extension smoke
         run: npm run test:e2e:extension
@@ -136,7 +132,7 @@ jobs:
           node-version: 22
 
       - name: Install root deps
-        run: npm install
+        run: npm install --workspaces=false
 
       - name: Install Playwright Chromium
         run: npx playwright install chromium
@@ -173,14 +169,6 @@ jobs:
 
       - name: Install mini-lit deps
         run: cd ../mini-lit && npm install --ignore-scripts
-
-      - name: Clone pi-mono
-        run: |
-          git config --local --unset-all http.https://github.com/.extraheader || true
-          git clone --depth 1 https://github.com/shuv1337/pi-mono.git ../pi-mono
-
-      - name: Install pi-mono
-        run: cd ../pi-mono && npm install && npm run build
 
       - name: Install root deps
         run: npm install

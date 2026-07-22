@@ -5,9 +5,9 @@ import {
 	formatExtraText,
 	formatStatusText,
 	reduceOverlayState,
-} from "../../../src/tts/overlay-controller.js";
-import { DEFAULT_TTS_SETTINGS } from "../../../src/tts/settings.js";
-import { createInitialTtsPlaybackState, type TtsOverlayState } from "../../../src/tts/types.js";
+} from "@shuvgeist/extension/tts/overlay-controller";
+import { DEFAULT_TTS_SETTINGS } from "@shuvgeist/extension/tts/settings";
+import { createInitialTtsPlaybackState, type TtsOverlayState } from "@shuvgeist/extension/tts/types";
 
 // Mock chrome API
 beforeAll(() => {

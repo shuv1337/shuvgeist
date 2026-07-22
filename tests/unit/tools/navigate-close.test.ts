@@ -1,4 +1,4 @@
-import { NavigateTool } from "../../../src/tools/navigate.js";
+import { NavigateTool } from "@shuvgeist/extension/tools/navigate";
 
 declare global {
 	// biome-ignore lint/style/noVar: test-only global augmentation

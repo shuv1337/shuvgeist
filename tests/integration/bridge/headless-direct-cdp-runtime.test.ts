@@ -1,4 +1,4 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -11,12 +11,14 @@ import {
 	type Model,
 } from "@shuv1337/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
-import type { CreateAgentRuntimeOptions } from "../../../src/agent/runtime.js";
+import type { CreateAgentRuntimeOptions } from "@shuvgeist/driver/runtime";
+import { SNAPSHOT_INJECTED_ARTIFACT } from "@shuvgeist/driver/driver-artifacts-generated";
 import {
 	buildDirectCdpSnapshotExpression,
 	connectDirectCdpHeadlessRuntime,
+	type DirectCdpLocateResult,
 	listDirectCdpPageTargets,
-} from "../../../src/bridge/headless/direct-cdp-runtime.js";
+} from "shuvgeist/direct-cdp-runtime";
 
 class MockAssistantStream extends EventStream<AssistantMessageEvent, AssistantMessage> {
 	constructor() {
@@ -101,7 +103,7 @@ async function getFreePort(): Promise<number> {
 }
 
 async function waitForPageTarget(port: number): Promise<void> {
-	const deadline = Date.now() + 10_000;
+	const deadline = Date.now() + 30_000;
 	while (Date.now() < deadline) {
 		try {
 			const targets = await listDirectCdpPageTargets({ port });
@@ -114,25 +116,63 @@ async function waitForPageTarget(port: number): Promise<void> {
 	throw new Error("Timed out waiting for headless Chromium page target");
 }
 
+async function stopChildProcess(childProcess: ChildProcess | undefined): Promise<void> {
+	if (!childProcess) return;
+	if (childProcess.exitCode !== null || childProcess.signalCode !== null) {
+		if (process.platform !== "win32" && childProcess.pid) {
+			try {
+				process.kill(-childProcess.pid, "SIGKILL");
+			} catch {}
+		}
+		return;
+	}
+	await new Promise<void>((resolve) => {
+		let settled = false;
+		const finish = () => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timeout);
+			childProcess.off("exit", finish);
+			resolve();
+		};
+		const timeout = setTimeout(finish, 2_000);
+		childProcess.once("exit", finish);
+		try {
+			if (process.platform !== "win32" && childProcess.pid) process.kill(-childProcess.pid, "SIGKILL");
+			else if (!childProcess.kill("SIGKILL")) finish();
+		} catch {
+			if (!childProcess.kill("SIGKILL")) finish();
+		}
+	});
+}
+
 describe("direct-CDP headless runtime", () => {
 	const chromiumPath = process.env.CHROMIUM_PATH ?? "/usr/bin/chromium";
 	const runChromiumTest = existsSync(chromiumPath) ? it : it.skip;
-	let child: ChildProcessWithoutNullStreams | undefined;
+	let child: ChildProcess | undefined;
 	let userDataDir: string | undefined;
 
-	afterEach(() => {
-		child?.kill("SIGKILL");
+	afterEach(async () => {
+		await stopChildProcess(child);
 		child = undefined;
 		if (userDataDir) {
-			rmSync(userDataDir, { recursive: true, force: true });
+			rmSync(userDataDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 			userDataDir = undefined;
 		}
 	});
 
-	it("builds a snapshot expression with a local transpiler helper shim", () => {
-		const expression = buildDirectCdpSnapshotExpression({ frameId: 0, maxEntries: 5, includeHidden: false });
-		expect(expression).toContain("const __name = (fn) => fn");
+	it("builds a self-contained compiled snapshot expression", () => {
+		const expression = buildDirectCdpSnapshotExpression({
+			frameId: 0,
+			maxEntries: 5,
+			includeHidden: false,
+			query: "focused composer",
+		});
+		expect(expression).toContain(SNAPSHOT_INJECTED_ARTIFACT.globalName);
+		expect(expression).not.toContain("const __name = (fn) => fn");
 		expect(expression).toContain("maxEntries");
+		expect(expression).toContain('"query":"focused composer"');
+		expect(() => new Function(`return ${expression};`)).not.toThrow();
 	});
 
 	runChromiumTest(
@@ -143,6 +183,7 @@ describe("direct-CDP headless runtime", () => {
 			const html =
 				"<!doctype html><html><head><title>T11 Headless Runtime</title></head><body>" +
 				"<button id=\"run\" onclick=\"window.__clicked=(window.__clicked||0)+1; this.textContent='clicked '+window.__clicked;\">Run headless action</button>" +
+				'<div contenteditable="true" aria-label="Composer"><strong>Old draft</strong></div>' +
 				"</body></html>";
 			const url = "data:text/html;charset=utf-8," + encodeURIComponent(html);
 			child = spawn(
@@ -150,6 +191,7 @@ describe("direct-CDP headless runtime", () => {
 				[
 					"--headless=new",
 					"--disable-default-apps",
+					"--disable-dev-shm-usage",
 					"--disable-gpu",
 					"--no-first-run",
 					"--no-sandbox",
@@ -158,12 +200,12 @@ describe("direct-CDP headless runtime", () => {
 					"--user-data-dir=" + userDataDir,
 					url,
 				],
-				{ stdio: ["ignore", "pipe", "pipe"] },
+				{ detached: true, stdio: "ignore" },
 			);
 			await waitForPageTarget(port);
 
 			let callIndex = 0;
-			const streamFn: NonNullable<CreateAgentRuntimeOptions["streamFn"]> = () => {
+			const streamFn: NonNullable<CreateAgentRuntimeOptions["streamFn"]> = (_model, context) => {
 				const stream = new MockAssistantStream();
 				queueMicrotask(() => {
 					let message: AssistantMessage;
@@ -185,8 +227,14 @@ describe("direct-CDP headless runtime", () => {
 							"toolUse",
 						);
 					} else if (callIndex === 2) {
+						const locateResult = [...context.messages]
+							.reverse()
+							.find((message) => message.role === "toolResult" && message.toolName === "locate_by_role")
+							?.details as DirectCdpLocateResult | undefined;
+						const refId = locateResult?.matches[0]?.refId;
+						if (!refId) throw new Error("Locate tool did not return a dynamic ref");
 						message = createAssistantMessage(
-							[{ type: "toolCall", id: "click-1", name: "ref_click", arguments: { refId: "e1" } }],
+							[{ type: "toolCall", id: "click-1", name: "ref_click", arguments: { refId } }],
 							"toolUse",
 						);
 					} else if (callIndex === 3) {
@@ -212,11 +260,32 @@ describe("direct-CDP headless runtime", () => {
 			await adapter.prompt("Click the run headless action button, then inspect the page again.");
 
 			expect(callIndex).toBe(5);
-			expect(adapter.lastSnapshot?.entries[0]?.name).toBe("clicked 1");
+			expect(adapter).not.toHaveProperty("cdp");
+			expect(adapter.lastSnapshot?.snapshot.entries[0]?.name).toBe("clicked 1");
+			expect(adapter.lastSnapshot?.scope).toMatchObject({
+				page: {
+					transport: "websocket-cdp",
+					sessionId: "headless-session",
+				},
+			});
+
+			const editor = await adapter.locateByRole({ role: "textbox", name: "Composer" });
+			const editorRef = editor.matches[0]?.refId;
+			expect(editorRef).toBeTruthy();
+			const fillResult = await adapter.fillRef({ refId: editorRef ?? "missing", value: "Updated draft" });
+			expect(fillResult).toMatchObject({
+				ok: true,
+				execution: { kind: "fill", textLength: 13 },
+			});
+			const editorAfterFill = await adapter.snapshot({ query: "Composer" });
+			expect(editorAfterFill.snapshot.entries[0]).toMatchObject({
+				role: "textbox",
+				text: "Updated draft",
+			});
 			expect(adapter.runtime.agent.state.messages.map((message) => message.role)).toContain("toolResult");
 			const firstTargetId = adapter.target?.id;
 			expect(firstTargetId).toBeTruthy();
-			adapter.close();
+			await adapter.close();
 
 			const reconnected = await connectDirectCdpHeadlessRuntime({
 				port,
@@ -225,8 +294,149 @@ describe("direct-CDP headless runtime", () => {
 			});
 			expect(reconnected.target?.id).toBe(firstTargetId);
 			const snapshotAfterReconnect = await reconnected.snapshot();
-			expect(snapshotAfterReconnect.entries[0]?.name).toBe("clicked 1");
-			reconnected.close();
+			expect(snapshotAfterReconnect.snapshot.entries[0]?.name).toBe("clicked 1");
+			await reconnected.close();
+		},
+		30_000,
+	);
+
+	runChromiumTest(
+		"revalidates a generic ref after reorder instead of clicking the first selector match",
+		async () => {
+			const port = await getFreePort();
+			userDataDir = mkdtempSync(join(tmpdir(), "shuvgeist-ref-reorder-"));
+			const html =
+				"<!doctype html><html><head><title>Ref reorder</title></head><body>" +
+				'<button class="shared">Search</button><button id="rerender">Re-render</button>' +
+				"<script>document.querySelector('#rerender').onclick=()=>{" +
+				"const wrong=document.createElement('button');wrong.className='shared';wrong.textContent='Settings';wrong.onclick=()=>wrong.textContent='WRONG';" +
+				"const right=document.createElement('button');right.className='shared';right.textContent='Search';right.onclick=()=>right.textContent='Clicked correct';" +
+				"document.body.replaceChildren(wrong,right);};</script></body></html>";
+			child = spawn(
+				chromiumPath,
+				[
+					"--headless=new",
+					"--disable-default-apps",
+					"--disable-dev-shm-usage",
+					"--disable-gpu",
+					"--no-first-run",
+					"--no-sandbox",
+					"--remote-debugging-address=127.0.0.1",
+					"--remote-debugging-port=" + port,
+					"--user-data-dir=" + userDataDir,
+					"data:text/html;charset=utf-8," + encodeURIComponent(html),
+				],
+				{ detached: true, stdio: "ignore" },
+			);
+			await waitForPageTarget(port);
+
+			const adapter = await connectDirectCdpHeadlessRuntime({ port, model: createModel() });
+			const searchRef = (await adapter.locateByRole({ role: "button", name: "Search" })).matches[0]?.refId;
+			const rerenderRef = (await adapter.locateByRole({ role: "button", name: "Re-render" })).matches[0]?.refId;
+			expect(searchRef).toBeTruthy();
+			expect(rerenderRef).toBeTruthy();
+			expect(await adapter.clickRef({ refId: rerenderRef ?? "missing" })).toMatchObject({ ok: true });
+
+			const clickResult = await adapter.clickRef({ refId: searchRef ?? "missing" });
+			expect(clickResult).toMatchObject({ ok: true, match: { entry: { name: "Search" } } });
+			const snapshot = await adapter.snapshot();
+			expect(snapshot.snapshot.entries.map((entry) => entry.name)).toContain("Clicked correct");
+			expect(snapshot.snapshot.entries.map((entry) => entry.name)).not.toContain("WRONG");
+			await adapter.close();
+		},
+		30_000,
+	);
+
+	runChromiumTest(
+		"uses trusted CDP click and fill events when the page rejects DOM-generated input",
+		async () => {
+			const port = await getFreePort();
+			userDataDir = mkdtempSync(join(tmpdir(), "shuvgeist-trusted-input-"));
+			const html = `<!doctype html>
+				<html><head><title>Trusted input gate</title></head><body>
+					<button id="secure-button">Secure action</button>
+					<input id="secure-input" aria-label="Secure editor" value="">
+					<script>
+						const button = document.querySelector("#secure-button");
+						const input = document.querySelector("#secure-input");
+						button.addEventListener("click", (event) => {
+							button.textContent = event.isTrusted ? "Trusted click accepted" : "Untrusted click rejected";
+						});
+						input.addEventListener("input", (event) => {
+							if (!event.isTrusted) {
+								input.value = "";
+								input.setAttribute("aria-label", "Untrusted fill rejected");
+								return;
+							}
+							input.setAttribute("aria-label", "Trusted fill accepted: " + input.value);
+						});
+						button.click();
+						input.value = "DOM text";
+						input.dispatchEvent(new InputEvent("input", {
+							bubbles: true,
+							data: "DOM text",
+							inputType: "insertText"
+						}));
+					</script>
+				</body></html>`;
+			child = spawn(
+				chromiumPath,
+				[
+					"--headless=new",
+					"--disable-default-apps",
+					"--disable-dev-shm-usage",
+					"--disable-gpu",
+					"--no-first-run",
+					"--no-sandbox",
+					"--remote-debugging-address=127.0.0.1",
+					"--remote-debugging-port=" + port,
+					"--user-data-dir=" + userDataDir,
+					"data:text/html;charset=utf-8," + encodeURIComponent(html),
+				],
+				{ detached: true, stdio: "ignore" },
+			);
+			await waitForPageTarget(port);
+
+			const adapter = await connectDirectCdpHeadlessRuntime({ port, model: createModel() });
+			const initial = await adapter.snapshot();
+			expect(initial.snapshot.entries.map((entry) => entry.name)).toEqual(
+				expect.arrayContaining(["Untrusted click rejected", "Untrusted fill rejected"]),
+			);
+
+			const clickRef = (
+				await adapter.locateByRole({ role: "button", name: "Untrusted click rejected" })
+			).matches[0]?.refId;
+			expect(clickRef).toBeTruthy();
+			const clickResult = await adapter.clickRef({ refId: clickRef ?? "missing" });
+			expect(clickResult).toMatchObject({
+				ok: true,
+				execution: {
+					kind: "click",
+					methods: expect.arrayContaining(["Input.dispatchMouseEvent"]),
+				},
+			});
+			const afterClick = await adapter.snapshot({ query: "Trusted click accepted" });
+			expect(afterClick.snapshot.entries[0]?.name).toBe("Trusted click accepted");
+
+			const fillRef = (
+				await adapter.locateByRole({ role: "textbox", name: "Untrusted fill rejected" })
+			).matches[0]?.refId;
+			expect(fillRef).toBeTruthy();
+			const fillResult = await adapter.fillRef({ refId: fillRef ?? "missing", value: "CDP text" });
+			expect(fillResult).toMatchObject({
+				ok: true,
+				execution: {
+					kind: "fill",
+					methods: expect.arrayContaining(["Input.dispatchKeyEvent", "Input.insertText"]),
+					textLength: 8,
+				},
+			});
+			const afterFill = await adapter.snapshot({ query: "Trusted fill accepted" });
+			expect(afterFill.snapshot.entries.map((entry) => entry.name)).toContain(
+				"Trusted fill accepted: CDP text",
+			);
+
+			await adapter.close();
 		},
 		30_000,
 	);
@@ -247,6 +457,7 @@ describe("direct-CDP headless runtime", () => {
 				[
 					"--headless=new",
 					"--disable-default-apps",
+					"--disable-dev-shm-usage",
 					"--disable-gpu",
 					"--no-first-run",
 					"--no-sandbox",
@@ -255,7 +466,7 @@ describe("direct-CDP headless runtime", () => {
 					"--user-data-dir=" + userDataDir,
 					url,
 				],
-				{ stdio: ["ignore", "pipe", "pipe"] },
+				{ detached: true, stdio: "ignore" },
 			);
 			await waitForPageTarget(port);
 
@@ -284,7 +495,7 @@ describe("direct-CDP headless runtime", () => {
 				]),
 			);
 			expect(JSON.stringify(baseline.candidates)).not.toContain('"mark"');
-			adapter.close();
+			await adapter.close();
 		},
 		30_000,
 	);

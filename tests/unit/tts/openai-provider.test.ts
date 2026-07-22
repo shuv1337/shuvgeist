@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { synthesizeWithOpenAi } from "../../../src/tts/providers/openai.js";
+import { synthesizeWithOpenAi } from "@shuvgeist/extension/tts/providers/openai";
 
 describe("openai provider", () => {
 	it("sends the expected OpenAI speech payload", async () => {

@@ -1,0 +1,46 @@
+{
+	"name": "@shuvgeist/server",
+	"version": "2.0.0",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"typecheck": "tsc --noEmit -p tsconfig.json",
+		"test": "vitest run --config ../../vitest.config.ts --root ../.. tests/integration/bridge/server.test.ts tests/unit/bridge/cookie-access-port.test.ts tests/unit/bridge/electron-app-registry.test.ts tests/unit/bridge/electron-auto-attach.test.ts tests/unit/bridge/electron-config.test.ts tests/unit/bridge/electron-doctor.test.ts tests/unit/bridge/electron-process-discovery.test.ts tests/unit/bridge/electron-session-manager.test.ts tests/unit/bridge/electron-session-store.test.ts tests/unit/bridge/electron-source-inspector.test.ts tests/unit/bridge/electron-target-handler-registry.test.ts tests/unit/bridge/electron-window-executor.test.ts tests/unit/bridge/mcp/tool-adapter.test.ts tests/unit/bridge/node-config.test.ts tests/unit/bridge/page-snapshot-store.test.ts tests/unit/bridge/request-handler.test.ts tests/unit/bridge/session-registry.test.ts tests/unit/bridge/target-execution.test.ts tests/unit/bridge/task-registry.test.ts"
+	},
+	"exports": {
+		"./cookie-access-port": "./src/cookie-access-port.ts",
+		"./electron/app-registry": "./src/electron/app-registry.ts",
+		"./electron/auto-attach": "./src/electron/auto-attach.ts",
+		"./electron/config": "./src/electron/config.ts",
+		"./electron/doctor": "./src/electron/doctor.ts",
+		"./electron/process-discovery": "./src/electron/process-discovery.ts",
+		"./electron/session-manager": "./src/electron/session-manager.ts",
+		"./electron/session-store": "./src/electron/session-store.ts",
+		"./electron/skill-snapshot-store": "./src/electron/skill-snapshot-store.ts",
+		"./electron/source-inspector": "./src/electron/source-inspector.ts",
+		"./electron/target-handler-registry": "./src/electron/target-handler-registry.ts",
+		"./electron/types": "./src/electron/types.ts",
+		"./electron/window-executor": "./src/electron/window-executor.ts",
+		"./mcp/http-server": "./src/mcp/http-server.ts",
+		"./mcp/tool-adapter": "./src/mcp/tool-adapter.ts",
+		"./node-config": "./src/node-config.ts",
+		"./page-snapshot-store": "./src/page-snapshot-store.ts",
+		"./per-handle-write-lock": "./src/per-handle-write-lock.ts",
+		"./request-handler": "./src/request-handler.ts",
+		"./server": "./src/server.ts",
+		"./session-registry": "./src/session-registry.ts",
+		"./target-execution": "./src/target-execution.ts",
+		"./task-registry": "./src/task-registry.ts"
+	},
+	"dependencies": {
+		"@shuvgeist/driver": "2.0.0",
+		"@shuvgeist/protocol": "2.0.0",
+		"ws": "^8.18.0"
+	},
+	"devDependencies": {
+		"@types/ws": "^8.18.1"
+	},
+	"engines": {
+		"node": ">=22"
+	}
+}

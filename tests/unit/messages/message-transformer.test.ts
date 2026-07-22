@@ -1,5 +1,5 @@
-import { browserMessageTransformer } from "../../../src/messages/message-transformer.js";
-import type { NavigationMessage } from "../../../src/messages/NavigationMessage.js";
+import { browserMessageTransformer } from "@shuvgeist/extension/messages/message-transformer";
+import type { NavigationMessage } from "@shuvgeist/extension/messages/NavigationMessage";
 
 describe("browserMessageTransformer", () => {
 	it("serializes navigation snapshots into browser context text", async () => {
@@ -17,6 +17,13 @@ describe("browserMessageTransformer", () => {
 				generatedAt: 123,
 				totalCandidates: 2,
 				truncated: false,
+				omissions: {
+					total: 1,
+					budgetOmitted: 0,
+					queryFiltered: 1,
+					byCategory: { "role:button": 1 },
+					byRegion: { "navigation:settings": 1 },
+				},
 				entries: [
 					{
 						snapshotId: "e1",
@@ -43,6 +50,11 @@ describe("browserMessageTransformer", () => {
 		expect(message.role).toBe("user");
 		expect(message.content).toContain('<page-snapshot tab-id="7" frame-id="0"');
 		expect(message.content).toContain('returned="1"');
+		expect(message.content).toContain(
+			"candidates total=2, returned=1, omitted=1; budget-omitted=0, query-filtered=1",
+		);
+		expect(message.content).toContain("omitted categories: role:button=1");
+		expect(message.content).toContain("omitted regions: navigation:settings=1");
 		expect(message.content).toContain(
 			'ref=e1 stable=button-save role=button tag=button interactive=true bbox=10,20,80x30 name="Save"',
 		);

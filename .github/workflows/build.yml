@@ -33,25 +33,40 @@ jobs:
       - name: Install mini-lit deps
         run: cd ../mini-lit && npm install --ignore-scripts
 
-      - name: Clone pi-mono
-        run: |
-          git config --local --unset-all http.https://github.com/.extraheader || true
-          git clone --depth 1 https://github.com/shuv1337/pi-mono.git ../pi-mono
-
-      - name: Install pi-mono
-        run: cd ../pi-mono && npm install && npm run build
-
       - name: Install shuvgeist
         run: npm install
 
+      - name: Verify workspace boundaries
+        run: npm run check:boundaries
+
       - name: Build extension
         run: npm run build
+
+      - name: Build CLI and direct-CDP runtime
+        run: npm run build:cli
+
+      - name: Verify production bundle
+        run: |
+          node ./scripts/check-injected-artifact-test-surface.mjs
+          test -s dist-cli/direct-cdp-runtime.mjs
+          node --input-type=module -e "await import('./dist-cli/direct-cdp-runtime.mjs')"
 
       - name: Create zip
         run: |
           cd dist-chrome
           find . -name "*.map" -type f -delete
           zip -r ../shuvgeist.zip .
+
+      - name: Create installable CLI package
+        run: |
+          npm run package:cli
+          package_version="$(node -p "require('./static/manifest.chrome.json').version")"
+          mv "shuvgeist-${package_version}.tgz" shuvgeist-cli.tgz
+          tar -tzf shuvgeist-cli.tgz | grep -Fx 'package/dist-cli/direct-cdp-runtime.mjs'
+          install_dir="$(mktemp -d)"
+          npm install --ignore-scripts --prefix "$install_dir" ./shuvgeist-cli.tgz
+          "$install_dir/node_modules/.bin/shuvgeist" --version
+          (cd "$install_dir" && node --input-type=module -e "const runtime = await import('shuvgeist/direct-cdp-runtime'); if (typeof runtime.connectDirectCdpHeadlessRuntime !== 'function') throw new Error('direct-CDP runtime export missing')")
 
       - name: Extract version
         id: version
@@ -66,7 +81,7 @@ jobs:
             const re = new RegExp('## \\\\[' + version.replace(/\\./g, '\\\\.') + '\\\\][^\\\\n]*\\n(.*?)(?=\\n## \\\\[|$)', 's');
             const match = changelog.match(re);
             let notes = match ? match[1].trim() : '';
-            notes += '\n\n---\n\nDownload \`shuvgeist.zip\`, unzip, and load as unpacked extension in Chrome/Edge.\n\nSee [installation instructions](https://geist.shuv.ai/install.html) for details.';
+            notes += '\n\n---\n\nDownload \`shuvgeist.zip\`, unzip, and load as unpacked extension in Chrome/Edge. The dependency-free \`shuvgeist-cli.tgz\` artifact installs with \`npm install -g ./shuvgeist-cli.tgz\` and exports the no-extension direct-CDP runtime as \`shuvgeist/direct-cdp-runtime\`.\n\nSee [installation instructions](https://geist.shuv.ai/install.html) for details.';
             fs.writeFileSync('/tmp/release-notes.md', notes);
           "
         env:
@@ -74,7 +89,7 @@ jobs:
 
       - name: Create release
         run: |
-          gh release create ${{ github.ref_name }} shuvgeist.zip \
+          gh release create ${{ github.ref_name }} shuvgeist.zip shuvgeist-cli.tgz \
             --title "Shuvgeist ${{ steps.version.outputs.version }}" \
             --notes-file /tmp/release-notes.md \
             --latest

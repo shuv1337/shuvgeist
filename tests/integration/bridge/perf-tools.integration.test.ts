@@ -1,4 +1,4 @@
-import { PerformanceTools } from "../../../src/tools/performance-tools.js";
+import { PerformanceTools } from "@shuvgeist/extension/tools/performance-tools";
 
 type DebuggerListener = (
 	method: string,

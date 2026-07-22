@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { listElevenLabsVoices, synthesizeWithElevenLabs } from "../../../src/tts/providers/elevenlabs.js";
+import { listElevenLabsVoices, synthesizeWithElevenLabs } from "@shuvgeist/extension/tts/providers/elevenlabs";
 
 describe("elevenlabs provider", () => {
 	it("lists voices from the ElevenLabs API", async () => {

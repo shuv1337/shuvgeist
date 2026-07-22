@@ -1,4 +1,4 @@
-import { CostStore } from "../../../src/storage/stores/cost-store.js";
+import { CostStore } from "@shuvgeist/extension/storage/stores/cost-store";
 import { FakeStorageBackend } from "../../helpers/fake-storage-backend.js";
 import { restoreRealTime, withFixedDate } from "../../helpers/time.js";
 
@@ -58,5 +58,18 @@ describe("CostStore", () => {
 		store.setBackend(backend);
 		const range = await store.getCostsByDateRange(new Date("2026-03-21"), new Date("2026-03-22"));
 		expect(range.map((day) => day.date)).toEqual(["2026-03-22", "2026-03-21"]);
+	});
+
+	it("deduplicates a durable runtime event id atomically", async () => {
+		withFixedDate("2026-03-22T12:00:00.000Z");
+		const backend = new FakeStorageBackend();
+		const store = new CostStore();
+		store.setBackend(backend);
+
+		await store.recordCost("anthropic", "claude", 1.25, "session-1:message-4");
+		await store.recordCost("anthropic", "claude", 1.25, "session-1:message-4");
+		await store.recordCost("anthropic", "claude", 0.75, "session-1:message-5");
+
+		expect(await store.getTotalCost()).toBe(2);
 	});
 });

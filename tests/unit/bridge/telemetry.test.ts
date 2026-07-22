@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { BridgeTelemetry, formatTraceparent, parseTraceparent } from "../../../src/bridge/telemetry.js";
+import { BridgeTelemetry, formatTraceparent, parseTraceparent } from "@shuvgeist/protocol/telemetry";
 
 describe("bridge telemetry", () => {
 	const originalFetch = globalThis.fetch;

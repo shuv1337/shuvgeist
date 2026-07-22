@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setAppStorage } from "@shuv1337/pi-web-ui";
+import type * as KokoroHealthModule from "@shuvgeist/extension/tts/kokoro-health";
+import type * as TtsServiceModule from "@shuvgeist/extension/tts/service";
 
 const settingsStore = new Map<string, unknown>();
 const providerKeyStore = new Map<string, string>();
@@ -27,6 +29,22 @@ vi.mock("@shuv1337/pi-web-ui", async () => {
 	};
 });
 
+vi.mock("@shuvgeist/extension/tts/service", async () => {
+	const actual = await vi.importActual<typeof TtsServiceModule>("@shuvgeist/extension/tts/service");
+	return {
+		...actual,
+		listTtsVoices: vi.fn(async () => []),
+	};
+});
+
+vi.mock("@shuvgeist/extension/tts/kokoro-health", async () => {
+	const actual = await vi.importActual<typeof KokoroHealthModule>("@shuvgeist/extension/tts/kokoro-health");
+	return {
+		...actual,
+		probeKokoroHealth: vi.fn(async () => ({ status: "ok" as const })),
+	};
+});
+
 describe("TtsTab", () => {
 	beforeEach(() => {
 		document.body.innerHTML = "";
@@ -44,7 +62,7 @@ describe("TtsTab", () => {
 		providerKeyStore.set("openai", "sk-test");
 		settingsStore.set("tts.provider", "openai");
 		settingsStore.set("tts.voiceId", "alloy");
-		const { TtsTab } = await import("../../../src/dialogs/TtsTab.js");
+		const { TtsTab } = await import("@shuvgeist/extension/dialogs/TtsTab");
 		const tab = new TtsTab();
 		document.body.appendChild(tab);
 		await tab.updateComplete;
@@ -58,14 +76,14 @@ describe("TtsTab", () => {
 
 	it("renders Kokoro setup guidance with the upstream docs link", async () => {
 		settingsStore.set("tts.provider", "kokoro");
-		const { TtsTab } = await import("../../../src/dialogs/TtsTab.js");
+		const { TtsTab } = await import("@shuvgeist/extension/dialogs/TtsTab");
 		const tab = new TtsTab();
 		document.body.appendChild(tab);
 		await tab.updateComplete;
 		await new Promise((resolve) => setTimeout(resolve, 0));
 		await tab.updateComplete;
 
-		const link = tab.shadowRoot?.querySelector<HTMLAnchorElement>('a[href="https://github.com/remsky/Kokoro-FastAPI"]');
+		const link = tab.querySelector<HTMLAnchorElement>('a[href="https://github.com/remsky/Kokoro-FastAPI"]');
 		expect(link).toBeTruthy();
 		expect(tab.textContent).toContain("Enable word-level read-along");
 	});

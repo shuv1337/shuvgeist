@@ -1,11 +1,19 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import * as ts from "typescript";
+import { runtimeClientRouteKey, sameRuntimeTarget } from "@shuvgeist/extension/agent/runtime-identity";
+import { ArtifactHydrationQueue } from "@shuvgeist/extension/sidepanel/artifact-hydration-queue";
+import { detachRemotePresentation, selectRemoteDescriptor } from "@shuvgeist/extension/sidepanel/remote-session-policy";
+import type { AgentRuntimeConnectionDescriptor } from "@shuvgeist/extension/bridge/internal-messages";
 
-const sidepanelPath = join(process.cwd(), "src/sidepanel.ts");
-const runtimePath = join(process.cwd(), "src/agent/runtime.ts");
+const sidepanelPath = join(process.cwd(), "packages/extension/src/sidepanel.ts");
+const welcomePath = join(process.cwd(), "packages/extension/src/messages/WelcomeMessage.ts");
+const facadePath = join(process.cwd(), "packages/extension/src/agent/remote-agent-facade.ts");
+const remoteClientPath = join(process.cwd(), "packages/extension/src/agent/remote-session-client.ts");
 const sidepanelSourceText = readFileSync(sidepanelPath, "utf-8");
-const runtimeSourceText = readFileSync(runtimePath, "utf-8");
+const welcomeSourceText = readFileSync(welcomePath, "utf-8");
+const facadeSourceText = readFileSync(facadePath, "utf-8");
+const remoteClientSourceText = readFileSync(remoteClientPath, "utf-8");
 const sidepanelSourceFile = ts.createSourceFile(
 	sidepanelPath,
 	sidepanelSourceText,
@@ -13,214 +21,281 @@ const sidepanelSourceFile = ts.createSourceFile(
 	true,
 	ts.ScriptKind.TS,
 );
-const runtimeSourceFile = ts.createSourceFile(runtimePath, runtimeSourceText, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
 
 function requireNode<T>(node: T | undefined, label: string): T {
-	if (!node) throw new Error("Missing expected sidepanel agent wiring node: " + label);
+	if (!node) throw new Error(`Missing expected sidepanel wiring node: ${label}`);
 	return node;
 }
 
-function findDescendant<T extends ts.Node>(
-	node: ts.Node,
-	predicate: (candidate: ts.Node) => candidate is T,
-): T | undefined {
-	let match: T | undefined;
-	const visit = (child: ts.Node) => {
-		if (match) return;
-		if (predicate(child)) {
-			match = child;
-			return;
-		}
-		ts.forEachChild(child, visit);
-	};
-	ts.forEachChild(node, visit);
-	return match;
-}
-
-function propertyNameText(name: ts.PropertyName): string | undefined {
-	if (ts.isIdentifier(name) || ts.isStringLiteral(name) || ts.isNumericLiteral(name)) return name.text;
-	return undefined;
-}
-
-function propertyAssignment(object: ts.ObjectLiteralExpression, name: string): ts.PropertyAssignment | undefined {
-	return object.properties.find(
-		(property): property is ts.PropertyAssignment =>
-			ts.isPropertyAssignment(property) && propertyNameText(property.name) === name,
+function findFunction(name: string): ts.FunctionDeclaration {
+	return requireNode(
+		sidepanelSourceFile.statements.find(
+			(statement): statement is ts.FunctionDeclaration =>
+				ts.isFunctionDeclaration(statement) && statement.name?.text === name,
+		),
+		name,
 	);
 }
 
-function propertyInitializerText(sourceFile: ts.SourceFile, object: ts.ObjectLiteralExpression, name: string): string {
-	return requireNode(propertyAssignment(object, name), name).initializer.getText(sourceFile);
+function functionText(name: string): string {
+	return findFunction(name).getText(sidepanelSourceFile);
 }
 
-function findVariableDeclaration(scope: ts.Node, name: string): ts.VariableDeclaration | undefined {
-	return findDescendant(
-		scope,
-		(candidate): candidate is ts.VariableDeclaration =>
-			ts.isVariableDeclaration(candidate) && ts.isIdentifier(candidate.name) && candidate.name.text === name,
-	);
-}
-
-function findFunctionDeclaration(scope: ts.Node, name: string): ts.FunctionDeclaration | undefined {
-	return findDescendant(
-		scope,
-		(candidate): candidate is ts.FunctionDeclaration => ts.isFunctionDeclaration(candidate) && candidate.name?.text === name,
-	);
-}
-
-function unwrapExpression(expression: ts.Expression): ts.Expression {
-	let current = expression;
-	while (ts.isAsExpression(current) || ts.isParenthesizedExpression(current)) {
-		current = current.expression;
+function expectInOrder(source: string, snippets: readonly string[]): void {
+	let offset = -1;
+	for (const snippet of snippets) {
+		const next = source.indexOf(snippet, offset + 1);
+		expect(next, `Expected ${JSON.stringify(snippet)} after offset ${offset}`).toBeGreaterThan(offset);
+		offset = next;
 	}
-	return current;
 }
 
-function identifierName(sourceFile: ts.SourceFile, expression: ts.Expression): string {
-	const unwrapped = unwrapExpression(expression);
-	return ts.isIdentifier(unwrapped) ? unwrapped.text : unwrapped.getText(sourceFile);
-}
+describe("sidepanel remote Agent wiring", () => {
+	it("uses only the remote transport, client, and facade for ChatPanel", () => {
+		expect(sidepanelSourceText).toContain('import { ChromeRuntimeSessionTransport }');
+		expect(sidepanelSourceText).toContain('import { RemoteSessionClient }');
+		expect(sidepanelSourceText).toContain('import { asPiWebUiAgent, RemoteAgentFacade }');
+		expect(sidepanelSourceText.match(/asPiWebUiAgent\(/g)).toHaveLength(1);
+		expect(sidepanelSourceText).toContain("await chatPanel.setAgent(asPiWebUiAgent(binding.facade)");
+		expect(sidepanelSourceText).toContain("toolsFactory: () => []");
 
-function objectLiteralFromExpression(expression: ts.Expression | undefined, label: string): ts.ObjectLiteralExpression {
-	const unwrapped = unwrapExpression(requireNode(expression, label));
-	if (!ts.isObjectLiteralExpression(unwrapped)) throw new Error("Expected object literal for " + label);
-	return unwrapped;
-}
-
-describe("sidepanel createAgent wiring", () => {
-	const createAgentDeclaration = requireNode(findVariableDeclaration(sidepanelSourceFile, "createAgent"), "createAgent");
-	const createAgent = requireNode(createAgentDeclaration.initializer, "createAgent initializer");
-	if (!ts.isArrowFunction(createAgent)) throw new Error("Expected createAgent to be an arrow function");
-
-	it("keeps the current Agent runtime defaults and hook pass-throughs", () => {
-		const defaultStateFactory = requireNode(
-			findFunctionDeclaration(runtimeSourceFile, "createDefaultInitialState"),
-			"createDefaultInitialState",
-		);
-		const defaultStateReturn = requireNode(
-			findDescendant(
-				defaultStateFactory,
-				(candidate): candidate is ts.ReturnStatement => ts.isReturnStatement(candidate),
-			),
-			"default state return",
-		);
-		const defaultState = objectLiteralFromExpression(defaultStateReturn.expression, "default state expression");
-		expect(propertyInitializerText(runtimeSourceFile, defaultState, "systemPrompt")).toBe("options.systemPrompt");
-		expect(propertyInitializerText(runtimeSourceFile, defaultState, "model")).toBe("options.model");
-		expect(propertyInitializerText(runtimeSourceFile, defaultState, "thinkingLevel")).toBe(
-			"options.thinkingLevel ?? DEFAULT_AGENT_THINKING_LEVEL",
-		);
-		for (const propertyName of ["messages", "tools"]) {
-			const initializer = requireNode(propertyAssignment(defaultState, propertyName), propertyName).initializer;
-			if (!ts.isArrayLiteralExpression(initializer)) throw new Error("Expected " + propertyName + " to be an array");
-			expect(initializer.elements).toHaveLength(0);
+		for (const forbidden of [
+			"createAgentRuntime",
+			"createStreamFn",
+			"new Agent(",
+			"new NavigateTool(",
+			"new ReplTool(",
+			"new SkillTool(",
+			"bridge-session-command",
+			"bridge-repl-execute",
+			"bridge-screenshot",
+			"abort-repl",
+			"capturePageSnapshot(",
+		]) {
+			expect(sidepanelSourceText).not.toContain(forbidden);
 		}
-
-		const runtimeFactory = requireNode(findFunctionDeclaration(runtimeSourceFile, "createAgentRuntime"), "createAgentRuntime");
-		const agentNew = requireNode(
-			findDescendant(
-				runtimeFactory,
-				(candidate): candidate is ts.NewExpression =>
-					ts.isNewExpression(candidate) && candidate.expression.getText(runtimeSourceFile) === "Agent",
-			),
-			"new Agent",
-		);
-		const agentOptions = objectLiteralFromExpression(agentNew.arguments?.[0], "Agent options");
-		expect(propertyInitializerText(runtimeSourceFile, agentOptions, "initialState")).toBe("initialState");
-		expect(propertyInitializerText(runtimeSourceFile, agentOptions, "convertToLlm")).toBe("options.convertToLlm");
-		expect(propertyInitializerText(runtimeSourceFile, agentOptions, "toolExecution")).toBe(
-			'options.toolExecution ?? "sequential"',
-		);
-		expect(propertyInitializerText(runtimeSourceFile, agentOptions, "streamFn")).toBe("options.streamFn");
-		expect(propertyInitializerText(runtimeSourceFile, agentOptions, "getApiKey")).toBe("options.getApiKey");
-		for (const hook of ["transformContext", "beforeToolCall", "afterToolCall", "shouldStopAfterTurn"]) {
-			expect(propertyInitializerText(runtimeSourceFile, agentOptions, hook)).toContain("options." + hook);
-		}
-		expect(propertyInitializerText(runtimeSourceFile, agentOptions, "prepareNextTurn")).toBe("options.prepareNextTurn");
 	});
 
-	it("keeps the current sidepanel Agent factory wiring", () => {
-		const runtimeCall = requireNode(
-			findDescendant(
-				createAgent,
-				(candidate): candidate is ts.CallExpression =>
-					ts.isCallExpression(candidate) && candidate.expression.getText(sidepanelSourceFile) === "createAgentRuntime",
+	it("uses a stable window-scoped client and target with UUID request identities", () => {
+		const descriptor = functionText("buildConnectionDescriptor");
+		const binding = functionText("createRemoteBinding");
+		expect(sidepanelSourceText).toContain('const SIDEPANEL_AGENT_CLIENT_ID = "sidepanel"');
+		expect(functionText("sidepanelTarget")).toContain('tabRef: `window:${windowId}`');
+		expect(functionText("descriptorRegistryKey")).toContain(
+			"runtimeClientRouteKey(SIDEPANEL_AGENT_CLIENT_ID, windowId)",
+		);
+		expect(descriptor).toContain("clientId: SIDEPANEL_AGENT_CLIENT_ID");
+		expect(descriptor).toContain("windowId: currentWindowId");
+		expect(binding).toContain("createRequestId: () => crypto.randomUUID()");
+		expect(binding).toContain("createExecutionId: () => crypto.randomUUID()");
+		expect(runtimeClientRouteKey("sidepanel", 9)).toBe('["sidepanel",9]');
+		expect(
+			sameRuntimeTarget(
+				{ kind: "chrome-tab", tabRef: "window:9", frameId: 0 },
+				{ frameId: 0, tabRef: "window:9", kind: "chrome-tab" },
 			),
-			"createAgentRuntime call",
-		);
-		const runtimeOptions = objectLiteralFromExpression(runtimeCall.arguments[0], "createAgentRuntime options");
-		expect(propertyInitializerText(sidepanelSourceFile, runtimeOptions, "initialState")).toBe("normalizedInitialState");
-		expect(propertyInitializerText(sidepanelSourceFile, runtimeOptions, "systemPrompt")).toBe("SYSTEM_PROMPT");
-		expect(propertyInitializerText(sidepanelSourceFile, runtimeOptions, "model")).toBe("runtimeModel");
-		expect(propertyInitializerText(sidepanelSourceFile, runtimeOptions, "thinkingLevel")).toBe(
-			"options.thinkingLevel ?? DEFAULT_AGENT_THINKING_LEVEL",
-		);
-		expect(propertyInitializerText(sidepanelSourceFile, runtimeOptions, "convertToLlm")).toBe("browserMessageTransformer");
-		expect(propertyInitializerText(sidepanelSourceFile, runtimeOptions, "toolExecution")).toBe('"sequential"');
-		expect(propertyInitializerText(sidepanelSourceFile, runtimeOptions, "streamFn")).toContain("createStreamFn");
-		expect(propertyInitializerText(sidepanelSourceFile, runtimeOptions, "getApiKey")).toContain(
-			"getApiKeyForProvider(provider)",
-		);
-		for (const hook of ["transformContext", "beforeToolCall", "shouldStopAfterTurn", "prepareNextTurn"]) {
-			expect(propertyInitializerText(sidepanelSourceFile, runtimeOptions, hook)).toBe("options." + hook);
-		}
-		// afterToolCall is intentionally wrapped: invalidate sidepanel refs on real tab close, then call through.
-		const afterToolCallText = propertyInitializerText(sidepanelSourceFile, runtimeOptions, "afterToolCall");
-		expect(afterToolCallText).toContain("options.afterToolCall");
-		expect(afterToolCallText).toContain("sidepanelRefRegistry.onNavigated");
-		expect(afterToolCallText).toContain("closedTabIds");
-		expect(afterToolCallText).toContain("dryRun");
-		expect(afterToolCallText).toContain('toolCall?.name === "navigate"');
-		expect(propertyInitializerText(sidepanelSourceFile, runtimeOptions, "plannerValidator")).toBe(
-			"plannerValidatorEnabled ? {} : false",
-		);
-		expect(createAgent.getText(sidepanelSourceFile)).toContain('storage.settings.get<boolean>("agent.plannerValidator.enabled")');
+		).toBe(true);
 	});
 
-	it("keeps the current sidepanel tools list and debugger-mode conditional", () => {
-		const toolsFactoryProperty = requireNode(
-			findDescendant(
-				createAgent,
-				(candidate): candidate is ts.PropertyAssignment =>
-					ts.isPropertyAssignment(candidate) && propertyNameText(candidate.name) === "toolsFactory",
-			),
-			"toolsFactory",
-		);
-		const toolsFactory = unwrapExpression(toolsFactoryProperty.initializer);
-		if (!ts.isArrowFunction(toolsFactory)) throw new Error("Expected toolsFactory arrow function");
-
-		const toolsDeclaration = requireNode(findVariableDeclaration(toolsFactory, "tools"), "tools declaration");
-		const toolsInitializer = requireNode(toolsDeclaration.initializer, "tools initializer");
-		if (!ts.isArrayLiteralExpression(toolsInitializer)) throw new Error("Expected tools array");
-		expect(toolsInitializer.elements.map((element) => identifierName(sidepanelSourceFile, element))).toEqual([
-			"navigateTool",
-			"selectElementTool",
-			"replTool",
-			"skillTool",
-			"extractDocumentTool",
-			"pageSnapshotTool",
-			"extractImageTool",
+	it("persists and confirms authoritative SIDE_PANEL capability before opening either port", () => {
+		const bootstrap = functionText("bootstrapSidepanelDocumentIdentity");
+		const init = functionText("initApp");
+		expectInOrder(init, [
+			"currentDocumentNonce = bootstrapSidepanelDocumentIdentity()",
+			"const storedCapability = readStoredSidepanelCapability()",
+			"const storedProof: SidepanelCapabilityMaterial | undefined = storedCapability",
+			"pendingIdentity = await prepareSidepanelWindowIdentity(",
+			'storeSidepanelCapability("pending", pendingMaterial)',
+			"const identity = await confirmSidepanelWindowIdentity(",
+			'storeSidepanelCapability("active", {',
+			"currentWindowId = identity.windowId",
+			"port.initialize(",
 		]);
+		expect(bootstrap).toContain("window.history.replaceState(window.history.state, \"\", plan.url)");
+		expect(bootstrap).toContain("return plan.nonce");
+		expect(bootstrap).not.toContain("location.replace");
+		expect(bootstrap).not.toContain("sessionStorage");
+		expect(init).toContain("chrome.runtime.sendMessage(message)");
+		expect(init).toContain("continuationToken: storedCapability.continuationToken");
+		expect(init).toContain("transactionId: storedCapability.transactionId");
+		expect(init).toContain("leaseId: storedCapability.leaseId");
+		expect(init).toContain("currentContinuationToken");
+		expect(init).toContain("currentTransactionId");
+		expect(init).toContain("currentLeaseId");
+		expect(init).not.toContain("windowId: identity.windowId");
+		expect(init).not.toContain("getLastFocused");
+		expect(init).not.toContain("windows.getCurrent");
+		expect(functionText("createRemoteBinding")).toContain("documentNonce: currentDocumentNonce");
+		expect(functionText("createRemoteBinding")).toContain("continuationToken: currentContinuationToken");
+		expect(functionText("createRemoteBinding")).toContain("transactionId: currentTransactionId");
+		expect(functionText("createRemoteBinding")).toContain("leaseId: currentLeaseId");
+	});
 
-		const debuggerIf = requireNode(
-			findDescendant(
-				toolsFactory,
-				(candidate): candidate is ts.IfStatement =>
-					ts.isIfStatement(candidate) && candidate.expression.getText(sidepanelSourceFile) === "debuggerModeEnabled",
-			),
-			"debugger conditional",
+	it("subscribes before connect and waits for the first snapshot before mounting ChatPanel", () => {
+		const connect = functionText("connectRemoteSession");
+		expectInOrder(connect, [
+			"agentUnsubscribe = binding.facade.subscribe(",
+			"stateUnsubscribe = binding.facade.subscribeState(",
+			"await binding.client.connect()",
+			"await chatPanel.setAgent(asPiWebUiAgent(binding.facade)",
+			"chatPanel.agentInterface.requestUpdate()",
+		]);
+	});
+
+	it("reuses the exact accepted descriptor and hydrates artifacts serially", () => {
+		const connect = functionText("connectRemoteSession");
+		const hydrate = functionText("queueArtifactHydration");
+		expect(connect).toContain("const selection = selectRemoteDescriptor(desired, accepted)");
+		expect(hydrate).toContain("artifactHydrationQueue.enqueue(");
+		expect(hydrate).toContain('facade.client.executeArtifacts({ action: "list" })');
+		expect(hydrate).toContain("chatPanel.artifactsPanel.reconstructFromMessages");
+	});
+
+	it("serializes hydration and retries an unchanged signature after failure", async () => {
+		const queue = new ArtifactHydrationQueue();
+		const order: string[] = [];
+		let releaseFirst = () => {};
+		const firstGate = new Promise<void>((resolve) => {
+			releaseFirst = resolve;
+		});
+		let markFirstStarted = () => {};
+		const firstStarted = new Promise<void>((resolve) => {
+			markFirstStarted = resolve;
+		});
+		const first = queue.enqueue("first", async () => {
+			order.push("first:start");
+			markFirstStarted();
+			await firstGate;
+			order.push("first:end");
+		});
+		const second = queue.enqueue("second", async () => {
+			order.push("second:start");
+			order.push("second:end");
+		});
+		await firstStarted;
+		expect(order).toEqual(["first:start"]);
+		releaseFirst();
+		await Promise.all([first, second]);
+		expect(order).toEqual(["first:start", "first:end", "second:start", "second:end"]);
+
+		let attempts = 0;
+		const hydrate = async () => {
+			attempts++;
+			if (attempts === 1) throw new Error("transient");
+		};
+		await expect(queue.enqueue("retryable", hydrate)).rejects.toThrow("transient");
+		await expect(queue.enqueue("retryable", hydrate)).resolves.toBeUndefined();
+		expect(attempts).toBe(2);
+	});
+
+	it("detaches presentation on panel close but releases sessions only when switching", () => {
+		const dispose = functionText("disposeRemotePresentation");
+		const release = functionText("releaseCurrentSessionForSwitch");
+		expect(sidepanelSourceText).toContain(
+			'window.addEventListener("pagehide", disposeRemotePresentation)',
 		);
-		expect(findVariableDeclaration(debuggerIf, "debuggerTool")).toBeDefined();
-		const pushCall = requireNode(
-			findDescendant(
-				debuggerIf,
-				(candidate): candidate is ts.CallExpression =>
-					ts.isCallExpression(candidate) && candidate.expression.getText(sidepanelSourceFile) === "tools.push",
-			),
-			"debugger tool push",
+		expect(sidepanelSourceText).toContain(
+			'window.addEventListener("beforeunload", disposeRemotePresentation)',
 		);
-		expect(identifierName(sidepanelSourceFile, requireNode(pushCall.arguments[0], "debugger push arg"))).toBe(
-			"debuggerTool",
+		expect(dispose).toContain("detachRemotePresentation(resources)");
+		expect(dispose).not.toContain("release(");
+		expect(dispose).not.toContain("abort(");
+		expectInOrder(release, [
+			'await remoteClient.release({ force: true, reason: "session-switch" })',
+			"disposeRemotePresentation()",
+		]);
+	});
+
+	it("preserves exact reopen descriptors, isolates windows, and makes panel detach presentation-only", () => {
+		const desired: AgentRuntimeConnectionDescriptor = {
+			clientId: "sidepanel",
+			windowId: 9,
+			sessionId: "session-a",
+			target: { kind: "chrome-tab", tabRef: "window:9", frameId: 0 },
+			mode: "load",
+			systemPrompt: "desired",
+		};
+		const accepted: AgentRuntimeConnectionDescriptor = {
+			...desired,
+			target: { frameId: 0, tabRef: "window:9", kind: "chrome-tab" },
+			mode: "create",
+			systemPrompt: "accepted",
+		};
+		expect(selectRemoteDescriptor(desired, accepted)).toEqual({ descriptor: accepted });
+
+		const otherWindow: AgentRuntimeConnectionDescriptor = {
+			...accepted,
+			windowId: 10,
+			target: { kind: "chrome-tab", tabRef: "window:10", frameId: 0 },
+		};
+		expect(selectRemoteDescriptor(desired, otherWindow)).toEqual({
+			descriptor: desired,
+			staleAccepted: otherWindow,
+		});
+		expect(runtimeClientRouteKey("sidepanel", 9)).not.toBe(runtimeClientRouteKey("sidepanel", 10));
+
+		const calls: string[] = [];
+		const facade = {
+			dispose: () => calls.push("facade:dispose"),
+			abort: () => calls.push("facade:abort"),
+			release: () => calls.push("facade:release"),
+		};
+		detachRemotePresentation({
+			agentUnsubscribe: () => calls.push("agent:unsubscribe"),
+			stateUnsubscribe: () => calls.push("state:unsubscribe"),
+			facade,
+			transport: { dispose: () => calls.push("transport:dispose") },
+		});
+		expect(calls).toEqual([
+			"agent:unsubscribe",
+			"state:unsubscribe",
+			"facade:dispose",
+			"transport:dispose",
+		]);
+	});
+
+	it("acquires the lock and opens the authenticated runtime before publishing the fresh session URL", () => {
+		expectInOrder(functionText("startFreshRemoteSession"), [
+			"const sessionId = crypto.randomUUID()",
+			"await acquireSessionLock(sessionId)",
+			"currentSessionId = sessionId",
+			"await connectRemoteSession(",
+			"updateUrl(sessionId)",
+		]);
+	});
+
+	it("keeps navigation out of the view and routes element inspection through the remote runtime", () => {
+		const connect = functionText("connectRemoteSession");
+		const inspect = functionText("onInspectElementClick");
+		expect(connect).toContain("await binding.facade.setModel(");
+		expect(inspect).toContain('client.executePageOperation("select-element"');
+		expect(sidepanelSourceText).not.toContain("pickElement(");
+		expect(sidepanelSourceText).not.toContain("captureNavigationSnapshot");
+		expect(sidepanelSourceText).not.toContain("onBeforeSend:");
+		expect(sidepanelSourceText).not.toContain("chrome.tabs.onUpdated.addListener");
+		expect(sidepanelSourceText).not.toContain("chrome.tabs.onActivated.addListener");
+		expect(sidepanelSourceText).not.toMatch(/\.state\.(?:messages|model|thinkingLevel|tools)\s*=/);
+		expect(facadeSourceText).toContain("return this.client.state as unknown as AgentState");
+		expect(remoteClientSourceText).toMatch(
+			/set thinkingLevel\(value: RuntimeThinkingLevel\)[\s\S]*?this\.setThinkingLevel\(value\)/,
+		);
+	});
+});
+
+describe("welcome message remote transcript behavior", () => {
+	it("submits a tutorial once without mutating an Agent state clone", () => {
+		expect(welcomeSourceText.match(/agentInterface\.sendMessage\(prompt\)/g)).toHaveLength(1);
+		expect(welcomeSourceText).not.toMatch(/\.state\.messages/);
+		expect(welcomeSourceText).not.toContain("this.message");
+	});
+
+	it("hides from the authoritative transcript after either conversation role arrives", () => {
+		expect(welcomeSourceText).toContain("getMessages: () => readonly AgentMessage[]");
+		expect(welcomeSourceText).toContain(
+			'getMessages().some((m) => m.role === "user" || m.role === "assistant")',
+		);
+		expect(sidepanelSourceText).toContain(
+			"registerWelcomeRenderer(() => binding.facade.state.messages, chatPanel.agentInterface)",
 		);
 	});
 });

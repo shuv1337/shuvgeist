@@ -1,4 +1,4 @@
-import { SkillsStore, type Skill } from "../../../src/storage/stores/skills-store.js";
+import { SkillsStore, type Skill } from "@shuvgeist/extension/storage/stores/skills-store";
 import { FakeStorageBackend } from "../../helpers/fake-storage-backend.js";
 
 function makeSkill(name: string, domainPatterns: string[]): Skill {

@@ -30,7 +30,7 @@ Without a CORS proxy, these requests would fail in the browser environment.
        │                                                  │
        v                                                  v
 ┌──────────────────┐                           ┌──────────────────┐
-│ ProviderTransport │                          │ extract_document │
+│ provider-runtime  │                          │ extract_document │
 │ (LLM requests)    │                          │ (fetch docs)     │
 └──────┬───────────┘                           └──────┬───────────┘
        │                                               │
@@ -62,28 +62,32 @@ Without a CORS proxy, these requests would fail in the browser environment.
 
 #### Shuvgeist (Extension)
 
-- **`src/sidepanel.ts`**:
-  - Lines 236-237: Loads proxy settings from storage
-  - Lines 364-368: Configures `extract_document` tool with proxy URL if enabled
-  - Lines 776-785: Initializes default proxy settings on first run
+- **`packages/extension/src/agent/provider-runtime.ts`**:
+  - Loads proxy settings for each LLM stream and credential-resolution request
+  - Supplies the configured URL to pi-web-ui's `createStreamFn()`
 
-- **`src/tutorials.ts`**:
-  - Line 90: Explains CORS proxy to users in welcome tutorial
+- **`packages/extension/src/offscreen.ts`**:
+  - Configures the `extract_document` tool with the proxy URL when enabled
+
+- **`packages/extension/src/sidepanel.ts`**:
+  - Loads proxy settings while resolving provider credentials
+  - Explicitly disables the legacy proxy toggle during current startup
+
+- **`packages/extension/src/tutorials.ts`**:
+  - Explains CORS proxy behavior to users in the welcome tutorial
+
+- **`packages/extension/src/storage/persistent-settings.ts`**:
+  - Owns typed access to the retained `proxy.enabled` and `proxy.url` keys
 
 #### pi-web-ui Package
 
-- **`src/utils/proxy-utils.ts`**:
+- **`packages/web-ui/src/utils/proxy-utils.ts`**:
   - Centralized proxy decision logic
   - `shouldUseProxyForProvider(provider, apiKey)`: Returns true for Z-AI (always) and Anthropic with OAuth tokens (`sk-ant-oat-*`), false for others
   - `applyProxyIfNeeded(model, apiKey, proxyUrl)`: Applies proxy to model's baseUrl only if provider/key combination requires it
   - `isCorsError(error)`: Detects CORS errors by checking for `TypeError: Failed to fetch`, `NetworkError`, or messages containing "cors"/"cross-origin"
 
-- **`src/agent/transports/ProviderTransport.ts`**:
-  - Loads proxy settings from storage (`proxy.enabled`, `proxy.url`)
-  - Uses `applyProxyIfNeeded()` to selectively apply proxy based on provider and API key
-  - **Behavior**: Only Z-AI and Anthropic OAuth tokens use proxy; OpenAI, Google, Groq, OpenRouter, Cerebras, xAI, Ollama, LM Studio connect directly
-
-- **`src/tools/extract-document.ts`**:
+- **`packages/web-ui/src/tools/extract-document.ts`**:
   - Tool has optional `corsProxyUrl` property set by Shuvgeist if proxy is enabled
   - Implements try-first-fallback pattern:
     1. Attempts direct fetch to document URL
@@ -92,42 +96,24 @@ Without a CORS proxy, these requests would fail in the browser environment.
     4. If non-CORS error, re-throws immediately
   - **Behavior**: Direct fetch preferred; proxy only used when CORS error occurs
 
-- **`src/components/ProviderKeyInput.ts`**:
+- **`packages/web-ui/src/components/ProviderKeyInput.ts`**:
   - Uses `applyProxyIfNeeded()` when testing API keys
   - **Behavior**: Only Z-AI and Anthropic OAuth tokens test through proxy; others test directly
 
-- **`src/dialogs/SettingsDialog.ts`** (ProxyTab):
-  - Lines 50-119: UI for proxy configuration
-  - Toggle switch to enable/disable proxy
-  - Text input for proxy URL
-  - Description explains it's required for Z-AI and Anthropic with OAuth token
-  - Format hint shows proxy must accept `<proxy-url>/?url=<target-url>`
-  - Saves to `storage.settings` with keys `proxy.enabled` and `proxy.url`
-
-- **`src/agent/transports/proxy-types.ts`**:
-  - Defines event types for `AppTransport` (alternative transport in pi-web-ui package)
-  - Not used by Shuvgeist - only `ProviderTransport` is used
-
-- **`src/agent/transports/AppTransport.ts`**:
-  - Alternative transport implementation in pi-web-ui package
-  - Uses `genai.mariozechner.at` backend with OAuth tokens
-  - **Not used by Shuvgeist** - Shuvgeist only uses `ProviderTransport`
+- **`packages/web-ui/src/dialogs/SettingsDialog.ts`**:
+  - Provides the reusable proxy settings tab backed by the web-ui settings store
 
 ### Default Configuration
 
-**Location**: `src/sidepanel.ts`
+**Location**: `packages/extension/src/sidepanel.ts`
 
 ```typescript
-const proxyEnabled = await storage.settings.get<boolean>("proxy.enabled");
-if (proxyEnabled === null) {
-  await storage.settings.set("proxy.enabled", false);
-  await storage.settings.set("proxy.url", "http://localhost:3001");
-}
+await setProxyEnabled(false);
 ```
 
 **Defaults**:
-- Proxy is **disabled by default**
-- Default URL: `http://localhost:3001` (local development proxy)
+- Proxy is **disabled by default and explicitly disabled at current startup**
+- A previously stored URL is retained but has no effect while disabled
 - Run your own proxy using the `proxy/` directory in this repo
 
 ### Storage Schema
@@ -137,7 +123,7 @@ Settings stored in IndexedDB under `shuvgeist-storage` database:
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `proxy.enabled` | `boolean` | `false` | Whether CORS proxy is enabled |
-| `proxy.url` | `string` | `"http://localhost:3001"` | CORS proxy server URL |
+| `proxy.url` | `string` | absent | CORS proxy server URL |
 
 ## Provider-Specific Proxy Logic
 
@@ -148,6 +134,7 @@ The proxy system uses hardcoded provider rules to determine when proxy is necess
 1. **Z-AI** - Always uses proxy (CORS blocked)
 2. **Anthropic with OAuth tokens** - API keys starting with `sk-ant-oat-` use proxy
    - Regular Anthropic API keys (`sk-ant-api-*`) do NOT use proxy
+3. **OpenAI Codex subscription login** - The `openai-codex` provider uses the ChatGPT backend and requires the proxy path
 
 ### Providers That Work Without Proxy
 
@@ -243,16 +230,16 @@ Users can:
 ## Related Files
 
 ### Shuvgeist Extension
-- `src/sidepanel.ts` - Proxy initialization and tool configuration
-- `src/tutorials.ts` - User-facing proxy explanation
+- `packages/extension/src/agent/provider-runtime.ts` - LLM stream and credential proxy integration
+- `packages/extension/src/offscreen.ts` - Document extraction tool configuration
+- `packages/extension/src/sidepanel.ts` - Credential resolution and current startup policy
+- `packages/extension/src/tutorials.ts` - User-facing proxy explanation
+- `packages/extension/src/storage/persistent-settings.ts` - Typed proxy settings access
 - `docs/settings.md` - Proxy settings documentation
 
 ### pi-web-ui Package
-- `src/utils/proxy-utils.ts` - Centralized proxy decision logic
-- `src/agent/transports/ProviderTransport.ts` - LLM request proxy logic (USED by Shuvgeist)
-- `src/agent/transports/AppTransport.ts` - Alternative transport (NOT used by Shuvgeist)
-- `src/agent/transports/proxy-types.ts` - Event types for AppTransport (NOT used by Shuvgeist)
-- `src/tools/extract-document.ts` - Document extraction with try-first-fallback proxy
-- `src/components/ProviderKeyInput.ts` - API key testing with selective proxy
-- `src/dialogs/SettingsDialog.ts` - Proxy settings UI
-- `src/storage/stores/settings-store.ts` - Settings persistence
+- `packages/web-ui/src/utils/proxy-utils.ts` - Centralized proxy decision and stream logic
+- `packages/web-ui/src/tools/extract-document.ts` - Document extraction with try-first-fallback proxy
+- `packages/web-ui/src/components/ProviderKeyInput.ts` - API key testing with selective proxy
+- `packages/web-ui/src/dialogs/SettingsDialog.ts` - Proxy settings UI
+- `packages/web-ui/src/storage/stores/settings-store.ts` - Settings persistence

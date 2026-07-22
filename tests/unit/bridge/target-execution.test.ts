@@ -1,10 +1,10 @@
-import { ErrorCodes } from "../../../src/bridge/protocol.js";
+import { ErrorCodes } from "@shuvgeist/protocol/protocol";
 import {
 	getBridgeTargetSupport,
 	missingExtensionTargetError,
 	resolveBridgeExecution,
 	unsupportedTargetError,
-} from "../../../src/bridge/target-execution.js";
+} from "@shuvgeist/server/target-execution";
 
 describe("bridge target execution", () => {
 	it("routes server-local methods before target dispatch", () => {
@@ -69,6 +69,18 @@ describe("bridge target execution", () => {
 		expect(missingExtensionTargetError()).toEqual({
 			code: ErrorCodes.NO_EXTENSION_TARGET,
 			message: "No active extension target connected",
+		});
+	});
+
+	it("rejects catalog commands without an Electron adapter before dispatch", () => {
+		const target = { kind: "electron-window" as const, sessionId: "e1", windowRef: "w1" };
+		expect(getBridgeTargetSupport("perf_trace_start")).toMatchObject({
+			chromeExtension: true,
+			electronWindow: false,
+		});
+		expect(resolveBridgeExecution("perf_trace_start", target)).toMatchObject({
+			adapter: "unsupported-target",
+			error: { code: ErrorCodes.INVALID_TARGET },
 		});
 	});
 });

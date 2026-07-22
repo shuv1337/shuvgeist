@@ -2,7 +2,7 @@ import {
 	WORKFLOW_MAX_LOOP_ITERATIONS,
 	formatWorkflowValidationErrors,
 	validateWorkflowDefinition,
-} from "../../../src/bridge/workflow-schema.js";
+} from "@shuvgeist/protocol/workflow-schema";
 
 describe("workflow schema", () => {
 	it("accepts valid command, repeat, and each workflows", () => {

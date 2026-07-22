@@ -1,11 +1,17 @@
 import { expect, test } from "@playwright/test";
-import { BridgeServer } from "../../../src/bridge/server.js";
-import { launchExtensionContext, openExtensionPage } from "../fixtures/extension.js";
+import { createServer as createTcpServer } from "node:net";
+import type { BridgeServerStatus } from "@shuvgeist/protocol/protocol";
+import { BridgeServer } from "@shuvgeist/server/server";
+import {
+	enableExtensionUserScripts,
+	launchExtensionContext,
+	openRealExtensionSidePanel,
+	waitForExtensionSidePanelRuntime,
+} from "../fixtures/extension.js";
 
 async function getAvailablePort(): Promise<number> {
-	const net = await import("node:net");
 	return new Promise((resolve, reject) => {
-		const server = net.createServer();
+		const server = createTcpServer();
 		server.listen(0, "127.0.0.1", () => {
 			const address = server.address();
 			if (!address || typeof address === "string") {
@@ -21,36 +27,59 @@ async function getAvailablePort(): Promise<number> {
 	});
 }
 
-async function openBridgeSettings(page: import("@playwright/test").Page): Promise<void> {
-	const continueAnyway = page.getByRole("button", { name: "Continue Anyway" });
-	if (await continueAnyway.isVisible().catch(() => false)) {
-		await continueAnyway.click();
-	}
-	await page.waitForTimeout(1500);
-	const setupProvider = page.getByRole("button", { name: "Bring API key" });
-	if (await setupProvider.isVisible().catch(() => false)) {
-		await setupProvider.click();
-	} else {
-		await expect(page.locator("button[title='Settings']")).toBeVisible({ timeout: 15_000 });
-		await page.click("button[title='Settings']");
-	}
-	await page.getByRole("button", { name: "Bridge" }).click();
-}
-
-test.describe("bridge ui smoke", () => {
-	test("settings renders bridge tab content", async () => {
+test.describe("bridge runtime smoke", () => {
+	test("real sidepanel exposes connected bridge runtime", async () => {
 		const port = await getAvailablePort();
 		const bridge = new BridgeServer({ host: "127.0.0.1", port, token: "playwright-token" });
 		await bridge.start();
 
-		const { context, extensionId } = await launchExtensionContext();
-		const page = await openExtensionPage(context, extensionId, "sidepanel.html?new=true");
-		await openBridgeSettings(page);
-		await expect(page.getByRole("heading", { name: "CLI Bridge" })).toBeVisible();
-		await expect(page.getByRole("checkbox", { name: "Block bridge connections" })).toBeVisible();
-		await expect(page.locator("bridge-tab").getByText("Connected")).toBeVisible();
-
-		await context.close();
-		await bridge.stop();
+		const extension = await launchExtensionContext();
+		try {
+			const worker = await enableExtensionUserScripts(extension.context, extension.extensionId);
+			await worker.evaluate(
+				async ({ bridgePort, token }: { bridgePort: number; token: string }) => {
+					await chrome.storage.local.set({
+						bridge_settings: {
+							enabled: true,
+							url: `ws://127.0.0.1:${bridgePort}/ws`,
+							token,
+							sensitiveAccessEnabled: false,
+						},
+					});
+				},
+				{ bridgePort: port, token: "playwright-token" },
+			);
+			const opened = await openRealExtensionSidePanel(extension.context, extension.extensionId, worker);
+			expect(opened.descriptor).toMatchObject({
+				clientId: "sidepanel",
+				windowId: opened.windowId,
+				target: { kind: "chrome-tab", tabRef: `window:${opened.windowId}` },
+			});
+			await waitForExtensionSidePanelRuntime(
+				extension.context,
+				opened.panel,
+				opened.descriptor.sessionId,
+			);
+			await expect
+				.poll(() =>
+					opened.control.page.evaluate(async () => {
+						const values = await chrome.storage.session.get("bridge_state");
+						const state = values.bridge_state;
+						return state && typeof state === "object" && !Array.isArray(state)
+							? (state as { state?: unknown }).state
+							: undefined;
+					}),
+				)
+				.toBe("connected");
+			const statusResponse = await fetch(`http://127.0.0.1:${port}/status`);
+			expect(statusResponse.ok).toBe(true);
+			const status = (await statusResponse.json()) as BridgeServerStatus;
+			expect(status.extension.connected).toBe(true);
+			if (!status.extension.connected) throw new Error(JSON.stringify(status, null, 2));
+			expect(status.extension.windowId).toBe(opened.windowId);
+		} finally {
+			await extension.close();
+			await bridge.stop();
+		}
 	});
 });

@@ -1,4 +1,4 @@
-import { createSettingsTabs } from "../../../src/dialogs/settings-tabs.js";
+import { createSettingsTabs } from "@shuvgeist/extension/dialogs/settings-tabs";
 
 describe("settings tab ordering", () => {
 	it("opens provider setup on providers by default", () => {

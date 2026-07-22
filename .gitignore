@@ -3,6 +3,8 @@ proxy/node_modules/
 proxy/dist/
 dist-chrome/
 dist-cli/
+dist-cli-package/
+*.tgz
 site/dist/
 site/data/
 *.log
@@ -14,5 +16,6 @@ sitegeist-latest.zip
 version.json
 .pi/suggester/
 PLAN-*.md
+!docs/plans/**/PLAN-*.md
 HANDOFF.md
 .agents/

@@ -1,8 +1,8 @@
 // @vitest-environment happy-dom
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createRectHighlightRenderer } from "../../../src/tts/highlight-renderer.js";
-import type { TokenMapEntry } from "../../../src/tts/reading-surface.js";
+import { createRectHighlightRenderer } from "@shuvgeist/extension/tts/highlight-renderer";
+import type { TokenMapEntry } from "@shuvgeist/extension/tts/reading-surface";
 
 describe("highlight-renderer", () => {
 	beforeEach(() => {

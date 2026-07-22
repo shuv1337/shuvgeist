@@ -1,12 +1,12 @@
-import type { DebuggerManager } from "../../../src/tools/helpers/debugger-manager.js";
+import type { DebuggerManager } from "@shuvgeist/extension/tools/helpers/debugger-manager";
 
 const resolveTabTarget = vi.fn();
 
-vi.mock("../../../src/tools/helpers/browser-target.js", () => ({
+vi.mock("@shuvgeist/extension/tools/helpers/browser-target", () => ({
 	resolveTabTarget,
 }));
 
-const { NativeInputEventsRuntimeProvider } = await import("../../../src/tools/NativeInputEventsRuntimeProvider.js");
+const { NativeInputEventsRuntimeProvider } = await import("@shuvgeist/extension/tools/NativeInputEventsRuntimeProvider");
 
 describe("NativeInputEventsRuntimeProvider typed input methods", () => {
 	beforeEach(() => {

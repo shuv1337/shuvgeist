@@ -1,4 +1,4 @@
-import { createCommandPlan, parseTimeout, resolveBridgeUrl, resolveConfig } from "../../../src/bridge/cli-core.js";
+import { createCommandPlan, parseTimeout, resolveBridgeUrl, resolveConfig } from "shuvgeist/cli-core";
 
 describe("cli-core coverage cases", () => {
 	it("prefers env host/port when url is not set", () => {

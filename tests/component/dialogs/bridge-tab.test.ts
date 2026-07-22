@@ -18,12 +18,12 @@ Object.defineProperty(globalThis, "localStorage", {
 	configurable: true,
 });
 
-import { BridgeTab } from "../../../src/dialogs/BridgeTab.js";
+import { BridgeTab } from "@shuvgeist/extension/dialogs/BridgeTab";
 import {
 	BRIDGE_OTEL_STATE_KEY,
 	BRIDGE_SETTINGS_KEY,
 	BRIDGE_STATE_KEY,
-} from "../../../src/bridge/internal-messages.js";
+} from "@shuvgeist/extension/bridge/internal-messages";
 
 declare global {
 	var chrome: typeof chrome;
@@ -43,6 +43,12 @@ function createStorageArea(initialState: Record<string, unknown> = {}) {
 		},
 		_state: state,
 	};
+}
+
+async function settleConnectedTab(tab: BridgeTab): Promise<void> {
+	await tab.updateComplete;
+	await new Promise((resolve) => setTimeout(resolve, 0));
+	await tab.updateComplete;
 }
 
 describe("BridgeTab", () => {
@@ -89,9 +95,7 @@ describe("BridgeTab", () => {
 	it("renders local default mode and bridge state from chrome storage", async () => {
 		const tab = new BridgeTab();
 		document.body.appendChild(tab);
-		await tab.updateComplete;
-		await Promise.resolve();
-		await tab.updateComplete;
+		await settleConnectedTab(tab);
 
 		expect(tab.textContent).toContain("CLI Bridge");
 		expect(tab.textContent).toContain("Disconnected");
@@ -104,9 +108,7 @@ describe("BridgeTab", () => {
 	it("writes blocked/unblocked bridge state back to local storage", async () => {
 		const tab = new BridgeTab();
 		document.body.appendChild(tab);
-		await tab.updateComplete;
-		await Promise.resolve();
-		await tab.updateComplete;
+		await settleConnectedTab(tab);
 
 		const blockToggle = tab.querySelector('input[type="checkbox"]') as HTMLInputElement;
 		blockToggle.checked = true;
@@ -120,9 +122,7 @@ describe("BridgeTab", () => {
 	it("writes sensitive access toggle and advanced URL/token edits to local storage", async () => {
 		const tab = new BridgeTab();
 		document.body.appendChild(tab);
-		await tab.updateComplete;
-		await Promise.resolve();
-		await tab.updateComplete;
+		await settleConnectedTab(tab);
 
 		const checkboxes = tab.querySelectorAll('input[type="checkbox"]');
 		const sensitiveToggle = checkboxes[1] as HTMLInputElement;
@@ -166,9 +166,7 @@ describe("BridgeTab", () => {
 	it("writes observability toggle and reacts to OTEL session-state updates", async () => {
 		const tab = new BridgeTab();
 		document.body.appendChild(tab);
-		await tab.updateComplete;
-		await Promise.resolve();
-		await tab.updateComplete;
+		await settleConnectedTab(tab);
 
 		const checkboxes = tab.querySelectorAll('input[type="checkbox"]');
 		const observabilityToggle = checkboxes[2] as HTMLInputElement;
@@ -195,10 +193,7 @@ describe("BridgeTab", () => {
 	it("updates status display from BRIDGE_STATE_KEY storage changes", async () => {
 		const tab = new BridgeTab();
 		document.body.appendChild(tab);
-		await tab.updateComplete;
-		await Promise.resolve();
-		await Promise.resolve();
-		await tab.updateComplete;
+		await settleConnectedTab(tab);
 
 		((tab as unknown as { storageChangeListener: typeof listeners[number] }).storageChangeListener)(
 			{
@@ -236,9 +231,7 @@ describe("BridgeTab", () => {
 
 		const tab = new BridgeTab();
 		document.body.appendChild(tab);
-		await tab.updateComplete;
-		await Promise.resolve();
-		await tab.updateComplete;
+		await settleConnectedTab(tab);
 
 		expect(tab.textContent).toContain("Enter the remote bridge token to connect to a LAN or remote bridge.");
 		tab.remove();

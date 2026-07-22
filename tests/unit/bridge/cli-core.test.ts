@@ -1,16 +1,114 @@
 import {
 	bridgeStatusUrl,
+	CliCommandPlanners,
+	CliFlagDefinitions,
 	createCommandPlan,
 	exitCodeForResponse,
 	generateRequestId,
+	getCliPlannerCoverage,
 	isNetworkOrConfigError,
+	LocalCliPlannerCommands,
+	parseCliArguments,
 	parseTimeout,
 	resolveBridgeUrl,
 	resolveConfig,
-} from "../../../src/bridge/cli-core.js";
-import { getBridgeCommandMetadata } from "../../../src/bridge/command-catalog.js";
+	withEncodedRecordingSize,
+} from "shuvgeist/cli-core";
+import {
+	BridgeCliBindings,
+	getBridgeCommandMetadata,
+	getCatalogCliCommands,
+} from "@shuvgeist/protocol/command-catalog";
+import { PreParserCliCommandDefinitions } from "@shuvgeist/protocol/cli-grammar";
+import { NodeConfigError } from "@shuvgeist/server/node-config";
 
 describe("cli-core", () => {
+	it("parses flags from the declarative option grammar", () => {
+		expect(
+			parseCliArguments([
+				"--json",
+				"--url",
+				"https://example.com",
+				"--arg",
+				"first=1",
+				"--arg",
+				"second=2",
+				"-f",
+				"script.js",
+				"query",
+			]),
+		).toEqual({
+			flags: {
+				json: true,
+				url: "https://example.com",
+				arg: ["first=1", "second=2"],
+				file: "script.js",
+			},
+			positionals: ["query"],
+		});
+	});
+
+	it("preserves scalar overwrite and legacy unknown/missing-value behavior", () => {
+		expect(
+			parseCliArguments(["--port", "1000", "--unknown", "value", "--port", "2000", "--timeout"]),
+		).toEqual({
+			flags: { port: "2000" },
+			positionals: ["--unknown", "value", "--timeout"],
+		});
+	});
+
+	it("recognizes the documented long --file spelling", () => {
+		expect(parseCliArguments(["--file", "workflow.json"])).toEqual({
+			flags: { file: "workflow.json" },
+			positionals: [],
+		});
+	});
+
+	it("maps both trusted-input spellings to one canonical flag", () => {
+		expect(parseCliArguments(["--trusted"])).toEqual({ flags: { trusted: true }, positionals: [] });
+		expect(parseCliArguments(["--cdp-input"])).toEqual({ flags: { trusted: true }, positionals: [] });
+	});
+
+	it("keeps flag and planner registries drift-free", () => {
+		const optionNames = CliFlagDefinitions.flatMap((definition) => definition.names);
+		expect(new Set(optionNames).size).toBe(optionNames.length);
+		expect(getCliPlannerCoverage()).toEqual({
+			missingCatalogCommands: [],
+			unexpectedCommands: [],
+			duplicateBindings: [],
+			duplicateDefaults: [],
+			overlappingPositionals: [],
+			missingCodecs: [],
+			unexpectedCodecs: [],
+			missingRunners: [],
+			unexpectedRunners: [],
+			missingLocalCodecs: [],
+			unexpectedLocalCodecs: [],
+			unreferencedFlagDefinitions: [],
+		});
+		expect(Object.keys(CliCommandPlanners).sort()).toEqual(
+			[...getCatalogCliCommands(), ...LocalCliPlannerCommands].sort(),
+		);
+	});
+
+	it("declares runner-only flags on the commands that consume them", () => {
+		const flagsFor = (method: string): string[] => {
+			const entry = BridgeCliBindings.find((candidate) => candidate.method === method);
+			return entry?.binding.flags.map(({ flag }) => flag) ?? [];
+		};
+		expect(flagsFor("repl")).toContain("writeFiles");
+		expect(flagsFor("screenshot")).toEqual(
+			expect.arrayContaining(["target", "tabId", "frameId", "out", "noViewportJson"]),
+		);
+		expect(flagsFor("record_start")).not.toContain("noViewportJson");
+		expect(flagsFor("ref_click")).toEqual(expect.arrayContaining(["native", "trusted"]));
+		expect(flagsFor("ref_fill")).toEqual(expect.arrayContaining(["native", "trusted"]));
+	});
+
+	it("records every intentional pre-parser exception", () => {
+		expect(PreParserCliCommandDefinitions.map(({ family }) => family)).toEqual(["help", "version", "skill"]);
+	});
+
 	it("resolves bridge url by flag, env, and config precedence", () => {
 		expect(resolveBridgeUrl({ url: "ws://flag/ws" }, {}, {})).toBe("ws://flag/ws");
 		expect(resolveBridgeUrl({}, { SHUVGEIST_BRIDGE_URL: "ws://env/ws" }, {})).toBe("ws://env/ws");
@@ -43,6 +141,7 @@ describe("cli-core", () => {
 	it("parses status urls and timeouts", () => {
 		expect(bridgeStatusUrl("ws://127.0.0.1:19285/ws")).toBe("http://127.0.0.1:19285/status");
 		expect(bridgeStatusUrl("wss://bridge.example/ws?x=1")).toBe("https://bridge.example/status");
+		expect(() => bridgeStatusUrl("http://127.0.0.1:19285/ws")).toThrowError("requires a ws:// or wss://");
 		expect(parseTimeout(undefined, 1234)).toBe(1234);
 		expect(parseTimeout("1500ms")).toBe(1500);
 		expect(parseTimeout("30s")).toBe(30_000);
@@ -52,6 +151,12 @@ describe("cli-core", () => {
 
 	it("detects network/config errors and maps exit codes", () => {
 		expect(isNetworkOrConfigError(Object.assign(new Error("boom"), { code: "ECONNREFUSED" }))).toBe(true);
+		expect(isNetworkOrConfigError(Object.assign(new Error("bridge token is required"), { code: "EAUTH" }))).toBe(
+			true,
+		);
+		expect(isNetworkOrConfigError(new NodeConfigError("INVALID_JSON", "/custom/bridge.json", "bad config"))).toBe(
+			true,
+		);
 		expect(isNetworkOrConfigError(new Error("Registration failed: no token"))).toBe(true);
 		expect(isNetworkOrConfigError(new Error("logic failure"))).toBe(false);
 
@@ -77,6 +182,18 @@ describe("cli-core", () => {
 		expect(
 			exitCodeForResponse({
 				id: 1,
+				result: {
+					ok: false,
+					refId: "submit",
+					action: "click",
+					reason: "ambiguous_match",
+					message: "Multiple candidates matched",
+				},
+			}),
+		).toBe(1);
+		expect(
+			exitCodeForResponse({
+				id: 1,
 				result: { ok: false, closedWindowIds: [], skipped: [{ windowId: 1, reason: "missing" }] },
 			}),
 		).toBe(1);
@@ -93,6 +210,16 @@ describe("cli-core", () => {
 
 	it("creates stable request ids", () => {
 		expect(generateRequestId(1_700_000_000_123, 0.456)).toBe(123456);
+	});
+
+	it("keeps raw frame bytes distinct from the encoded recording size", () => {
+		expect(withEncodedRecordingSize({ sourceBytes: 4096, frameCount: 12 }, 1024)).toEqual({
+			sourceBytes: 4096,
+			frameCount: 12,
+			encodedSizeBytes: 1024,
+			sizeBytes: 1024,
+		});
+		expect(() => withEncodedRecordingSize({ sourceBytes: 1 }, -1)).toThrow("non-negative safe integer");
 	});
 
 	it("maps commands to the actual bridge protocol", () => {
@@ -241,6 +368,43 @@ describe("cli-core", () => {
 			params: { refId: "checkout", waitMs: 3000 },
 			defaultTimeoutMs: 60_000,
 		});
+		expect(createCommandPlan("ref", ["click", "checkout"], { trusted: true }, readFileText)).toEqual({
+			kind: "one-shot",
+			method: "ref_click",
+			params: { refId: "checkout", trusted: true },
+			defaultTimeoutMs: 60_000,
+		});
+		expect(
+			createCommandPlan(
+				"ref",
+				["fill", "email"],
+				{ value: "user@example.com", trusted: true, target: "electron:e1:w1" },
+				readFileText,
+			),
+		).toEqual({
+			kind: "one-shot",
+			method: "ref_fill",
+			params: { refId: "email", value: "user@example.com", trusted: true },
+			defaultTimeoutMs: 60_000,
+			target: { kind: "electron-window", sessionId: "e1", windowRef: "w1" },
+		});
+		expect(
+			createCommandPlan("ref", ["click", "checkout"], { native: true, trusted: true }, readFileText),
+		).toEqual({
+			kind: "usage-error",
+			message: expect.stringContaining("mutually exclusive"),
+		});
+		expect(
+			createCommandPlan(
+				"ref",
+				["click", "checkout"],
+				{ native: true, target: "electron:e1:w1" },
+				readFileText,
+			),
+		).toEqual({
+			kind: "usage-error",
+			message: expect.stringContaining("does not support --native OS-level input"),
+		});
 		expect(readFileText).toHaveBeenCalledWith("script.js");
 	});
 
@@ -324,6 +488,21 @@ describe("cli-core", () => {
 		});
 	});
 
+	it("rejects Chrome selectors combined with an Electron target", () => {
+		const readFileText = vi.fn();
+		const expected = {
+			kind: "usage-error",
+			message: "Electron --target cannot be combined with Chrome selectors --tab-id or --window-id.",
+		};
+
+		expect(
+			createCommandPlan("screenshot", [], { target: "electron:vscode:w2", tabId: "42" }, readFileText),
+		).toEqual(expected);
+		expect(
+			createCommandPlan("screenshot", [], { target: "electron:vscode:w2", windowId: "7" }, readFileText),
+		).toEqual(expected);
+	});
+
 	it("maps electron namespace commands to bridge-local methods", () => {
 		const readFileText = vi.fn();
 
@@ -338,6 +517,13 @@ describe("cli-core", () => {
 			method: "electron_launch",
 			params: { appRef: "vscode", inspectMain: true },
 			defaultTimeoutMs: 120_000,
+		});
+		expect(createCommandPlan("electron", ["windows", "vscode"], {}, readFileText)).toEqual({
+			kind: "one-shot",
+			method: "electron_windows",
+			params: {},
+			defaultTimeoutMs: 60_000,
+			target: { kind: "electron-window", appRef: "vscode" },
 		});
 		expect(
 			createCommandPlan(
@@ -424,6 +610,74 @@ describe("cli-core", () => {
 			kind: "one-shot",
 			method: "electron_auto_attach",
 			params: { action: "status", appRef: "vscode" },
+			defaultTimeoutMs: 60_000,
+		});
+	});
+
+	it("strengthens schema-backed CLI validation without changing intentional planner exceptions", () => {
+		const readFileText = vi.fn();
+		expect(createCommandPlan("electron", ["detach"], {}, readFileText)).toEqual({
+			kind: "usage-error",
+			message: "Usage: shuvgeist electron detach <session-id>",
+		});
+		expect(createCommandPlan("electron", ["attach"], {}, readFileText)).toMatchObject({
+			kind: "usage-error",
+			message: expect.stringContaining("Invalid parameters for 'electron_attach'"),
+		});
+		expect(createCommandPlan("electron", ["source", "layout"], {}, readFileText)).toMatchObject({
+			kind: "usage-error",
+			message: expect.stringContaining("Invalid parameters for 'electron_source_layout'"),
+		});
+		expect(createCommandPlan("electron", ["auto-attach", "bogus", "vscode"], {}, readFileText)).toMatchObject({
+			kind: "usage-error",
+			message: expect.stringContaining("electron auto-attach status"),
+		});
+		// session_inject intentionally constructs wire params after discovering the live session id.
+		expect(createCommandPlan("inject", ["hello"], { role: "assistant" }, readFileText)).toEqual({
+			kind: "inject",
+			text: "hello",
+			role: "assistant",
+		});
+	});
+
+	it("locks deliberate schema-supported argument behavior", () => {
+		const readFileText = vi.fn();
+		expect(createCommandPlan("assert", ["expr", "true"], { world: "user" }, readFileText)).toEqual({
+			kind: "assert",
+			params: { kind: "expression", expression: "true", world: "user", timeoutMs: 5_000 },
+			defaultTimeoutMs: 10_000,
+		});
+		expect(createCommandPlan("assert", ["text", "Ready"], { name: "ignored" }, readFileText)).toEqual({
+			kind: "assert",
+			params: { kind: "text", text: "Ready", timeoutMs: 5_000 },
+			defaultTimeoutMs: 10_000,
+		});
+		expect(
+			createCommandPlan(
+				"device",
+				["emulate"],
+				{ width: "390", height: "844", dpr: "2.5" },
+				readFileText,
+			),
+		).toEqual({
+			kind: "one-shot",
+			method: "device_emulate",
+			params: {
+				viewport: { width: 390, height: 844, deviceScaleFactor: 2.5, mobile: false },
+			},
+			defaultTimeoutMs: 60_000,
+		});
+		expect(
+			createCommandPlan(
+				"electron",
+				["source", "read", "src/main.js", "vscode"],
+				{ sourcePath: "/tmp/app" },
+				readFileText,
+			),
+		).toEqual({
+			kind: "one-shot",
+			method: "electron_source_read",
+			params: { sourcePath: "/tmp/app", filePath: "src/main.js", appRef: "vscode" },
 			defaultTimeoutMs: 60_000,
 		});
 	});

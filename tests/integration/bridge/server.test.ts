@@ -1,13 +1,64 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WebSocket, WebSocketServer } from "ws";
-import { BridgeServer } from "../../../src/bridge/server.js";
-import { BridgeDefaults, ErrorCodes } from "../../../src/bridge/protocol.js";
-import { createBridgeSkillSnapshot } from "../../../src/bridge/skill-snapshot.js";
+import { KNOWN_ELECTRON_APPS } from "@shuvgeist/server/electron/app-registry";
+import type { ElectronProcessRow } from "@shuvgeist/server/electron/process-discovery";
+import { ElectronSessionManager } from "@shuvgeist/server/electron/session-manager";
+import { createNodeConfigOwner } from "@shuvgeist/server/node-config";
+import { BridgeServer } from "@shuvgeist/server/server";
+import {
+	BRIDGE_PROTOCOL_MIN_VERSION,
+	BRIDGE_PROTOCOL_VERSION,
+	BridgeDefaults,
+	ErrorCodes,
+} from "@shuvgeist/protocol/protocol";
+import { createBridgeSkillSnapshot } from "@shuvgeist/protocol/skill-snapshot";
 import { openRegisteredClient, readMessage, sendRequestAndReadResponse } from "../../helpers/ws-client.js";
+
+const validScreenshotResult = {
+	mimeType: "image/png" as const,
+	dataUrl: "data:image/png;base64,iVBORw0KGgo=",
+	imageWidth: 100,
+	imageHeight: 80,
+	cssWidth: 100,
+	cssHeight: 80,
+	devicePixelRatio: 1,
+	scale: 1,
+};
+
+function validSnapshotEntry(tabId: number, frameId: number, snapshotId = "e1") {
+	return {
+		snapshotId,
+		tabId,
+		frameId,
+		tagName: "button",
+		role: "button",
+		name: "Save",
+		attributes: { id: "save" },
+		selectorCandidates: ["#save"],
+		ordinalPath: [0],
+		boundingBox: { x: 1, y: 2, width: 30, height: 20 },
+		interactive: true,
+	};
+}
+
+function validPageSnapshotResult(tabId: number, frameId: number, snapshotId = "e1") {
+	return {
+		target: { kind: "chrome-tab" as const, tabId, frameId },
+		navigationGeneration: 0,
+		tabId,
+		frameId,
+		url: "https://example.test",
+		title: "Example",
+		generatedAt: 1,
+		totalCandidates: 1,
+		truncated: false,
+		entries: [validSnapshotEntry(tabId, frameId, snapshotId)],
+	};
+}
 
 async function getAvailablePort(): Promise<number> {
 	const net = await import("node:net");
@@ -106,6 +157,20 @@ function spanAttributes(payload: unknown, spanName: string): Record<string, unkn
 	);
 }
 
+function resourceAttributes(payload: unknown): Record<string, unknown> {
+	const attributes = (
+		payload as {
+			resourceSpans?: Array<{ resource?: { attributes?: Array<{ key: string; value: Record<string, unknown> }> } }>;
+		}
+	).resourceSpans?.[0]?.resource?.attributes;
+	return Object.fromEntries(
+		(attributes ?? []).map((attribute) => [
+			attribute.key,
+			attribute.value.stringValue ?? attribute.value.intValue ?? attribute.value.doubleValue ?? attribute.value.boolValue,
+		]),
+	);
+}
+
 interface FakeCdpTarget {
 	id: string;
 	type: string;
@@ -114,10 +179,18 @@ interface FakeCdpTarget {
 	webSocketDebuggerUrl: string;
 }
 
+interface FakeCdpCommand {
+	path: string;
+	method: string;
+	params?: unknown;
+}
+
 async function createFakeCdpServer(port: number): Promise<{
 	close: () => Promise<void>;
 	setTargets: (nextTargets: FakeCdpTarget[]) => void;
+	commands: FakeCdpCommand[];
 }> {
+	const commands: FakeCdpCommand[] = [];
 	let targets: FakeCdpTarget[] = [
 		{
 			id: "page-1",
@@ -148,7 +221,7 @@ async function createFakeCdpServer(port: number): Promise<{
 		res.end();
 	});
 		const wss = new WebSocketServer({ server: httpServer as Server });
-		wss.on("connection", (ws) => {
+		wss.on("connection", (ws, request) => {
 			sockets.add(ws);
 			ws.on("close", () => sockets.delete(ws));
 			ws.on("message", (data: Buffer | string) => {
@@ -157,8 +230,12 @@ async function createFakeCdpServer(port: number): Promise<{
 				method: string;
 				params?: { expression?: string };
 			};
+			commands.push({ path: request.url ?? "", method: msg.method, params: msg.params });
 			if (msg.method === "Runtime.evaluate") {
-				if (msg.params?.expression?.includes("shuvgeistSnapshotPageScript")) {
+				if (
+					msg.params?.expression?.includes("shuvgeistSnapshotPageScript") &&
+					!msg.params.expression.includes("__SHUVGEIST_INJECTED_PAGE_REF_ACTION__")
+				) {
 					ws.send(
 						JSON.stringify({
 							id: msg.id,
@@ -174,6 +251,7 @@ async function createFakeCdpServer(port: number): Promise<{
 											truncated: false,
 											entries: [
 												{
+													frameId: 0,
 													snapshotId: "e1:w1:ref1",
 													stableElementId: "stable-save",
 													tagName: "button",
@@ -194,8 +272,46 @@ async function createFakeCdpServer(port: number): Promise<{
 							},
 						}),
 					);
-					} else if (msg.params?.expression?.includes("electronRefActionScript")) {
-						ws.send(JSON.stringify({ id: msg.id, result: { result: { value: { ok: true } } } }));
+					} else if (msg.params?.expression?.includes("__SHUVGEIST_INJECTED_PAGE_REF_ACTION__")) {
+						const action = msg.params.expression.includes('"kind":"fill"') ? "fill" : "click";
+						ws.send(
+							JSON.stringify({
+								id: msg.id,
+								result: {
+									result: {
+										value: {
+											ok: true,
+											operation: "dom-action",
+											match: {
+												score: 1,
+												reasons: ["stable-id"],
+												entry: {
+													frameId: 0,
+													snapshotId: "e1:w1:ref1",
+													stableElementId: "stable-save",
+													tagName: "button",
+													role: "button",
+													name: "Save",
+													text: "Save",
+													label: "Save changes",
+													attributes: { id: "save" },
+													selectorCandidates: ["#save"],
+													ordinalPath: [0],
+													boundingBox: { x: 1, y: 2, width: 30, height: 20 },
+													interactive: true,
+												},
+											},
+											execution: {
+												ok: true,
+												kind: action,
+												strategy: "stable-id",
+												...(action === "fill" ? { textLength: 5, inputStrategy: "value" } : {}),
+											},
+										},
+									},
+								},
+							}),
+						);
 					} else if (msg.params?.expression?.includes("electronPageAssertScript")) {
 						ws.send(
 							JSON.stringify({
@@ -301,6 +417,7 @@ async function createFakeCdpServer(port: number): Promise<{
 	});
 	await new Promise<void>((resolve) => httpServer.listen(port, "127.0.0.1", resolve));
 	return {
+		commands,
 		setTargets: (nextTargets: FakeCdpTarget[]) => {
 			targets = nextTargets;
 		},
@@ -317,19 +434,76 @@ describe("BridgeServer", () => {
 	let port: number;
 	let baseUrl: string;
 	let snapshotStoreDir: string;
+	let electronPortOwners: Map<number, number[]>;
+	let electronProcesses: ElectronProcessRow[];
+	let electronSessionManager: ElectronSessionManager;
+
+	async function createOwnedFakeCdpServer(cdpPort: number, ownerPid = 101) {
+		electronPortOwners.set(cdpPort, [ownerPid]);
+		return createFakeCdpServer(cdpPort);
+	}
 
 	beforeEach(async () => {
 		snapshotStoreDir = mkdtempSync(join(tmpdir(), "shuvgeist-bridge-snapshots-"));
 		process.env.SHUVGEIST_PAGE_SNAPSHOT_STORE = join(snapshotStoreDir, "page-snapshots.json");
+		process.env.SHUVGEIST_BRIDGE_CONFIG = join(snapshotStoreDir, "bridge.json");
+		writeFileSync(
+			process.env.SHUVGEIST_BRIDGE_CONFIG,
+			JSON.stringify({ token: "secret-token", electron: { allowlist: ["com.microsoft.VSCode"] } }),
+		);
+		const vscodePath = join(snapshotStoreDir, "Visual Studio Code");
+		const slackPath = join(snapshotStoreDir, "Slack");
+		writeFileSync(vscodePath, "vscode");
+		writeFileSync(slackPath, "slack");
+		electronProcesses = [
+			{
+				pid: 101,
+				parentPid: 1,
+				command: vscodePath,
+				args: [vscodePath],
+				executablePath: vscodePath,
+				generation: "vscode-fixture-1",
+			},
+			{
+				pid: 202,
+				parentPid: 1,
+				command: slackPath,
+				args: [slackPath],
+				executablePath: slackPath,
+				generation: "slack-fixture-1",
+			},
+		];
+		electronPortOwners = new Map();
+		const apps = KNOWN_ELECTRON_APPS.map((app) => ({
+			...app,
+			paths: {
+				...app.paths,
+				[process.platform]:
+					app.id === "com.microsoft.VSCode"
+						? [vscodePath]
+						: app.id === "com.tinyspeck.slackmacgap"
+							? [slackPath]
+							: [],
+			},
+		}));
+		electronSessionManager = new ElectronSessionManager({
+			apps,
+			listProcesses: async () => electronProcesses,
+			listeningPidsForPort: async (cdpPort) => electronPortOwners.get(cdpPort) ?? [],
+		});
 		port = await getAvailablePort();
 		baseUrl = `ws://127.0.0.1:${port}/ws`;
-		server = new BridgeServer({ host: "127.0.0.1", port, token: "secret-token" });
+		server = new BridgeServer(
+			{ host: "127.0.0.1", port, token: "secret-token" },
+			{ electronSessionManager },
+		);
 		await server.start();
 	});
 
 	afterEach(async () => {
 		await server.stop();
 		delete process.env.SHUVGEIST_PAGE_SNAPSHOT_STORE;
+		delete process.env.SHUVGEIST_BRIDGE_CONFIG;
 		rmSync(snapshotStoreDir, { recursive: true, force: true });
 	});
 
@@ -428,6 +602,138 @@ describe("BridgeServer", () => {
 		cli.ws.close();
 	});
 
+	it("updates extension capabilities for status and command routing while rejecting malformed updates", async () => {
+		const extension = await openRegisteredClient(baseUrl, "secret-token", "extension", {
+			windowId: 8,
+			sessionId: "session-8",
+			capabilities: ["status"],
+		});
+		const cli = await openRegisteredClient(baseUrl, "secret-token", "cli", { name: "capability-update-cli" });
+
+		extension.ws.send(
+			JSON.stringify({
+				type: "event",
+				event: "capabilities_update",
+				data: { capabilities: ["status", "unknown_capability"] },
+			}),
+		);
+		const marker = readMessage(cli.ws);
+		extension.ws.send(JSON.stringify({ type: "event", event: "active_tab_changed", data: { tabId: 1 } }));
+		await expect(marker).resolves.toMatchObject({ type: "event", event: "active_tab_changed" });
+		let status = await fetch(`http://127.0.0.1:${port}/status`).then((response) => response.json());
+		expect(status.extension.capabilities).toEqual(["status"]);
+
+		const capabilityUpdate = readMessage(cli.ws);
+		extension.ws.send(
+			JSON.stringify({
+				type: "event",
+				event: "capabilities_update",
+				data: { capabilities: ["status", "repl"] },
+			}),
+		);
+		await expect(capabilityUpdate).resolves.toMatchObject({
+			type: "event",
+			event: "capabilities_update",
+			data: { capabilities: ["status", "repl"] },
+		});
+		status = await fetch(`http://127.0.0.1:${port}/status`).then((response) => response.json());
+		expect(status.extension.capabilities).toEqual(["status", "repl"]);
+
+		const responsePromise = sendRequestAndReadResponse(cli.ws, {
+			id: 801,
+			method: "repl",
+			params: { title: "Capability update", code: "return 8" },
+		});
+		const relayed = await readMessage<{ id: number; method: string }>(extension.ws);
+		expect(relayed).toMatchObject({ method: "repl" });
+		extension.ws.send(JSON.stringify({ id: relayed.id, result: { output: "8", files: [] } }));
+		await expect(responsePromise).resolves.toEqual({ id: 801, result: { output: "8", files: [] } });
+
+		const capabilityRemoval = readMessage(cli.ws);
+		extension.ws.send(
+			JSON.stringify({
+				type: "event",
+				event: "capabilities_update",
+				data: { capabilities: ["status"] },
+			}),
+		);
+		await expect(capabilityRemoval).resolves.toMatchObject({
+			type: "event",
+			event: "capabilities_update",
+			data: { capabilities: ["status"] },
+		});
+		status = await fetch(`http://127.0.0.1:${port}/status`).then((response) => response.json());
+		expect(status.extension.capabilities).toEqual(["status"]);
+		await expect(
+			sendRequestAndReadResponse(cli.ws, {
+				id: 802,
+				method: "repl",
+				params: { title: "Removed capability", code: "return 8" },
+			}),
+		).resolves.toEqual({
+			id: 802,
+			error: {
+				code: ErrorCodes.CAPABILITY_DISABLED,
+				message: "Method 'repl' is disabled on the active extension target",
+			},
+		});
+
+		extension.ws.close();
+		cli.ws.close();
+	});
+
+	it("exposes server-verified Electron liveness additively in status JSON", async () => {
+		const manager = (
+			server as unknown as {
+				electronSessions: {
+					status: () => Promise<
+						Array<{
+							id: string;
+							port: number;
+							launched: boolean;
+							startedAt: string;
+							windows: [];
+							live: boolean;
+							livePageTargetCount: number;
+							livenessCheckedAt: string;
+							livenessReason: "ok";
+						}>
+					>;
+				};
+			}
+		).electronSessions;
+		const statusSpy = vi.spyOn(manager, "status").mockResolvedValue([
+			{
+				id: "e1",
+				port: 9228,
+				launched: false,
+				startedAt: "2026-07-22T00:00:00.000Z",
+				windows: [],
+				live: true,
+				livePageTargetCount: 1,
+				livenessCheckedAt: "2026-07-22T00:00:01.000Z",
+				livenessReason: "ok",
+			},
+		]);
+		try {
+			const response = await fetch(`http://127.0.0.1:${port}/status`);
+			const status = (await response.json()) as {
+				electron: { sessions: Array<Record<string, unknown>> };
+			};
+			expect(response.status).toBe(200);
+			expect(status.electron.sessions).toEqual([
+				expect.objectContaining({
+					id: "e1",
+					live: true,
+					livePageTargetCount: 1,
+					livenessReason: "ok",
+				}),
+			]);
+		} finally {
+			statusSpy.mockRestore();
+		}
+	});
+
 	it("rejects invalid tokens and accepts multiple active extension windows", async () => {
 		const bad = new WebSocket(baseUrl);
 		await new Promise<void>((resolve) => bad.once("open", resolve));
@@ -448,6 +754,36 @@ describe("BridgeServer", () => {
 		expect(status.clients).toMatchObject({ extension: 2 });
 		first.ws.close();
 		second.ws.close();
+	});
+
+	it("negotiates overlapping protocol ranges and rejects non-overlapping peers", async () => {
+		const compatible = await openRegisteredClient(baseUrl, "secret-token", "extension", {
+			windowId: 13,
+			capabilities: ["status"],
+			protocolVersion: BRIDGE_PROTOCOL_MIN_VERSION,
+			minProtocolVersion: BRIDGE_PROTOCOL_MIN_VERSION - 1,
+		});
+		expect(compatible.registerResult).toEqual({ type: "register_result", ok: true });
+		const status = await fetch("http://127.0.0.1:" + port + "/status").then((response) => response.json());
+		expect(status.extension).toMatchObject({
+			connected: true,
+			protocolVersion: BRIDGE_PROTOCOL_MIN_VERSION,
+			minProtocolVersion: BRIDGE_PROTOCOL_MIN_VERSION - 1,
+		});
+
+		const incompatibleVersion = BRIDGE_PROTOCOL_VERSION + 1;
+		const incompatible = await openRegisteredClient(baseUrl, "secret-token", "cli", {
+			protocolVersion: incompatibleVersion,
+			minProtocolVersion: incompatibleVersion,
+		});
+		expect(incompatible.registerResult).toEqual({
+			type: "register_result",
+			ok: false,
+			error: `Bridge protocol mismatch: CLI supports ${incompatibleVersion}-${incompatibleVersion}, server supports ${BRIDGE_PROTOCOL_MIN_VERSION}-${BRIDGE_PROTOCOL_VERSION}. Rebuild or restart shuvgeist.`,
+		});
+
+		compatible.ws.close();
+		incompatible.ws.close();
 	});
 
 	it("replaces same-window reconnects and relays request responses", async () => {
@@ -473,6 +809,27 @@ describe("BridgeServer", () => {
 		cli.ws.close();
 	});
 
+	it("rejects invalid extension results before relaying them to clients", async () => {
+		const extension = await openRegisteredClient(baseUrl, "secret-token", "extension", {
+			windowId: 22,
+			capabilities: ["status"],
+		});
+		const cli = await openRegisteredClient(baseUrl, "secret-token", "cli", { name: "invalid-result-cli" });
+		const responsePromise = sendRequestAndReadResponse(cli.ws, { id: 100, method: "status" });
+		const relayed = await readMessage<{ id: number; method: string }>(extension.ws);
+		extension.ws.send(JSON.stringify({ id: relayed.id, result: { ok: true } }));
+		await expect(responsePromise).resolves.toMatchObject({
+			id: 100,
+			error: {
+				code: ErrorCodes.INVALID_RESULT,
+				message: expect.stringContaining("Invalid result for 'status'"),
+			},
+		});
+
+		extension.ws.close();
+		cli.ws.close();
+	});
+
 	it("routes explicit chrome window targets independently while default stays active", async () => {
 		const first = await openRegisteredClient(baseUrl, "secret-token", "extension", {
 			windowId: 71,
@@ -491,43 +848,62 @@ describe("BridgeServer", () => {
 		});
 		const firstRelayed = await readMessage<{ id: number; target?: unknown }>(first.ws);
 		expect(firstRelayed).toMatchObject({ target: { kind: "chrome-tab", tabRef: "window:71" } });
-		first.ws.send(JSON.stringify({ id: firstRelayed.id, result: { window: 71 } }));
-		await expect(firstResponse).resolves.toEqual({ id: 7101, result: { window: 71 } });
+		first.ws.send(JSON.stringify({ id: firstRelayed.id, result: { ok: true, ready: true, window: 71 } }));
+		await expect(firstResponse).resolves.toEqual({
+			id: 7101,
+			result: { ok: true, ready: true, window: 71 },
+		});
 
 		const defaultResponse = sendRequestAndReadResponse(cli.ws, { id: 7201, method: "status" });
 		const defaultRelayed = await readMessage<{ id: number; target?: unknown }>(second.ws);
 		expect(defaultRelayed).toMatchObject({ target: { kind: "chrome-tab" } });
-		second.ws.send(JSON.stringify({ id: defaultRelayed.id, result: { window: 72 } }));
-		await expect(defaultResponse).resolves.toEqual({ id: 7201, result: { window: 72 } });
+		second.ws.send(JSON.stringify({ id: defaultRelayed.id, result: { ok: true, ready: true, window: 72 } }));
+		await expect(defaultResponse).resolves.toEqual({
+			id: 7201,
+			result: { ok: true, ready: true, window: 72 },
+		});
 
-			cli.ws.send(
-				JSON.stringify({
+		cli.ws.send(
+			JSON.stringify({
 				id: 7102,
 				method: "session_inject",
 				target: { kind: "chrome-tab", tabRef: "window:71" },
-				params: { expectedSessionId: "s71", text: "first" },
-				}),
-			);
-			cli.ws.send(
-				JSON.stringify({
+				params: { expectedSessionId: "s71", role: "user", content: "first" },
+			}),
+		);
+		cli.ws.send(
+			JSON.stringify({
 				id: 7202,
 				method: "session_inject",
 				target: { kind: "chrome-tab", tabRef: "window:72" },
-				params: { expectedSessionId: "s72", text: "second" },
-				}),
-			);
+				params: { expectedSessionId: "s72", role: "user", content: "second" },
+			}),
+		);
 		const firstInject = await readMessage<{ id: number; method: string }>(first.ws);
-			const secondInject = await readMessage<{ id: number; method: string }>(second.ws);
-			expect(firstInject).toMatchObject({ method: "session_inject" });
-			expect(secondInject).toMatchObject({ method: "session_inject" });
-			const lockResponseMessages = readMessages<{ id: number; result: { ok: boolean; window: number } }>(cli.ws, 2);
-			first.ws.send(JSON.stringify({ id: firstInject.id, result: { ok: true, window: 71 } }));
-			second.ws.send(JSON.stringify({ id: secondInject.id, result: { ok: true, window: 72 } }));
-			const lockResponses = (await lockResponseMessages).sort((left, right) => left.id - right.id);
-			expect(lockResponses).toEqual([
-				{ id: 7102, result: { ok: true, window: 71 } },
-				{ id: 7202, result: { ok: true, window: 72 } },
-			]);
+		const secondInject = await readMessage<{ id: number; method: string }>(second.ws);
+		expect(firstInject).toMatchObject({ method: "session_inject" });
+		expect(secondInject).toMatchObject({ method: "session_inject" });
+		const lockResponseMessages = readMessages<{
+			id: number;
+			result: { ok: boolean; sessionId: string; messageIndex: number; window: number };
+		}>(cli.ws, 2);
+		first.ws.send(
+			JSON.stringify({
+				id: firstInject.id,
+				result: { ok: true, sessionId: "s71", messageIndex: 0, window: 71 },
+			}),
+		);
+		second.ws.send(
+			JSON.stringify({
+				id: secondInject.id,
+				result: { ok: true, sessionId: "s72", messageIndex: 0, window: 72 },
+			}),
+		);
+		const lockResponses = (await lockResponseMessages).sort((left, right) => left.id - right.id);
+		expect(lockResponses).toEqual([
+			{ id: 7102, result: { ok: true, sessionId: "s71", messageIndex: 0, window: 71 } },
+			{ id: 7202, result: { ok: true, sessionId: "s72", messageIndex: 0, window: 72 } },
+		]);
 
 		first.ws.close();
 		second.ws.close();
@@ -544,6 +920,15 @@ describe("BridgeServer", () => {
 		await expect(sendRequestAndReadResponse(cli.ws, { id: 1, method: "bogus", params: {} })).resolves.toEqual({
 			id: 1,
 			error: { code: ErrorCodes.INVALID_METHOD, message: "Unknown method: bogus" },
+		});
+		await expect(
+			sendRequestAndReadResponse(cli.ws, { id: 4, method: "status", params: { unexpected: true } }),
+		).resolves.toMatchObject({
+			id: 4,
+			error: {
+				code: ErrorCodes.INVALID_PARAMS,
+				message: expect.stringContaining("Invalid parameters for 'status'"),
+			},
 		});
 		await expect(sendRequestAndReadResponse(cli.ws, { id: 2, method: "navigate", params: { url: "https://example.com" } })).resolves.toEqual({
 			id: 2,
@@ -572,6 +957,56 @@ describe("BridgeServer", () => {
 		expect((response.result as { apps: unknown[] }).apps.length).toBeGreaterThan(0);
 
 		cli.ws.close();
+	});
+
+	it("uses the injected config owner for server-local Electron reads and atomic allowlist updates", async () => {
+		await server.stop();
+		const injectedPath = join(snapshotStoreDir, "injected-bridge.json");
+		writeFileSync(
+			injectedPath,
+			JSON.stringify({
+				token: "secret-token",
+				futureTopLevel: { keep: true },
+				electron: {
+					allowlist: ["com.tinyspeck.slackmacgap"],
+					futureElectron: { keep: true },
+				},
+			}),
+		);
+		const decoyPath = process.env.SHUVGEIST_BRIDGE_CONFIG;
+		if (!decoyPath) throw new Error("expected the fixture bridge config path");
+		const decoyBefore = readFileSync(decoyPath, "utf8");
+		const nodeConfig = createNodeConfigOwner({ env: { SHUVGEIST_BRIDGE_CONFIG: injectedPath } });
+		port = await getAvailablePort();
+		baseUrl = `ws://127.0.0.1:${port}/ws`;
+		server = new BridgeServer(
+			{ host: "127.0.0.1", port, token: "secret-token" },
+			{ electronSessionManager, nodeConfig },
+		);
+		await server.start();
+		const cli = await openRegisteredClient(baseUrl, "secret-token", "cli", { name: "injected-config-cli" });
+		try {
+			const listed = await sendRequestAndReadResponse(cli.ws, { id: 1, method: "electron_list", params: {} });
+			expect(listed).toMatchObject({
+				id: 1,
+				result: { apps: expect.arrayContaining([expect.objectContaining({ id: "com.tinyspeck.slackmacgap", allowed: true })]) },
+			});
+			await expect(
+				sendRequestAndReadResponse(cli.ws, { id: 2, method: "electron_allow", params: { appRef: "vscode" } }),
+			).resolves.toMatchObject({ id: 2, result: { ok: true, appId: "com.microsoft.VSCode" } });
+
+			expect(JSON.parse(readFileSync(injectedPath, "utf8"))).toEqual({
+				token: "secret-token",
+				futureTopLevel: { keep: true },
+				electron: {
+					allowlist: ["com.tinyspeck.slackmacgap", "com.microsoft.VSCode"],
+					futureElectron: { keep: true },
+				},
+			});
+			expect(readFileSync(decoyPath, "utf8")).toBe(decoyBefore);
+		} finally {
+			cli.ws.close();
+		}
 	});
 
 	it("routes electron-targeted requests before extension checks", async () => {
@@ -604,8 +1039,8 @@ describe("BridgeServer", () => {
 		const responsePromise = sendRequestAndReadResponse(cli.ws, { id: 8, method: "screenshot", params: {} });
 		const relayed = await readMessage<{ id: number; method: string; target?: unknown }>(extension.ws);
 		expect(relayed).toMatchObject({ id: 1, method: "screenshot", target: { kind: "chrome-tab" } });
-		extension.ws.send(JSON.stringify({ id: relayed.id, result: { ok: true } }));
-		await expect(responsePromise).resolves.toEqual({ id: 8, result: { ok: true } });
+		extension.ws.send(JSON.stringify({ id: relayed.id, result: validScreenshotResult }));
+		await expect(responsePromise).resolves.toEqual({ id: 8, result: validScreenshotResult });
 
 		extension.ws.close();
 		cli.ws.close();
@@ -627,23 +1062,11 @@ describe("BridgeServer", () => {
 			params,
 			target: { kind: "chrome-tab" },
 		});
-		extension.ws.send(
-			JSON.stringify({
-				id: relayed.id,
-				result: {
-					tabId: 42,
-					frameId: 7,
-					entries: [{ snapshotId: "e1", role: "button", name: "Save" }],
-				},
-			}),
-		);
+		const snapshotResult = validPageSnapshotResult(42, 7);
+		extension.ws.send(JSON.stringify({ id: relayed.id, result: snapshotResult }));
 		await expect(responsePromise).resolves.toEqual({
 			id: 77,
-			result: {
-				tabId: 42,
-				frameId: 7,
-				entries: [{ snapshotId: "e1", role: "button", name: "Save" }],
-			},
+			result: snapshotResult,
 		});
 
 		extension.ws.close();
@@ -680,6 +1103,8 @@ describe("BridgeServer", () => {
 			JSON.stringify({
 				id: relayed.id,
 				result: {
+					target: { kind: "chrome-tab", tabId: 42, frameId: 7 },
+					navigationGeneration: 0,
 					tabId: 42,
 					frameId: 7,
 					query: "save",
@@ -688,7 +1113,7 @@ describe("BridgeServer", () => {
 					generatedAt: 12345,
 					totalCandidates: 9,
 					truncated: false,
-					entries: [{ snapshotId: "e1", tabId: 42, frameId: 7, role: "button", name: "Save" }],
+					entries: [validSnapshotEntry(42, 7)],
 				},
 			}),
 		);
@@ -697,7 +1122,9 @@ describe("BridgeServer", () => {
 			id: 88,
 			result: {
 				record: {
-					id: "chrome:active:42:frame:7:snapshot:12345",
+					id: "chrome:42:frame:7:generation:0:snapshot:12345",
+					target: { kind: "chrome-tab", tabId: 42, frameId: 7 },
+					navigationGeneration: 0,
 					tabId: 42,
 					frameId: 7,
 					url: "https://example.test/settings",
@@ -720,6 +1147,8 @@ describe("BridgeServer", () => {
 				records: [
 					{
 						id: recordId,
+						target: { kind: "chrome-tab", tabId: 42, frameId: 7 },
+						navigationGeneration: 0,
 						tabId: 42,
 						frameId: 7,
 						raw: {
@@ -875,6 +1304,8 @@ describe("BridgeServer", () => {
 			JSON.stringify({
 				id: relayed.id,
 				result: {
+					target: { kind: "chrome-tab", tabId: 64, frameId: 0 },
+					navigationGeneration: 0,
 					tabId: 64,
 					frameId: 0,
 					url: "https://example.test",
@@ -882,7 +1313,7 @@ describe("BridgeServer", () => {
 					generatedAt: 1,
 					totalCandidates: 1,
 					truncated: false,
-					entries: [{ snapshotId: "e1", tabId: 64, frameId: 0, role: "button", name: "Save" }],
+					entries: [validSnapshotEntry(64, 0)],
 				},
 			}),
 		);
@@ -892,7 +1323,12 @@ describe("BridgeServer", () => {
 			result: {
 				structuredContent: {
 					task: { kind: "shuvgeist_observe", status: "succeeded" },
-					result: { tabId: 64, entries: [{ snapshotId: "e1" }] },
+					result: {
+						target: { kind: "chrome-tab", tabId: 64, frameId: 0 },
+						navigationGeneration: 0,
+						tabId: 64,
+						entries: [{ snapshotId: "e1" }],
+					},
 				},
 			},
 		});
@@ -915,13 +1351,41 @@ describe("BridgeServer", () => {
 			params: { refId: "e1" },
 			target: { kind: "chrome-tab", tabRef: "window:64" },
 		});
-		extension.ws.send(JSON.stringify({ id: actRelayed.id, result: { ok: true, refId: "e1" } }));
+		extension.ws.send(
+			JSON.stringify({
+				id: actRelayed.id,
+				result: {
+					target: { kind: "chrome-tab", tabId: 64, frameId: 0 },
+					navigationGeneration: 0,
+					tabId: 64,
+					frameId: 0,
+					ok: true,
+					refId: "e1",
+					action: "click",
+					mode: "dom",
+					match: {
+						score: 1,
+						reasons: ["selector"],
+						stableElementId: "stable-save",
+						tagName: "button",
+						role: "button",
+						name: "Save",
+					},
+					execution: { kind: "click", strategy: "unique-selector" },
+				},
+			}),
+		);
 		await expect((await actPromise).json()).resolves.toMatchObject({
 			id: 4,
 			result: {
 				structuredContent: {
 					task: { kind: "shuvgeist_act", status: "succeeded" },
-					result: { ok: true, refId: "e1" },
+					result: {
+						target: { kind: "chrome-tab", tabId: 64, frameId: 0 },
+						navigationGeneration: 0,
+						ok: true,
+						refId: "e1",
+					},
 				},
 			},
 		});
@@ -944,7 +1408,7 @@ describe("BridgeServer", () => {
 
 	it("runs eval and screenshot through an attached electron CDP session", async () => {
 		const cdpPort = await getAvailablePort();
-		const cdp = await createFakeCdpServer(cdpPort);
+		const cdp = await createOwnedFakeCdpServer(cdpPort);
 		const cli = await openRegisteredClient(baseUrl, "secret-token", "cli", { name: "electron-cdp-cli" });
 		try {
 			await expect(
@@ -1022,7 +1486,17 @@ describe("BridgeServer", () => {
 					params: { refId: "e1:w1:ref1" },
 					target: { kind: "electron-window", sessionId: "e1", windowRef: "w1" },
 				}),
-			).resolves.toMatchObject({ id: 8, result: { ok: true, refId: "e1:w1:ref1", selector: "#save" } });
+			).resolves.toMatchObject({
+				id: 8,
+				result: {
+					target: { kind: "electron-window", sessionId: "e1", windowRef: "w1", targetId: "page-1" },
+					navigationGeneration: 0,
+					ok: true,
+					refId: "e1:w1:ref1",
+					action: "click",
+					mode: "dom",
+				},
+			});
 			await expect(
 				sendRequestAndReadResponse(cli.ws, {
 					id: 9,
@@ -1030,7 +1504,17 @@ describe("BridgeServer", () => {
 					params: { refId: "e1:w1:ref1", value: "typed" },
 					target: { kind: "electron-window", sessionId: "e1", windowRef: "w1" },
 				}),
-			).resolves.toMatchObject({ id: 9, result: { ok: true, refId: "e1:w1:ref1", selector: "#save" } });
+			).resolves.toMatchObject({
+				id: 9,
+				result: {
+					target: { kind: "electron-window", sessionId: "e1", windowRef: "w1", targetId: "page-1" },
+					navigationGeneration: 0,
+					ok: true,
+					refId: "e1:w1:ref1",
+					action: "fill",
+					mode: "dom",
+				},
+			});
 			await expect(
 				sendRequestAndReadResponse(cli.ws, {
 					id: 10,
@@ -1040,7 +1524,10 @@ describe("BridgeServer", () => {
 				}),
 			).resolves.toMatchObject({
 				id: 10,
-				error: { message: "Native ref click is not supported for Electron targets" },
+				error: {
+					message:
+						"Electron --native requests OS-level input, which is unsupported. Use --trusted/--cdp-input for CDP trusted input after enabling the app's cdp_input capability.",
+				},
 			});
 			await expect(
 				sendRequestAndReadResponse(cli.ws, {
@@ -1057,7 +1544,14 @@ describe("BridgeServer", () => {
 					params: {},
 					target: { kind: "electron-window", sessionId: "e1", windowRef: "w1" },
 				}),
-			).resolves.toMatchObject({ id: 12, result: { active: true, tabId: -1, sessionId: "e1", windowRef: "w1" } });
+			).resolves.toMatchObject({
+				id: 12,
+				result: {
+					target: { kind: "electron-window", sessionId: "e1", windowRef: "w1", targetId: "page-1" },
+					navigationGeneration: 0,
+					active: true,
+				},
+			});
 			await new Promise((resolve) => setTimeout(resolve, 20));
 			await expect(
 				sendRequestAndReadResponse(cli.ws, {
@@ -1068,16 +1562,16 @@ describe("BridgeServer", () => {
 				}),
 			).resolves.toMatchObject({
 				id: 13,
-				result: [
-					{
+				result: {
+					target: { kind: "electron-window", sessionId: "e1", windowRef: "w1", targetId: "page-1" },
+					navigationGeneration: 0,
+					requests: [{
 						requestId: "req-1",
 						url: "https://example.test/data",
 						status: 200,
 						hasResponseBody: true,
-						sessionId: "e1",
-						windowRef: "w1",
-					},
-				],
+					}],
+				},
 			});
 			await expect(
 				sendRequestAndReadResponse(cli.ws, {
@@ -1089,9 +1583,8 @@ describe("BridgeServer", () => {
 			).resolves.toMatchObject({
 				id: 14,
 				result: {
-					tabId: -1,
-					sessionId: "e1",
-					windowRef: "w1",
+					target: { kind: "electron-window", sessionId: "e1", windowRef: "w1", targetId: "page-1" },
+					navigationGeneration: 0,
 					metrics: [
 						{ name: "JSHeapUsedSize", value: 1234 },
 						{ name: "Nodes", value: 42 },
@@ -1124,8 +1617,104 @@ describe("BridgeServer", () => {
 				}),
 			).resolves.toMatchObject({
 				id: 16,
-				error: { message: "Electron ref 'e1:w1:ref1' does not exist for target 'e1:w2'. Run locate or snapshot again." },
+				result: {
+					target: { kind: "electron-window", sessionId: "e1", windowRef: "w2", targetId: "page-2" },
+					navigationGeneration: 0,
+					ok: false,
+					refId: "e1:w1:ref1",
+					reason: "missing_ref",
+				},
 			});
+		} finally {
+			cli.ws.close();
+			await cdp.close();
+		}
+	});
+
+	it("reuses one verified Electron session across repeated server attaches", async () => {
+		const cdpPort = await getAvailablePort();
+		const cdp = await createOwnedFakeCdpServer(cdpPort);
+		const cli = await openRegisteredClient(baseUrl, "secret-token", "cli", { name: "electron-reuse-cli" });
+		try {
+			const first = await sendRequestAndReadResponse(cli.ws, {
+				id: 1,
+				method: "electron_attach",
+				params: { appRef: "vscode", pid: 101, port: cdpPort },
+			});
+			cdp.setTargets([
+				{
+					id: "page-1",
+					type: "page",
+					title: "Primary refreshed",
+					webSocketDebuggerUrl: `ws://127.0.0.1:${cdpPort}/devtools/page/1`,
+				},
+				{
+					id: "page-2",
+					type: "page",
+					title: "Secondary",
+					webSocketDebuggerUrl: `ws://127.0.0.1:${cdpPort}/devtools/page/2`,
+				},
+			]);
+			const second = await sendRequestAndReadResponse(cli.ws, {
+				id: 2,
+				method: "electron_attach",
+				params: { port: cdpPort },
+			});
+			const listed = await sendRequestAndReadResponse(cli.ws, { id: 3, method: "electron_list", params: {} });
+
+			expect(first).toMatchObject({ id: 1, result: { id: "e1" } });
+			expect(second).toMatchObject({
+				id: 2,
+				result: { id: "e1", windows: [{ title: "Primary refreshed" }, { title: "Secondary" }] },
+			});
+			expect(listed).toMatchObject({ id: 3, result: { sessions: [{ id: "e1" }] } });
+	} finally {
+			cli.ws.close();
+			await cdp.close();
+		}
+	});
+
+	it("rejects spoofed owners and evicts a session before action after process-generation takeover", async () => {
+		const cdpPort = await getAvailablePort();
+		const cdp = await createOwnedFakeCdpServer(cdpPort, 202);
+		const cli = await openRegisteredClient(baseUrl, "secret-token", "cli", { name: "electron-security-cli" });
+		try {
+			await expect(
+				sendRequestAndReadResponse(cli.ws, {
+					id: 1,
+					method: "electron_attach",
+					params: { appRef: "vscode", pid: 101, port: cdpPort },
+				}),
+			).resolves.toMatchObject({
+				id: 1,
+				error: { message: expect.stringContaining("mixed or unverifiable listener owners") },
+			});
+
+			electronPortOwners.set(cdpPort, [101]);
+			await expect(
+				sendRequestAndReadResponse(cli.ws, {
+					id: 2,
+					method: "electron_attach",
+					params: { appRef: "vscode", pid: 101, port: cdpPort },
+				}),
+			).resolves.toMatchObject({ id: 2, result: { id: "e1" } });
+			electronProcesses = electronProcesses.map((processRow) =>
+				processRow.pid === 101 ? { ...processRow, generation: "vscode-fixture-taken-over" } : processRow,
+			);
+			await expect(
+				sendRequestAndReadResponse(cli.ws, {
+					id: 3,
+					method: "eval",
+					params: { code: "2 + 2" },
+					target: { kind: "electron-window", sessionId: "e1", windowRef: "w1" },
+				}),
+			).resolves.toMatchObject({
+				id: 3,
+				error: { message: expect.stringContaining("failed ownership revalidation and was detached") },
+			});
+			await expect(
+				sendRequestAndReadResponse(cli.ws, { id: 4, method: "electron_list", params: {} }),
+			).resolves.toMatchObject({ id: 4, result: { sessions: [] } });
 		} finally {
 			cli.ws.close();
 			await cdp.close();
@@ -1134,7 +1723,7 @@ describe("BridgeServer", () => {
 
 	it("keeps stable electron window refs and resolves labels", async () => {
 		const cdpPort = await getAvailablePort();
-		const cdp = await createFakeCdpServer(cdpPort);
+		const cdp = await createOwnedFakeCdpServer(cdpPort);
 		const cli = await openRegisteredClient(baseUrl, "secret-token", "cli", { name: "electron-window-cli" });
 		try {
 			await sendRequestAndReadResponse(cli.ws, { id: 1, method: "electron_attach", params: { port: cdpPort } });
@@ -1243,7 +1832,7 @@ describe("BridgeServer", () => {
 
 	it("records electron screencast frames through the bridge event contract", async () => {
 		const cdpPort = await getAvailablePort();
-		const cdp = await createFakeCdpServer(cdpPort);
+		const cdp = await createOwnedFakeCdpServer(cdpPort);
 		const cli = await openRegisteredClient(baseUrl, "secret-token", "cli", { name: "electron-record-cli" });
 		try {
 			await sendRequestAndReadResponse(cli.ws, { id: 1, method: "electron_attach", params: { port: cdpPort } });
@@ -1266,11 +1855,22 @@ describe("BridgeServer", () => {
 			expect(frame).toMatchObject({
 				type: "event",
 				event: "record_frame",
-				data: { recordingId: expect.stringMatching(/^erec-/), dataBase64: "iVBORw0KGgo=" },
+				data: {
+					target: { kind: "electron-window", sessionId: "e1", windowRef: "w1", targetId: "page-1" },
+					navigationGeneration: 0,
+					recordingId: expect.stringMatching(/^recording-/),
+					dataBase64: "iVBORw0KGgo=",
+				},
 			});
 			expect(startMessages.response).toMatchObject({
 				id: 2,
-				result: { recordingId: frame.data.recordingId, tabId: -1, mimeType: "video/webm", maxDurationMs: 5000 },
+				result: {
+					target: { kind: "electron-window", sessionId: "e1", windowRef: "w1", targetId: "page-1" },
+					navigationGeneration: 0,
+					recordingId: frame.data.recordingId,
+					mimeType: "video/webm",
+					maxDurationMs: 5000,
+				},
 			});
 			await expect(
 				sendRequestAndReadResponse(cli.ws, {
@@ -1279,13 +1879,22 @@ describe("BridgeServer", () => {
 					params: {},
 					target: { kind: "electron-window", sessionId: "e1", windowRef: "w1" },
 				}),
-			).resolves.toMatchObject({ id: 3, result: { active: true, recordingId: frame.data.recordingId, frameCount: 1 } });
+			).resolves.toMatchObject({
+				id: 3,
+				result: {
+					target: { kind: "electron-window", sessionId: "e1", windowRef: "w1", targetId: "page-1" },
+					navigationGeneration: 0,
+					active: true,
+					recordingId: frame.data.recordingId,
+					frameCount: 1,
+				},
+			});
 			const stopMessages = await sendAndReadResponseAndEvent(
 				cli.ws,
 				{
 					id: 4,
 					method: "record_stop",
-					params: { recordingId: frame.data.recordingId },
+					params: {},
 					target: { kind: "electron-window", sessionId: "e1", windowRef: "w1" },
 				},
 				4,
@@ -1294,12 +1903,82 @@ describe("BridgeServer", () => {
 			expect(stopMessages.event).toMatchObject({
 				type: "event",
 				event: "record_frame",
-				data: { recordingId: frame.data.recordingId, final: true, summary: { outcome: "stopped_user" } },
+				data: {
+					target: { kind: "electron-window", sessionId: "e1", windowRef: "w1", targetId: "page-1" },
+					navigationGeneration: 0,
+					recordingId: frame.data.recordingId,
+					final: true,
+					summary: { outcome: "stopped_user" },
+				},
 			});
 			expect(stopMessages.response).toMatchObject({
 				id: 4,
-				result: { recordingId: frame.data.recordingId, outcome: "stopped_user", frameCount: 1 },
+				result: {
+					target: { kind: "electron-window", sessionId: "e1", windowRef: "w1", targetId: "page-1" },
+					navigationGeneration: 0,
+					recordingId: frame.data.recordingId,
+					outcome: "stopped_user",
+					frameCount: 1,
+				},
 			});
+		} finally {
+			cli.ws.close();
+			await cdp.close();
+		}
+	});
+
+	it("stops the exact Electron recording target when its CLI disconnects", async () => {
+		const cdpPort = await getAvailablePort();
+		const cdp = await createOwnedFakeCdpServer(cdpPort);
+		cdp.setTargets([
+			{
+				id: "page-1",
+				type: "page",
+				title: "Primary",
+				url: "app://primary",
+				webSocketDebuggerUrl: `ws://127.0.0.1:${cdpPort}/devtools/page/1`,
+			},
+			{
+				id: "page-2",
+				type: "page",
+				title: "Secondary",
+				url: "app://secondary",
+				webSocketDebuggerUrl: `ws://127.0.0.1:${cdpPort}/devtools/page/2`,
+			},
+		]);
+		const cli = await openRegisteredClient(baseUrl, "secret-token", "cli", { name: "electron-record-lease-cli" });
+		try {
+			await sendRequestAndReadResponse(cli.ws, { id: 1, method: "electron_attach", params: { port: cdpPort } });
+			await sendAndReadResponseAndEvent(
+				cli.ws,
+				{
+					id: 2,
+					method: "record_start",
+					params: { maxDurationMs: 5000 },
+					target: { kind: "electron-window", sessionId: "e1", windowRef: "w2" },
+				},
+				2,
+				"record_frame",
+			);
+
+			cli.ws.close();
+			for (
+				let attempt = 0;
+				attempt < 100 && !cdp.commands.some((command) => command.method === "Page.stopScreencast");
+				attempt++
+			) {
+				await new Promise((resolve) => setTimeout(resolve, 10));
+			}
+
+			expect(cdp.commands).toContainEqual(
+				expect.objectContaining({ path: "/devtools/page/2", method: "Page.startScreencast" }),
+			);
+			expect(cdp.commands).toContainEqual(
+				expect.objectContaining({ path: "/devtools/page/2", method: "Page.stopScreencast" }),
+			);
+			expect(cdp.commands).not.toContainEqual(
+				expect.objectContaining({ path: "/devtools/page/1", method: "Page.stopScreencast" }),
+			);
 		} finally {
 			cli.ws.close();
 			await cdp.close();
@@ -1313,7 +1992,7 @@ describe("BridgeServer", () => {
 		process.env.SHUVGEIST_SKILL_SNAPSHOT = join(dir, "skills.snapshot.json");
 		process.env.SHUVGEIST_BRIDGE_CONFIG = join(dir, "bridge.json");
 		const cdpPort = await getAvailablePort();
-		const cdp = await createFakeCdpServer(cdpPort);
+		const cdp = await createOwnedFakeCdpServer(cdpPort);
 		const cli = await openRegisteredClient(baseUrl, "secret-token", "cli", { name: "electron-skill-cli" });
 		try {
 			const snapshot = createBridgeSkillSnapshot([
@@ -1370,7 +2049,7 @@ describe("BridgeServer", () => {
 
 	it("broadcasts Electron session changes to sidepanels and detaches through HTTP", async () => {
 		const cdpPort = await getAvailablePort();
-		const cdp = await createFakeCdpServer(cdpPort);
+		const cdp = await createOwnedFakeCdpServer(cdpPort);
 		const extension = await openRegisteredClient(baseUrl, "secret-token", "extension", {
 			windowId: 77,
 			capabilities: ["status"],
@@ -1420,8 +2099,8 @@ describe("BridgeServer", () => {
 	it("attaches Electron main-process inspector and returns read-only metadata", async () => {
 		const cdpPort = await getAvailablePort();
 		const inspectPort = await getAvailablePort();
-		const cdp = await createFakeCdpServer(cdpPort);
-		const inspector = await createFakeCdpServer(inspectPort);
+		const cdp = await createOwnedFakeCdpServer(cdpPort);
+		const inspector = await createOwnedFakeCdpServer(inspectPort);
 		const cli = await openRegisteredClient(baseUrl, "secret-token", "cli", { name: "electron-main-cli" });
 		try {
 			await expect(
@@ -1462,8 +2141,8 @@ describe("BridgeServer", () => {
 		process.env.SHUVGEIST_BRIDGE_CONFIG = join(dir, "bridge.json");
 		const cdpPort = await getAvailablePort();
 		const inspectPort = await getAvailablePort();
-		const cdp = await createFakeCdpServer(cdpPort);
-		const inspector = await createFakeCdpServer(inspectPort);
+		const cdp = await createOwnedFakeCdpServer(cdpPort, 202);
+		const inspector = await createOwnedFakeCdpServer(inspectPort, 202);
 		const cli = await openRegisteredClient(baseUrl, "secret-token", "cli", { name: "electron-main-unsupported-cli" });
 		try {
 			await sendRequestAndReadResponse(cli.ws, { id: 1, method: "electron_allow", params: { appRef: "slack" } });
@@ -1498,8 +2177,8 @@ describe("BridgeServer", () => {
 		process.env.SHUVGEIST_BRIDGE_CONFIG = join(dir, "bridge.json");
 		const cdpPort = await getAvailablePort();
 		const inspectPort = await getAvailablePort();
-		const cdp = await createFakeCdpServer(cdpPort);
-		const inspector = await createFakeCdpServer(inspectPort);
+		const cdp = await createOwnedFakeCdpServer(cdpPort);
+		const inspector = await createOwnedFakeCdpServer(inspectPort);
 		const cli = await openRegisteredClient(baseUrl, "secret-token", "cli", { name: "electron-main-taps-cli" });
 		try {
 			await sendRequestAndReadResponse(cli.ws, { id: 1, method: "electron_allow", params: { appRef: "vscode" } });
@@ -1552,8 +2231,9 @@ describe("BridgeServer", () => {
 				id: 6,
 				result: { ok: true, stopped: 1, source: "main" },
 			});
+			if (!previousConfigPath) throw new Error("expected the server's injected bridge config path");
 			writeFileSync(
-				join(dir, "bridge.json"),
+				previousConfigPath,
 				JSON.stringify({
 					token: "secret-token",
 					electron: {
@@ -1596,15 +2276,19 @@ describe("BridgeServer", () => {
 		});
 		port = await getAvailablePort();
 		baseUrl = `ws://127.0.0.1:${port}/ws`;
-		server = new BridgeServer({
-			host: "127.0.0.1",
-			port,
-			token: "secret-token",
-			otel: { enabled: true, ingestUrl: "http://127.0.0.1:4318", ingestKey: "maple_sk_test" },
-		});
+		server = new BridgeServer(
+			{
+				host: "127.0.0.1",
+				port,
+				token: "secret-token",
+				serverVersion: "test-server-version",
+				otel: { enabled: true, ingestUrl: "http://127.0.0.1:4318", ingestKey: "maple_sk_test" },
+			},
+			{ electronSessionManager },
+		);
 		await server.start();
 		const cdpPort = await getAvailablePort();
-		const cdp = await createFakeCdpServer(cdpPort);
+		const cdp = await createOwnedFakeCdpServer(cdpPort);
 		const cli = await openRegisteredClient(baseUrl, "secret-token", "cli", { name: "electron-telemetry-cli" });
 		try {
 			await sendRequestAndReadResponse(cli.ws, { id: 1, method: "electron_attach", params: { port: cdpPort } });
@@ -1621,6 +2305,10 @@ describe("BridgeServer", () => {
 				target: { kind: "electron-window", sessionId: "missing", windowRef: "w1" },
 			});
 			await waitForTelemetryPayloads(telemetryPayloads, 3);
+			expect(resourceAttributes(telemetryPayloads[0])).toMatchObject({
+				"service.name": "shuvgeist-bridge-server",
+				"service.version": "test-server-version",
+			});
 			const attachAttrs = spanAttributes(telemetryPayloads[0], "bridge.server.request.electron_attach");
 			expect(attachAttrs).toMatchObject({
 				"bridge.method": "electron_attach",
@@ -1696,8 +2384,13 @@ describe("BridgeServer", () => {
 			},
 		});
 
-		extension.ws.send(JSON.stringify({ id: forwarded.id, result: { ok: true } }));
-		await expect(firstResponsePromise).resolves.toEqual({ id: 10, result: { ok: true } });
+		extension.ws.send(
+			JSON.stringify({ id: forwarded.id, result: { ok: true, sessionId: "session-a", messageIndex: 0 } }),
+		);
+		await expect(firstResponsePromise).resolves.toEqual({
+			id: 10,
+			result: { ok: true, sessionId: "session-a", messageIndex: 0 },
+		});
 
 		extension.ws.send(
 			JSON.stringify({
@@ -1716,12 +2409,16 @@ describe("BridgeServer", () => {
 		);
 		const secondForward = await readMessage<{ id: number; method: string }>(extension.ws);
 		expect(secondForward).toMatchObject({ id: 2, method: "session_set_model" });
-		extension.ws.send(JSON.stringify({ id: secondForward.id, result: { ok: true } }));
+		const setModelResult = {
+			ok: true,
+			model: { provider: "anthropic", id: "claude-sonnet-4-6" },
+		};
+		extension.ws.send(JSON.stringify({ id: secondForward.id, result: setModelResult }));
 		let secondResponse = await readMessage(cliB.ws);
 		if ((secondResponse as { type?: string }).type === "event") {
 			secondResponse = await readMessage(cliB.ws);
 		}
-		expect(secondResponse).toEqual({ id: 12, result: { ok: true } });
+		expect(secondResponse).toEqual({ id: 12, result: setModelResult });
 
 		extension.ws.close();
 		cliA.ws.close();

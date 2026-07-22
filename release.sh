@@ -31,24 +31,43 @@ DATE=$(date +%Y-%m-%d)
 
 echo "Bumping version: $CURRENT -> $NEW_VERSION"
 
-# Update package versions across the repo
-npm version --no-git-tag-version "$NEW_VERSION"
-(
-    cd site
-    npm version --no-git-tag-version "$NEW_VERSION"
-)
-(
-    cd proxy
-    npm version --no-git-tag-version "$NEW_VERSION"
-)
-
-# Update manifest
-node -e "
+# Update the core release unit. proxy/ and site/ are independent-version
+# workspaces and keep their own nested lockfiles.
+node - "$NEW_VERSION" <<'NODE'
 const fs = require('fs');
-const manifest = JSON.parse(fs.readFileSync('$MANIFEST', 'utf8'));
-manifest.version = '$NEW_VERSION';
-fs.writeFileSync('$MANIFEST', JSON.stringify(manifest, null, '\t') + '\n');
-"
+const nextVersion = process.argv[2];
+const packagePaths = [
+    'package.json',
+    'packages/protocol/package.json',
+    'packages/driver/package.json',
+    'packages/extension/package.json',
+    'packages/server/package.json',
+    'packages/cli/package.json',
+];
+const internalNames = new Set([
+    '@shuvgeist/protocol',
+    '@shuvgeist/driver',
+    '@shuvgeist/extension',
+    '@shuvgeist/server',
+    'shuvgeist',
+]);
+for (const packagePath of packagePaths) {
+    const manifest = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
+    manifest.version = nextVersion;
+    for (const section of ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies']) {
+        for (const dependencyName of Object.keys(manifest[section] ?? {})) {
+            if (internalNames.has(dependencyName)) manifest[section][dependencyName] = nextVersion;
+        }
+    }
+    fs.writeFileSync(packagePath, JSON.stringify(manifest, null, '\t') + '\n');
+}
+const chromeManifest = JSON.parse(fs.readFileSync('static/manifest.chrome.json', 'utf8'));
+chromeManifest.version = nextVersion;
+fs.writeFileSync('static/manifest.chrome.json', JSON.stringify(chromeManifest, null, '\t') + '\n');
+NODE
+
+# Refresh the root workspace lock after the package graph/version update.
+npm install --package-lock-only --ignore-scripts
 
 # Update CHANGELOG: replace [Unreleased] with version, add new [Unreleased]
 node -e "
@@ -63,7 +82,7 @@ echo "Running checks..."
 ./check.sh
 
 # Commit, tag, push
-git add "$MANIFEST" CHANGELOG.md package.json package-lock.json site/package.json site/package-lock.json proxy/package.json proxy/package-lock.json
+git add "$MANIFEST" CHANGELOG.md package.json package-lock.json packages/protocol/package.json packages/driver/package.json packages/extension/package.json packages/server/package.json packages/cli/package.json
 git commit -m "Release v$NEW_VERSION"
 git tag "$TAG"
 git push origin main

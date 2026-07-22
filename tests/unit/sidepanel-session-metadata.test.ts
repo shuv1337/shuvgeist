@@ -5,7 +5,7 @@ import {
 	buildSessionPreview,
 	generateSessionTitle,
 	shouldSaveSession,
-} from "../../src/sidepanel/session-metadata.js";
+} from "@shuvgeist/extension/sidepanel/session-metadata";
 
 const user = (content: AgentMessage["content"]): AgentMessage => ({ role: "user", content }) as AgentMessage;
 const assistant = (

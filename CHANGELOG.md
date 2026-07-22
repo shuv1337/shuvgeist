@@ -4,6 +4,8 @@
 
 ### Breaking Changes
 
+- Bridge protocol v4 page-target results now use a strict resolved `target` plus `navigationGeneration`; network list/get results are scoped wrappers, Electron no longer emits negative tab sentinels, and recording `sizeBytes` no longer aliases raw frame bytes. (#45)
+
 ### Added
 
 - Tab lifecycle: close tabs by Chrome tab ID or title/url filter via navigate tool and `shuvgeist tabs close`, with dry-run and `--yes` safety for filters.
@@ -21,15 +23,31 @@
 - Direct-CDP headless runtime support can connect to no-extension Chromium page targets, run semantic snapshot/locate/ref-click tools through the agent runtime, and reconnect by target id.
 - Direct-CDP trusted input support dispatches headless ref clicks through a `CdpSession` action path without enabling Runtime.
 - Direct-CDP vision candidate baselines capture screenshots plus structured candidate JSON for vision-capable models without numbered badge overlays.
+- Semantic ref actions now accept `--trusted` (alias `--cdp-input`) for renderer-scoped CDP input, with fail-closed per-app Electron `cdp_input` authorization while preserving the explicit unsupported Electron `--native` boundary. (#55)
+- Codex Desktop is now a known Electron target with Linux discovery aliases, and bridge status reports browser-extension connectivity separately from usable Electron sessions. (#56)
 
 ### Changed
+
+- Bridge commands now derive wire schemas, correlated TypeScript contracts, CLI planning, capability advertising, and typed handler registries from one definition source, with runtime validation at transport boundaries. (#44)
+- Chrome debugger, Electron renderer, and direct-CDP automation now compose one target-neutral PageDriver for snapshots, refs, network capture, and screencast recording, with resolved target identities and distinct source-versus-encoded recording byte counts. (#45)
+- Agent sessions, REPL sandboxes, tools, artifacts, and planner memory now live in the persistent offscreen runtime; the sidepanel is a window-scoped remote presentation client that can close and reconnect without ending the session. (#46)
+- Injected snapshot, page-action, browserjs, execution, overlay, and picker runtimes are now typed esbuild entry points with generated, ownership-split artifacts instead of stringified host functions. (#47)
+- Node bridge configuration now has one injected owner for CLI connections, separate server binds, discovery, OTEL, Electron policy, and atomic unknown-preserving writes; malformed configuration fails closed, automatic startup is restricted to exact plain-WebSocket `/ws` loopback endpoints launched from the development source tree, and the repository is split into an npm workspace with enforced protocol/driver/runtime package boundaries. (#48)
+- Snapshot budgeting now ranks focused, visible, and semantically valuable controls before truncation, fairly samples repeated regions, and reports omitted candidate categories. (#53)
 
 ### Fixed
 
 - Settings categories now use a narrow-sidebar selector instead of overflowing horizontal tabs.
+- Sidepanel runtime admission now derives browser-window identity from persisted `sidePanel.onOpened` document authority and rotates verifier-backed continuation capabilities plus lease generations across reloads, so focus changes and stale ports cannot rebind or close another window's presentation. (#46)
 - Loopback bridge reconnects now preflight the HTTP status endpoint before opening a WebSocket, and secondary extension target conflicts no longer emit repeated error-level registration logs.
+- Semantic ref actions now fail closed with structured diagnostics when a match is ambiguous, stale, or belongs to a changed target instead of acting through a generic selector. (#51)
+- Ref fill and textbox assertions now recognize empty and `plaintext-only` contenteditable elements with explicit ARIA-role precedence and editor-compatible `beforeinput`/`input` behavior. (#52)
+- Electron raw-port and PID attaches now resolve an explicit allowlisted policy identity or fail closed before restricted capabilities can be used. (#50)
+- Repeated Electron attaches reuse the same live resolved debugger endpoint session and deterministically replace dead endpoint sessions. (#54)
 
 ### Removed
+
+- Removed the parallel offscreen proxy-provider and `bg-runtime-exec` paths; browserjs, navigation, and native-input REPL calls now use one canonical provider/runtime implementation with deprecated public exports retained as thin compatibility adapters. (#46)
 
 ## [1.1.16] - 2026-05-26
 

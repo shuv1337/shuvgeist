@@ -85,7 +85,7 @@ Shared prompts and runtime provider descriptions:
 - `EXTRACT_DOCUMENT_DESCRIPTION` - Extract text from PDF/DOCX/XLSX/PPTX
 
 ### Shuvgeist Prompts
-**File**: `/Users/shuv1337/workspaces/shuvgeist/src/prompts/prompts.ts`
+**File**: `packages/extension/src/prompts/prompts.ts`
 
 Shuvgeist-specific prompts:
 
@@ -311,7 +311,7 @@ For tools that manipulate content (artifacts, skills), use consistent action nam
 
 1. **Choose the right location**:
    - Shared/reusable tools → `/Users/shuv1337/workspaces/pi-mono/packages/web-ui/src/prompts/prompts.ts`
-   - Shuvgeist-specific tools → `/Users/shuv1337/workspaces/shuvgeist/src/prompts/prompts.ts`
+   - Shuvgeist-specific tools → `packages/extension/src/prompts/prompts.ts`
 
 2. **Follow the tool description pattern** (see above)
 
@@ -372,19 +372,19 @@ After updating prompts:
 
 **Prompt Definitions**:
 - `/Users/shuv1337/workspaces/pi-mono/packages/web-ui/src/prompts/prompts.ts` - Shared prompts and providers
-- `/Users/shuv1337/workspaces/shuvgeist/src/prompts/prompts.ts` - Shuvgeist-specific prompts
+- `packages/extension/src/prompts/prompts.ts` - Shuvgeist-specific prompts
 
 **Provider Implementations**:
 - `/Users/shuv1337/workspaces/pi-mono/packages/web-ui/src/components/sandbox/ArtifactsRuntimeProvider.ts` - Artifacts provider
-- `/Users/shuv1337/workspaces/shuvgeist/src/tools/NativeInputEventsRuntimeProvider.ts` - Native events provider
-- `/Users/shuv1337/workspaces/shuvgeist/src/tools/repl/runtime-providers.ts` - BrowserJs and Navigate providers
+- `packages/extension/src/tools/NativeInputEventsRuntimeProvider.ts` - Native events provider
+- `packages/extension/src/tools/repl/runtime-providers.ts` - BrowserJs and Navigate providers
 
 **Tool Implementations**:
 - `/Users/shuv1337/workspaces/pi-mono/packages/web-ui/src/tools/artifacts/artifacts.ts` - Artifacts tool
-- `/Users/shuv1337/workspaces/shuvgeist/src/tools/repl/repl.ts` - REPL tool
+- `packages/extension/src/tools/repl/repl.ts` - REPL tool
 
 **Integration**:
-- `/Users/shuv1337/workspaces/shuvgeist/src/sidepanel.ts` - Tool and provider composition
+- `packages/extension/src/sidepanel.ts` - Tool and provider composition
 
 ### Related Documentation
 - `docs/tool-renderers.md` - How tool invocations are rendered in UI

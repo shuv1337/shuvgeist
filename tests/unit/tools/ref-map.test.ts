@@ -1,4 +1,4 @@
-import { RefMap, rankLocatorCandidates } from "../../../src/tools/helpers/ref-map.js";
+import { RefMap } from "@shuvgeist/extension/tools/helpers/ref-map";
 
 describe("ref-map", () => {
 	it("creates refs and invalidates by frame or tab", () => {
@@ -185,38 +185,4 @@ describe("ref-map", () => {
 		});
 	});
 
-	it("ranks locator candidates for role, text, and label queries", () => {
-		const candidates = [
-			{
-				candidateId: "c1",
-				role: "button",
-				name: "Save settings",
-				text: "Save",
-				label: "Save settings",
-			},
-			{
-				candidateId: "c2",
-				role: "textbox",
-				name: "Email",
-				label: "Work email",
-				attributes: { placeholder: "name@example.com" },
-			},
-			{
-				candidateId: "c3",
-				role: "link",
-				name: "Learn more",
-				text: "Learn more",
-			},
-		];
-
-		expect(rankLocatorCandidates(candidates, { kind: "role", value: "button", name: "save" })[0].candidate.candidateId).toBe(
-			"c1",
-		);
-		expect(rankLocatorCandidates(candidates, { kind: "text", value: "learn more" })[0].candidate.candidateId).toBe(
-			"c3",
-		);
-		expect(rankLocatorCandidates(candidates, { kind: "label", value: "work email" })[0].candidate.candidateId).toBe(
-			"c2",
-		);
-	});
 });

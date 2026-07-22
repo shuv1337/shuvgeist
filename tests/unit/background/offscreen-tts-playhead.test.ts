@@ -38,7 +38,7 @@ class AudioMock {
 const synthesizeTtsMock = vi.fn();
 const executeMock = vi.fn();
 
-vi.mock("../../../src/tts/service.js", () => ({
+vi.mock("@shuvgeist/extension/tts/service", () => ({
 	synthesizeTts: synthesizeTtsMock,
 }));
 
@@ -49,10 +49,6 @@ vi.mock("@shuv1337/pi-web-ui", () => ({
 		execute = executeMock;
 		remove = vi.fn();
 	},
-}));
-
-vi.mock("../../../src/bridge/offscreen-runtime-providers.js", () => ({
-	buildOffscreenRuntimeProviders: () => [],
 }));
 
 describe("offscreen TTS playhead forwarding", () => {
@@ -78,7 +74,7 @@ describe("offscreen TTS playhead forwarding", () => {
 	});
 
 	it("forwards playhead updates while captioned audio is playing", async () => {
-		const offscreenModule = await import("../../../src/offscreen.js");
+		const offscreenModule = await import("@shuvgeist/extension/offscreen");
 		await offscreenModule.handleOffscreenTtsMessage({
 			type: "tts-offscreen-synthesize-captioned",
 			sessionId: "session-1",

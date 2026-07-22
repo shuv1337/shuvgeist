@@ -5,7 +5,7 @@ import {
 	resolveDefaultModel,
 	resolveProviderCredential,
 	resolveModelSpec,
-} from "../../src/sidepanel/model-resolution.js";
+} from "@shuvgeist/extension/sidepanel/model-resolution";
 
 function model(provider: string, id: string, baseUrl?: string): Model<any> {
 	return { provider, id, name: id, api: "openai-responses", input: ["text"], baseUrl } as Model<any>;

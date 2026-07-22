@@ -1,4 +1,4 @@
-import { Toast } from "../../../src/components/Toast.js";
+import { Toast } from "@shuvgeist/extension/components/Toast";
 
 describe("Toast", () => {
 	beforeEach(() => {
