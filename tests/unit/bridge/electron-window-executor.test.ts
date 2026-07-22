@@ -1,9 +1,20 @@
 import {
-		captureElectronWindowScreenshot,
-		assertElectronWindow,
-		evaluateElectronWindow,
-		type ElectronPageCdpClient,
-} from "../../../src/bridge/electron/window-executor.js";
+	assertElectronWindow,
+	captureElectronWindowScreenshot,
+	evaluateElectronWindow,
+	type ElectronPageAssertScope,
+	type ElectronPageCdpClient,
+} from "@shuvgeist/server/electron/window-executor";
+
+const pageAssertScope: ElectronPageAssertScope = {
+	target: {
+		kind: "electron-window",
+		sessionId: "e1",
+		windowRef: "w1",
+		targetId: "target-1",
+	},
+	navigationGeneration: 3,
+};
 
 function fakeClient(responses: unknown[]): ElectronPageCdpClient & { calls: Array<{ method: string; params?: unknown }> } {
 	const calls: Array<{ method: string; params?: unknown }> = [];
@@ -76,13 +87,13 @@ describe("electron window executor", () => {
 	it("runs renderer assertions through Runtime.evaluate", async () => {
 		const client = fakeClient([{ result: { value: { ok: true, message: "Text assertion passed", actual: "Save" } } }]);
 
-		await expect(assertElectronWindow(client, { kind: "text", text: "Save", timeoutMs: 0 })).resolves.toMatchObject({
+		await expect(assertElectronWindow(client, { kind: "text", text: "Save", timeoutMs: 0 }, pageAssertScope)).resolves.toMatchObject({
 			ok: true,
 			kind: "text",
 			message: "Text assertion passed",
 			actual: "Save",
-			tabId: -1,
-			frameId: 0,
+			target: pageAssertScope.target,
+			navigationGeneration: 3,
 		});
 		expect(client.calls[0]).toMatchObject({
 			method: "Runtime.evaluate",
@@ -96,7 +107,7 @@ describe("electron window executor", () => {
 	it("returns failing renderer assertion results", async () => {
 		const client = fakeClient([{ result: { value: { ok: false, message: "Text missing", actual: 0, expected: 1 } } }]);
 
-		await expect(assertElectronWindow(client, { kind: "text", text: "Save", timeoutMs: 0 })).resolves.toMatchObject({
+		await expect(assertElectronWindow(client, { kind: "text", text: "Save", timeoutMs: 0 }, pageAssertScope)).resolves.toMatchObject({
 			ok: false,
 			message: "Text missing",
 			actual: 0,

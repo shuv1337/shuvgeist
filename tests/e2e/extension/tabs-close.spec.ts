@@ -1,12 +1,17 @@
-import { expect, type Page, test } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 import { execFile as execFileCallback } from "node:child_process";
 import { createServer } from "node:http";
 import { createServer as createTcpServer } from "node:net";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import type { BridgeServerStatus } from "../../../src/bridge/protocol.js";
-import { BridgeServer } from "../../../src/bridge/server.js";
-import { launchExtensionContext, openExtensionPage } from "../fixtures/extension.js";
+import type { BridgeServerStatus } from "@shuvgeist/protocol/protocol";
+import { BridgeServer } from "@shuvgeist/server/server";
+import {
+	enableExtensionUserScripts,
+	launchExtensionContext,
+	openRealExtensionSidePanel,
+	waitForExtensionSidePanelRuntime,
+} from "../fixtures/extension.js";
 
 const execFile = promisify(execFileCallback);
 
@@ -42,22 +47,6 @@ async function getAvailablePort(): Promise<number> {
 			});
 		});
 	});
-}
-
-async function openBridgeSettings(page: Page): Promise<void> {
-	const continueAnyway = page.getByRole("button", { name: "Continue Anyway" });
-	if (await continueAnyway.isVisible().catch(() => false)) {
-		await continueAnyway.click();
-	}
-	await page.waitForTimeout(1500);
-	const setupProvider = page.getByRole("button", { name: "Bring API key" });
-	if (await setupProvider.isVisible().catch(() => false)) {
-		await setupProvider.click();
-	} else {
-		await expect(page.locator("button[title='Settings']")).toBeVisible({ timeout: 15_000 });
-		await page.click("button[title='Settings']");
-	}
-	await page.getByRole("button", { name: "Bridge" }).click();
 }
 
 async function createFixtureServer(): Promise<{ baseUrl: string; close: () => Promise<void> }> {
@@ -123,31 +112,37 @@ test("tabs close by id and filter leave sibling tabs alive", async () => {
 	const fixture = await createFixtureServer();
 	await bridge.start();
 
-	const { context, extensionId } = await launchExtensionContext();
-	const page = await openExtensionPage(context, extensionId, "sidepanel.html?new=true");
+	const extension = await launchExtensionContext();
 
 	try {
-		await openBridgeSettings(page);
-		const worker = context.serviceWorkers()[0] ?? (await context.waitForEvent("serviceworker"));
+		const worker = await enableExtensionUserScripts(extension.context, extension.extensionId);
 		await worker.evaluate(
-			async ({ port }) => {
+			async ({ port, token }: { port: number; token: string }) => {
 				await chrome.storage.local.set({
 					bridge_settings: {
 						enabled: true,
 						url: `ws://127.0.0.1:${port}/ws`,
-						token: "",
+						token,
 						sensitiveAccessEnabled: false,
 					},
 				});
 			},
-			{ port: bridgePort },
+			{ port: bridgePort, token: "playwright-token" },
 		);
-		await expect(page.locator("bridge-tab").getByText("Connected")).toBeVisible({ timeout: 15_000 });
+		const opened = await openRealExtensionSidePanel(extension.context, extension.extensionId, worker);
+		expect(opened.descriptor).toMatchObject({
+			clientId: "sidepanel",
+			windowId: opened.windowId,
+			target: { kind: "chrome-tab", tabRef: `window:${opened.windowId}` },
+		});
+		await waitForExtensionSidePanelRuntime(extension.context, opened.panel, opened.descriptor.sessionId);
 
 		const statusResult = await runCli(bridgePort, ["status", "--json"]);
 		expect(statusResult.code, statusResult.stderr).toBe(0);
 		const status = parseCliJson<BridgeServerStatus>(statusResult);
 		expect(status.extension.connected).toBe(true);
+		if (!status.extension.connected) throw new Error(JSON.stringify(status, null, 2));
+		expect(status.extension.windowId).toBe(opened.windowId);
 
 		const openTab = async (path: string) => {
 			const result = await runCli(bridgePort, ["navigate", `${fixture.baseUrl}${path}`, "--new-tab", "--json"]);
@@ -231,7 +226,7 @@ test("tabs close by id and filter leave sibling tabs alive", async () => {
 		expect(finalIds.has(idA)).toBe(false);
 		expect(finalIds.has(idC)).toBe(false);
 	} finally {
-		await context.close();
+		await extension.close();
 		await bridge.stop();
 		await fixture.close();
 	}

@@ -1,8 +1,8 @@
 // @vitest-environment happy-dom
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createScrollController } from "../../../src/tts/scroll-controller.js";
-import type { TokenMapEntry } from "../../../src/tts/reading-surface.js";
+import { createScrollController } from "@shuvgeist/extension/tts/scroll-controller";
+import type { TokenMapEntry } from "@shuvgeist/extension/tts/reading-surface";
 
 describe("scroll-controller", () => {
 	beforeEach(() => {

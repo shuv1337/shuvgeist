@@ -1,46 +1,60 @@
+import type {
+	ChromePageDriverRegistryLike,
+	ResolvedChromePageDriver,
+} from "@shuvgeist/extension/bridge/chrome-page-driver-registry";
+import type { PageDriver, PageRefActionRequest } from "@shuvgeist/driver/page-driver";
+import { ShownSkillsState } from "@shuvgeist/extension/utils/shown-skills";
+
 const navigateExecute = vi.fn();
+const navigateConstruct = vi.fn();
 const selectExecute = vi.fn();
 const extractExecute = vi.fn();
 const debuggerExecute = vi.fn();
 const runPageAssert = vi.fn();
-const pageSnapshotExecute = vi.fn();
-const capturePageSnapshot = vi.fn();
-const nativeClickAt = vi.fn();
-const nativeFillAt = vi.fn();
-const nativeProviderOptions = vi.fn();
 
-vi.mock("../../../src/tools/navigate.js", () => ({
+vi.mock("@shuvgeist/extension/tools/navigate", () => ({
 	NavigateTool: class {
+		constructor(options: unknown) {
+			navigateConstruct(options);
+		}
+
 		execute = navigateExecute;
 	},
 }));
 
-vi.mock("../../../src/tools/ask-user-which-element.js", () => ({
+vi.mock("@shuvgeist/extension/tools/ask-user-which-element", () => ({
 	AskUserWhichElementTool: class {
 		execute = selectExecute;
 	},
 }));
 
-vi.mock("../../../src/tools/extract-image.js", () => ({
+vi.mock("@shuvgeist/extension/tools/extract-image", () => ({
 	ExtractImageTool: class {
 		windowId?: number;
 		execute = extractExecute;
 	},
 }));
 
-vi.mock("../../../src/tools/page-assert.js", () => ({
+vi.mock("@shuvgeist/extension/tools/page-assert", () => ({
 	runPageAssert,
 	buildMainWorldExpressionAssertCode: vi.fn((expression: string) => `Boolean(${expression})`),
 	buildPageAssertResult: vi.fn(
 		(
 			params: { kind: string; timeoutMs?: number },
-			target: { tabId: number; frameId?: number },
+			scope: {
+				target: { kind: "chrome-tab"; tabId: number; frameId?: number };
+				navigationGeneration: number;
+				tabId: number;
+				frameId: number;
+			},
 			ok: boolean,
 			attempts: number,
 			_startedAt: number,
 			timeoutMs: number,
 			check: { message: string; actual?: unknown; expected?: unknown },
 		) => ({
+			target: scope.target,
+			navigationGeneration: scope.navigationGeneration,
 			ok,
 			kind: params.kind,
 			message: check.message,
@@ -49,66 +63,26 @@ vi.mock("../../../src/tools/page-assert.js", () => ({
 			attempts,
 			durationMs: 0,
 			timeoutMs,
-			tabId: target.tabId,
-			frameId: target.frameId ?? 0,
+			tabId: scope.tabId,
+			frameId: scope.frameId,
 		}),
 	),
 }));
 
-vi.mock("../../../src/tools/page-snapshot.js", () => ({
-	PageSnapshotTool: class {
-		windowId?: number;
-		execute = pageSnapshotExecute;
-	},
-	capturePageSnapshot,
-	buildRefLocatorBundle: vi.fn(
-		(entry: {
-			selectorCandidates?: string[];
-			role?: string;
-			name?: string;
-			text?: string;
-			label?: string;
-			tagName?: string;
-			attributes?: Record<string, string>;
-			ordinalPath?: number[];
-			boundingBox?: { x: number; y: number; width: number; height: number };
-		}) => ({
-		selectorCandidates: entry.selectorCandidates,
-		semantic: {
-			role: entry.role,
-			name: entry.name,
-			text: entry.text,
-			label: entry.label,
-		},
-		tagName: entry.tagName,
-		attributes: entry.attributes,
-		ordinalPath: entry.ordinalPath,
-		lastKnownBoundingBox: entry.boundingBox,
-	}),
-	),
+vi.mock("@shuvgeist/extension/tools/page-snapshot", () => ({
 	locateByRole: vi.fn(() => []),
 	locateByText: vi.fn(() => []),
 	locateByLabel: vi.fn(() => []),
 }));
 
-vi.mock("../../../src/tools/debugger.js", () => ({
+vi.mock("@shuvgeist/extension/tools/debugger", () => ({
 	DebuggerTool: class {
 		execute = debuggerExecute;
 		executeBridge = debuggerExecute;
 	},
 }));
 
-vi.mock("../../../src/tools/NativeInputEventsRuntimeProvider.js", () => ({
-	NativeInputEventsRuntimeProvider: class {
-		constructor(options: unknown) {
-			nativeProviderOptions(options);
-		}
-		clickAt = nativeClickAt;
-		fillAt = nativeFillAt;
-	},
-}));
-
-vi.mock("../../../src/tools/repl/runtime-providers.js", () => ({
+vi.mock("@shuvgeist/extension/tools/repl/runtime-providers", () => ({
 	BrowserJsRuntimeProvider: class {
 		constructor(_providers: unknown[]) {}
 	},
@@ -147,8 +121,104 @@ globalThis.chrome = {
 	},
 };
 
-const { BrowserCommandExecutor } = await import("../../../src/bridge/browser-command-executor.js");
-const { getBridgeCapabilities } = await import("../../../src/bridge/protocol.js");
+const { BrowserCommandExecutor } = await import("@shuvgeist/extension/bridge/browser-command-executor");
+const { getBridgeCapabilities } = await import("@shuvgeist/protocol/protocol");
+
+function createPageDriverHarness(tabId = 42, frameId = 0) {
+	const page = {
+		transport: "chrome-debugger" as const,
+		sessionId: "test-session",
+		windowId: "7",
+		pageId: String(tabId),
+	};
+	const scope = { page, navigationGeneration: 3 };
+	const entry = {
+		snapshotId: "login-input",
+		frameId,
+		selectorCandidates: ["#login"],
+		role: "textbox",
+		name: "Login",
+		text: "",
+		label: "Login",
+		tagName: "input",
+		attributes: { id: "login" },
+		ordinalPath: [1, 2, 3],
+		boundingBox: { x: 10, y: 20, width: 40, height: 20 },
+		interactive: true,
+	};
+	const snapshot = vi.fn(async () => ({
+		scope,
+		snapshot: {
+			url: "https://example.com/",
+			title: "Example",
+			generatedAt: 1,
+			totalCandidates: 1,
+			truncated: false,
+			entries: [entry],
+		},
+	}));
+	const actOnRef = vi.fn(async (request: PageRefActionRequest) => ({
+		ok: true as const,
+		scope,
+		refId: request.refId,
+		action: request.action,
+		match: { entry, score: 1, reasons: ["stable id"] },
+		execution:
+			request.action.mode === "cdp-trusted"
+				? { ok: true as const, kind: request.action.kind, point: { x: 30, y: 30 }, methods: ["Input"] }
+				: { ok: true as const, kind: request.action.kind, strategy: "fresh-snapshot" as const },
+	}));
+	const evaluate = vi.fn(async (request: { expression: string }) => ({
+		scope,
+		value: request.expression === "document.title" ? "Example" : undefined,
+		type: "string",
+	}));
+	const networkStats = () => ({
+		scope,
+		active: false,
+		requestCount: 0,
+		storedBodyBytes: 0,
+		evictedRequests: 0,
+	});
+	const driver = {
+		identity: page,
+		scope,
+		closed: false,
+		snapshot,
+		actOnRef,
+		evaluate,
+		dispose: vi.fn(async () => undefined),
+		network: {
+			start: vi.fn(async () => ({ ...networkStats(), active: true })),
+			stop: vi.fn(async () => networkStats()),
+			clear: vi.fn(networkStats),
+			stats: vi.fn(networkStats),
+			list: vi.fn(() => ({ scope, requests: [] })),
+			get: vi.fn(),
+			body: vi.fn(),
+			toCurl: vi.fn(),
+			dispose: vi.fn(async () => undefined),
+		},
+		screencast: {},
+	} as unknown as PageDriver;
+	const resolve = vi.fn(async (requestedTabId?: number) => {
+		const resolvedTabId = requestedTabId ?? tabId;
+		if (resolvedTabId !== tabId) throw new Error(`Unexpected test tab ${resolvedTabId}`);
+		return {
+			tabId,
+			tab: { id: tabId, windowId: 7, url: "https://example.com/" } as chrome.tabs.Tab,
+			source: "explicit" as const,
+			driver,
+		} satisfies ResolvedChromePageDriver;
+	});
+	const registry = {
+		resolve,
+		getByTabId: vi.fn(() => driver),
+		release: vi.fn(async () => undefined),
+		dispose: vi.fn(async () => undefined),
+	} satisfies ChromePageDriverRegistryLike;
+	return { registry, driver, snapshot, actOnRef, evaluate, entry, scope };
+}
 
 describe("BrowserCommandExecutor", () => {
 	it("gates record capabilities behind sensitive access", () => {
@@ -157,15 +227,11 @@ describe("BrowserCommandExecutor", () => {
 	});
 	beforeEach(() => {
 		navigateExecute.mockReset();
+		navigateConstruct.mockReset();
 		selectExecute.mockReset();
 		extractExecute.mockReset();
 		debuggerExecute.mockReset();
 		runPageAssert.mockReset();
-		pageSnapshotExecute.mockReset();
-		capturePageSnapshot.mockReset();
-		nativeClickAt.mockReset();
-		nativeFillAt.mockReset();
-		nativeProviderOptions.mockReset();
 		chrome.tabs.query.mockReset();
 		chrome.tabs.get.mockReset();
 		chrome.runtime.getURL.mockClear();
@@ -173,6 +239,35 @@ describe("BrowserCommandExecutor", () => {
 		chrome.userScripts.configureWorld.mockReset();
 		chrome.userScripts.execute.mockReset();
 		chrome.cookies.set.mockReset();
+	});
+
+	it("owns isolated shown-skill state per executor and honors explicit injection", async () => {
+		navigateExecute.mockResolvedValue({ details: { tabs: [] } });
+		const injectedState = new ShownSkillsState();
+		const first = new BrowserCommandExecutor({
+			windowId: 7,
+			sensitiveAccessEnabled: false,
+			shownSkillsState: injectedState,
+		});
+		const second = new BrowserCommandExecutor({ windowId: 8, sensitiveAccessEnabled: false });
+
+		await first.navigate({ listTabs: true });
+		await second.navigate({ listTabs: true });
+
+		expect(navigateConstruct).toHaveBeenNthCalledWith(1, {
+			windowId: 7,
+			shownSkillsState: injectedState,
+		});
+		expect(navigateConstruct).toHaveBeenNthCalledWith(
+			2,
+			expect.objectContaining({
+				windowId: 8,
+				shownSkillsState: expect.any(ShownSkillsState),
+			}),
+		);
+		const firstOptions = navigateConstruct.mock.calls[0]?.[0] as { shownSkillsState: ShownSkillsState };
+		const secondOptions = navigateConstruct.mock.calls[1]?.[0] as { shownSkillsState: ShownSkillsState };
+		expect(secondOptions.shownSkillsState).not.toBe(firstOptions.shownSkillsState);
 	});
 
 	it("returns status with active tab and capabilities", async () => {
@@ -212,7 +307,19 @@ describe("BrowserCommandExecutor", () => {
 				},
 			},
 		});
-		selectExecute.mockResolvedValue({ details: { selector: "#login" } });
+		selectExecute.mockResolvedValue({
+			details: {
+				selector: "#login",
+				xpath: "//*[@id='login']",
+				html: '<button id="login">Log in</button>',
+				tagName: "BUTTON",
+				attributes: { id: "login" },
+				text: "Log in",
+				boundingBox: { x: 10, y: 20, width: 80, height: 32 },
+				computedStyles: { display: "block" },
+				parentChain: ["body", "button#login"],
+			},
+		});
 		const replRouter = {
 			execute: vi.fn().mockResolvedValue({
 				output: "done",
@@ -252,12 +359,18 @@ describe("BrowserCommandExecutor", () => {
 		});
 		expect(extractExecute).toHaveBeenCalledWith("bridge", { mode: "screenshot", maxWidth: 500 }, undefined);
 
-		await expect(executor.dispatch("select_element", { message: "pick it" })).resolves.toEqual({ selector: "#login" });
+		await expect(executor.dispatch("select_element", { message: "pick it" })).resolves.toMatchObject({
+			selector: "#login",
+			tagName: "BUTTON",
+		});
 		expect(selectExecute).toHaveBeenCalledWith("bridge", { message: "pick it" }, undefined);
 	});
 
 	it("dispatches user-world page assertions", async () => {
+		const { registry } = createPageDriverHarness();
 		runPageAssert.mockResolvedValue({
+			target: { kind: "chrome-tab", tabId: 42, frameId: 3 },
+			navigationGeneration: 3,
 			ok: true,
 			kind: "text",
 			message: "Text assertion passed",
@@ -268,7 +381,11 @@ describe("BrowserCommandExecutor", () => {
 			frameId: 3,
 		});
 		chrome.tabs.query.mockResolvedValue([{ id: 42, url: "https://example.com" }]);
-		const executor = new BrowserCommandExecutor({ windowId: 7, sensitiveAccessEnabled: false });
+		const executor = new BrowserCommandExecutor({
+			windowId: 7,
+			sensitiveAccessEnabled: false,
+			pageDriverRegistry: registry,
+		});
 
 		await expect(
 			executor.dispatch("page_assert", { kind: "text", text: "Welcome", frameId: 3, timeoutMs: 100 }),
@@ -280,26 +397,39 @@ describe("BrowserCommandExecutor", () => {
 		});
 		expect(runPageAssert).toHaveBeenCalledWith(
 			{ kind: "text", text: "Welcome", frameId: 3, timeoutMs: 100 },
-			{ tabId: 42, frameId: 3 },
+			{
+				target: { kind: "chrome-tab", tabId: 42, frameId: 3 },
+				navigationGeneration: 3,
+				tabId: 42,
+				frameId: 3,
+			},
 			undefined,
 		);
 	});
 
-	it("gates eval/cookies by sensitive access and proxies debugger results", async () => {
+	it("gates sensitive commands and routes Chrome eval through PageDriver", async () => {
 		const disabled = new BrowserCommandExecutor({ windowId: 1, sensitiveAccessEnabled: false });
 		await expect(disabled.evalCode({ code: "document.title" })).rejects.toMatchObject({ code: -32008 });
 		await expect(disabled.cookies({})).rejects.toMatchObject({ code: -32008 });
 
-		debuggerExecute.mockResolvedValueOnce({ details: { value: "Example" } }).mockResolvedValueOnce({
-			details: { value: [{ name: "auth_token", value: "secret" }] },
+		const { registry, evaluate } = createPageDriverHarness();
+		debuggerExecute.mockResolvedValueOnce({ details: { value: [{ name: "auth_token", value: "secret" }] } });
+		const enabled = new BrowserCommandExecutor({
+			windowId: 1,
+			sensitiveAccessEnabled: true,
+			pageDriverRegistry: registry,
 		});
-		const enabled = new BrowserCommandExecutor({ windowId: 1, sensitiveAccessEnabled: true });
-		await expect(enabled.evalCode({ code: "document.title", tabId: 42, frameId: 7 })).resolves.toEqual({ value: "Example" });
-		expect(debuggerExecute).toHaveBeenCalledWith(
-			"bridge",
-			{ action: "eval", code: "document.title", tabId: 42, frameId: 7 },
-			undefined,
-			undefined,
+		await expect(enabled.evalCode({ code: "document.title", tabId: 42, frameId: 0 })).resolves.toEqual({
+			value: "Example",
+		});
+		expect(evaluate).toHaveBeenCalledWith({
+			expression: "document.title",
+			awaitPromise: true,
+			returnByValue: true,
+			signal: undefined,
+		});
+		await expect(enabled.evalCode({ code: "document.title", tabId: 42, frameId: 7 })).rejects.toThrow(
+			"Frame-targeted eval requires frame context support",
 		);
 		await expect(enabled.cookies({})).resolves.toEqual({ value: [{ name: "auth_token", value: "secret" }] });
 		expect(debuggerExecute).toHaveBeenCalledWith("bridge", { action: "cookies" }, undefined, undefined);
@@ -342,6 +472,8 @@ describe("BrowserCommandExecutor", () => {
 		const recordingRouter = {
 			start: vi.fn().mockResolvedValue({
 				ok: true,
+				target: { kind: "chrome-tab", tabId: 9, frameId: 0 },
+				navigationGeneration: 1,
 				recordingId: "rec-1",
 				tabId: 9,
 				startedAt: "2026-01-01T00:00:00.000Z",
@@ -350,17 +482,25 @@ describe("BrowserCommandExecutor", () => {
 			}),
 			stop: vi.fn().mockResolvedValue({
 				ok: true,
+				target: { kind: "chrome-tab", tabId: 9, frameId: 0 },
+				navigationGeneration: 1,
 				recordingId: "rec-1",
 				tabId: 9,
 				startedAt: "2026-01-01T00:00:00.000Z",
 				endedAt: "2026-01-01T00:00:01.000Z",
 				durationMs: 1000,
 				mimeType: "video/webm",
-				sizeBytes: 3,
-				chunkCount: 1,
+				sourceBytes: 3,
+				frameCount: 1,
 				outcome: "stopped_user",
 			}),
-			status: vi.fn().mockResolvedValue({ active: false }),
+			status: vi.fn().mockResolvedValue({
+				target: { kind: "chrome-tab", tabId: 9, frameId: 0 },
+				navigationGeneration: 1,
+				tabId: 9,
+				frameId: 0,
+				active: false,
+			}),
 		};
 		const executor = new BrowserCommandExecutor({
 			windowId: 7,
@@ -370,7 +510,7 @@ describe("BrowserCommandExecutor", () => {
 		await expect(executor.dispatch("record_start", { tabId: 9, maxDurationMs: 5000 })).resolves.toMatchObject({
 			recordingId: "rec-1",
 		});
-		await expect(executor.dispatch("record_status", { tabId: 9 })).resolves.toEqual({ active: false });
+		await expect(executor.dispatch("record_status", { tabId: 9 })).resolves.toMatchObject({ active: false });
 		await expect(executor.dispatch("record_stop", { tabId: 9 })).resolves.toMatchObject({ outcome: "stopped_user" });
 		expect(recordingRouter.start).toHaveBeenCalledWith({ tabId: 9, maxDurationMs: 5000 }, undefined, undefined);
 		expect(recordingRouter.status).toHaveBeenCalledWith({ tabId: 9 }, undefined);
@@ -460,135 +600,150 @@ describe("BrowserCommandExecutor", () => {
 		).rejects.toMatchObject({ code: -32005, message: "Session injection aborted" });
 	});
 
-	it("routes native ref click through debugger-backed input at frame coordinates", async () => {
-		const snapshot = buildRefSnapshot();
-		pageSnapshotExecute.mockResolvedValue({ details: snapshot });
-		capturePageSnapshot.mockResolvedValue(snapshot);
-		chrome.webNavigation.getAllFrames.mockResolvedValue([
-			{ frameId: 0, url: "https://example.com/" },
-			{ frameId: 7, parentFrameId: 0, url: "https://example.com/frame" },
-		]);
-		chrome.userScripts.execute.mockResolvedValueOnce([
-			{ result: { success: true, value: { ok: true, x: 120, y: 80 }, console: [] } },
-		]).mockResolvedValueOnce([
-			{ result: { success: true, value: { ok: true, x: 0, y: 0 }, console: [] } },
-		]);
-		nativeClickAt.mockResolvedValue({ success: true, x: 120, y: 80 });
-		const executor = new BrowserCommandExecutor({ windowId: 7, sensitiveAccessEnabled: false });
+	it("routes legacy native and trusted ref clicks through PageDriver trusted input", async () => {
+		const { registry, actOnRef } = createPageDriverHarness();
+		const executor = new BrowserCommandExecutor({
+			windowId: 7,
+			sensitiveAccessEnabled: false,
+			pageDriverRegistry: registry,
+		});
 
-		await executor.pageSnapshot({ tabId: 42, frameId: 7 });
+		await expect(executor.pageSnapshot({ tabId: 42 })).resolves.toMatchObject({
+			target: { kind: "chrome-tab", tabId: 42, frameId: 0 },
+			navigationGeneration: 3,
+		});
 		await expect(executor.refClick({ refId: "login-input", native: true })).resolves.toMatchObject({
 			ok: true,
-			refId: "login-input",
-			tabId: 42,
-			frameId: 7,
 			native: true,
-			point: { x: 120, y: 80 },
+			mode: "cdp-trusted",
+			execution: { methods: ["Input"] },
 		});
-
-		expect(chrome.userScripts.execute).toHaveBeenCalledWith(
-			expect.objectContaining({
-				target: { tabId: 42, frameIds: [7] },
-				worldId: "shuvgeist-native-ref-coordinate",
-			}),
+		await expect(executor.refClick({ refId: "login-input", trusted: true })).resolves.toMatchObject({
+			ok: true,
+			mode: "cdp-trusted",
+		});
+		expect(actOnRef).toHaveBeenNthCalledWith(
+			1,
+			expect.objectContaining({ action: expect.objectContaining({ kind: "click", mode: "cdp-trusted" }) }),
 		);
-		expect(nativeProviderOptions).toHaveBeenCalledWith(expect.objectContaining({ windowId: 7, tabId: 42, frameId: 7 }));
-		expect(nativeClickAt).toHaveBeenCalledWith({ x: 120, y: 80 });
-		expect(nativeFillAt).not.toHaveBeenCalled();
+		expect(actOnRef).toHaveBeenNthCalledWith(
+			2,
+			expect.objectContaining({ action: expect.objectContaining({ kind: "click", mode: "cdp-trusted" }) }),
+		);
 	});
 
-		it("keeps synthetic ref click unchanged when native is not requested", async () => {
-		const snapshot = buildRefSnapshot();
-		pageSnapshotExecute.mockResolvedValue({ details: snapshot });
-		capturePageSnapshot.mockResolvedValue(snapshot);
-		chrome.userScripts.execute.mockResolvedValue([{ result: { success: true, value: { ok: true }, console: [] } }]);
-		const executor = new BrowserCommandExecutor({ windowId: 7, sensitiveAccessEnabled: false });
-
-		await executor.pageSnapshot({ tabId: 42, frameId: 7 });
-		await expect(executor.refClick({ refId: "login-input" })).resolves.toMatchObject({
-			ok: true,
-			refId: "login-input",
-			tabId: 42,
-			frameId: 7,
-			selector: "#login",
+	it("routes default ref actions through the one-call DOM PageDriver path", async () => {
+		const { registry, actOnRef } = createPageDriverHarness();
+		const executor = new BrowserCommandExecutor({
+			windowId: 7,
+			sensitiveAccessEnabled: false,
+			pageDriverRegistry: registry,
 		});
+		await executor.pageSnapshot({ tabId: 42 });
 
-		expect(chrome.userScripts.execute).toHaveBeenCalledWith(
+		await expect(executor.refFill({ refId: "login-input", value: "alice" })).resolves.toMatchObject({
+			ok: true,
+			action: "fill",
+			mode: "dom",
+			execution: { strategy: "fresh-snapshot" },
+		});
+		expect(actOnRef).toHaveBeenCalledWith(
 			expect.objectContaining({
-				target: { tabId: 42, frameIds: [7] },
-				worldId: "shuvgeist-ref-action",
+				refId: "login-input",
+				action: { kind: "fill", mode: "dom", value: "alice" },
 			}),
 		);
-			expect(nativeClickAt).not.toHaveBeenCalled();
+	});
+
+	it("preserves Chrome subframe snapshot and ref routing through PageDriver", async () => {
+		const { registry, actOnRef } = createPageDriverHarness(42, 17);
+		const executor = new BrowserCommandExecutor({
+			windowId: 7,
+			sensitiveAccessEnabled: false,
+			pageDriverRegistry: registry,
 		});
 
-		it("invalidates stored refs after bridge-driven navigation before taking a new snapshot", async () => {
-			const snapshot = buildRefSnapshot();
-			pageSnapshotExecute.mockResolvedValue({ details: snapshot });
-			capturePageSnapshot.mockResolvedValue(snapshot);
-			navigateExecute.mockResolvedValue({ details: { finalUrl: "https://example.com/next", tabId: 42 } });
-			const executor = new BrowserCommandExecutor({ windowId: 7, sensitiveAccessEnabled: false });
+		await expect(executor.pageSnapshot({ tabId: 42, frameId: 17 })).resolves.toMatchObject({
+			target: { kind: "chrome-tab", tabId: 42, frameId: 17 },
+			frameId: 17,
+			entries: [{ frameId: 17 }],
+		});
+		await expect(executor.refClick({ tabId: 42, refId: "login-input", native: true })).resolves.toMatchObject({
+			ok: true,
+			mode: "cdp-trusted",
+			target: { kind: "chrome-tab", tabId: 42, frameId: 17 },
+			frameId: 17,
+		});
+		await expect(executor.refFill({ refId: "login-input", value: "alice" })).resolves.toMatchObject({
+			ok: true,
+			mode: "dom",
+			target: { kind: "chrome-tab", tabId: 42, frameId: 17 },
+			frameId: 17,
+		});
+		expect(actOnRef).toHaveBeenCalledWith(
+			expect.objectContaining({ action: expect.objectContaining({ kind: "click", mode: "cdp-trusted" }) }),
+		);
+		expect(actOnRef).toHaveBeenCalledWith(
+			expect.objectContaining({ action: expect.objectContaining({ kind: "fill", mode: "dom" }) }),
+		);
+	});
 
-			await executor.pageSnapshot({ tabId: 42, frameId: 7 });
-			capturePageSnapshot.mockClear();
-			await executor.navigate({ url: "https://example.com/next", tabId: 42 });
-
-			await expect(executor.refClick({ refId: "login-input" })).rejects.toThrow(
-				"Reference login-input does not exist",
-			);
-			expect(capturePageSnapshot).not.toHaveBeenCalled();
+	it("returns structured stale and ambiguous ref failures without unsafe selectors", async () => {
+		const { registry, actOnRef, scope } = createPageDriverHarness();
+		const executor = new BrowserCommandExecutor({
+			windowId: 7,
+			sensitiveAccessEnabled: false,
+			pageDriverRegistry: registry,
+		});
+		await executor.pageSnapshot({ tabId: 42 });
+		actOnRef.mockResolvedValueOnce({
+			ok: false,
+			scope,
+			refId: "login-input",
+			action: { kind: "click", mode: "dom" },
+			reason: "ambiguous_match",
+			message: "Reference matched two buttons equally",
 		});
 
-		it("invalidates stored refs for each closed tab id", async () => {
-			const snapshot = buildRefSnapshot();
-			pageSnapshotExecute.mockResolvedValue({ details: snapshot });
-			capturePageSnapshot.mockResolvedValue(snapshot);
-			navigateExecute.mockResolvedValue({
-				details: { closedTabIds: [42], skipped: [], dryRun: false, ok: true },
-			});
-			const executor = new BrowserCommandExecutor({ windowId: 7, sensitiveAccessEnabled: false });
+		const result = await executor.refClick({ refId: "login-input" });
+		expect(result).toMatchObject({ ok: false, reason: "ambiguous_match" });
+		expect(result).not.toHaveProperty("selector");
+		expect(result).not.toHaveProperty("point");
+	});
 
-			await executor.pageSnapshot({ tabId: 42, frameId: 7 });
-			await executor.navigate({ closeTab: 42 });
-
-			await expect(executor.refClick({ refId: "login-input" })).rejects.toThrow(
-				"Reference login-input does not exist",
-			);
+	it("releases closed tab drivers but preserves them for dry-run close", async () => {
+		const { registry } = createPageDriverHarness();
+		const executor = new BrowserCommandExecutor({
+			windowId: 7,
+			sensitiveAccessEnabled: false,
+			pageDriverRegistry: registry,
 		});
-
-		it("does not invalidate refs on dry-run close", async () => {
-			const snapshot = buildRefSnapshot();
-			pageSnapshotExecute.mockResolvedValue({ details: snapshot });
-			capturePageSnapshot.mockResolvedValue(snapshot);
-			chrome.userScripts.execute.mockResolvedValue([
-				{ result: { success: true, value: { ok: true }, console: [] } },
-			]);
-			navigateExecute.mockResolvedValue({
-				details: { closedTabIds: [42], skipped: [], dryRun: true, ok: true },
-			});
-			const executor = new BrowserCommandExecutor({ windowId: 7, sensitiveAccessEnabled: false });
-
-			await executor.pageSnapshot({ tabId: 42, frameId: 7 });
-			await executor.navigate({ closeTab: 42, dryRun: true });
-
-			await expect(executor.refClick({ refId: "login-input" })).resolves.toMatchObject({
-				ok: true,
-				refId: "login-input",
-			});
+		await executor.pageSnapshot({ tabId: 42 });
+		navigateExecute.mockResolvedValueOnce({
+			details: { closedTabIds: [42], skipped: [], dryRun: true, ok: true },
 		});
+		await executor.navigate({ closeTab: 42, dryRun: true });
+		expect(registry.release).not.toHaveBeenCalled();
 
-	it("waits for bounded same-tab stability when requested after ref click", async () => {
-		const snapshot = buildRefSnapshot();
-		pageSnapshotExecute.mockResolvedValue({ details: snapshot });
-		capturePageSnapshot.mockResolvedValue(snapshot);
-		chrome.userScripts.execute.mockResolvedValue([{ result: { success: true, value: { ok: true }, console: [] } }]);
+		navigateExecute.mockResolvedValueOnce({
+			details: { closedTabIds: [42], skipped: [], dryRun: false, ok: true },
+		});
+		await executor.navigate({ closeTab: 42 });
+		expect(registry.release).toHaveBeenCalledWith(42);
+	});
+
+	it("waits for bounded same-tab stability after a successful driver ref click", async () => {
+		const { registry } = createPageDriverHarness();
 		chrome.tabs.get.mockResolvedValue({ id: 42, url: "https://example.com/done", status: "complete" });
-		const executor = new BrowserCommandExecutor({ windowId: 7, sensitiveAccessEnabled: false });
+		const executor = new BrowserCommandExecutor({
+			windowId: 7,
+			sensitiveAccessEnabled: false,
+			pageDriverRegistry: registry,
+		});
+		await executor.pageSnapshot({ tabId: 42 });
 
-		await executor.pageSnapshot({ tabId: 42, frameId: 7 });
 		await expect(executor.refClick({ refId: "login-input", waitMs: 250 })).resolves.toMatchObject({
 			ok: true,
-			refId: "login-input",
 			wait: {
 				tabId: 42,
 				finalUrl: "https://example.com/done",
@@ -596,52 +751,21 @@ describe("BrowserCommandExecutor", () => {
 				timedOut: false,
 			},
 		});
-		expect(chrome.tabs.get).toHaveBeenCalledWith(42);
 	});
 
-	it("does not fall back to synthetic fill when native ref input fails", async () => {
-		const snapshot = buildRefSnapshot();
-		pageSnapshotExecute.mockResolvedValue({ details: snapshot });
-		capturePageSnapshot.mockResolvedValue(snapshot);
-		chrome.webNavigation.getAllFrames.mockResolvedValue([
-			{ frameId: 0, url: "https://example.com/" },
-			{ frameId: 7, parentFrameId: 0, url: "https://example.com/frame" },
-		]);
-		chrome.userScripts.execute.mockResolvedValueOnce([
-			{ result: { success: true, value: { ok: true, x: 120, y: 80 }, console: [] } },
-		]).mockResolvedValueOnce([
-			{ result: { success: true, value: { ok: true, x: 0, y: 0 }, console: [] } },
-		]);
-		nativeFillAt.mockRejectedValue(new Error("debugger attach failed"));
-		const executor = new BrowserCommandExecutor({ windowId: 7, sensitiveAccessEnabled: false });
+	it("fails closed when trusted input dispatch fails", async () => {
+		const { registry, actOnRef } = createPageDriverHarness();
+		actOnRef.mockRejectedValueOnce(new Error("debugger attach failed"));
+		const executor = new BrowserCommandExecutor({
+			windowId: 7,
+			sensitiveAccessEnabled: false,
+			pageDriverRegistry: registry,
+		});
+		await executor.pageSnapshot({ tabId: 42 });
 
-		await executor.pageSnapshot({ tabId: 42, frameId: 7 });
-		await expect(executor.refFill({ refId: "login-input", value: "alice", native: true })).rejects.toThrow(
-			"debugger attach failed",
-		);
-
-		expect(nativeFillAt).toHaveBeenCalledWith({ x: 120, y: 80 }, "alice");
-		expect(chrome.userScripts.execute).toHaveBeenCalledTimes(2);
-		expect(chrome.userScripts.execute).toHaveBeenCalledWith(
-			expect.objectContaining({ worldId: "shuvgeist-native-ref-coordinate" }),
-		);
+		await expect(
+			executor.refFill({ refId: "login-input", value: "alice", native: true }),
+		).rejects.toThrow("debugger attach failed");
+		expect(actOnRef).toHaveBeenCalledTimes(1);
 	});
 });
-
-function buildRefSnapshot() {
-	const entry = {
-		snapshotId: "login-input",
-		tabId: 42,
-		frameId: 7,
-		selectorCandidates: ["#login"],
-		role: "textbox",
-		name: "Login",
-		text: "",
-		label: "Login",
-		tagName: "input",
-		attributes: { id: "login" },
-		ordinalPath: [1, 2, 3],
-		boundingBox: { x: 10, y: 20, width: 40, height: 20 },
-	};
-	return { tabId: 42, frameId: 7, entries: [entry] };
-}

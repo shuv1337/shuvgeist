@@ -1,4 +1,4 @@
-import { expect, type Page, test } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 import { execFile as execFileCallback } from "node:child_process";
 import { mkdtemp, rm, stat } from "node:fs/promises";
 import { createServer } from "node:http";
@@ -6,11 +6,20 @@ import { createServer as createTcpServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import type { WebSocket } from "ws";
-import type { BridgeServerStatus, BridgeScreenshotResult, PageAssertResult } from "../../../src/bridge/protocol.js";
-import { BridgeServer } from "../../../src/bridge/server.js";
-import { openRegisteredClient, readMessage } from "../../helpers/ws-client.js";
-import { launchExtensionContext, openExtensionPage } from "../fixtures/extension.js";
+import type {
+	BridgeRequest,
+	BridgeServerStatus,
+	BridgeScreenshotResult,
+	PageAssertResult,
+} from "@shuvgeist/protocol/protocol";
+import { BridgeServer } from "@shuvgeist/server/server";
+import { BridgeResponseInbox, openRegisteredClient } from "../../helpers/ws-client.js";
+import {
+	enableExtensionUserScripts,
+	launchExtensionContext,
+	openRealExtensionSidePanel,
+	waitForExtensionSidePanelRuntime,
+} from "../fixtures/extension.js";
 
 const execFile = promisify(execFileCallback);
 
@@ -46,22 +55,6 @@ async function getAvailablePort(): Promise<number> {
 			});
 		});
 	});
-}
-
-async function openBridgeSettings(page: Page): Promise<void> {
-	const continueAnyway = page.getByRole("button", { name: "Continue Anyway" });
-	if (await continueAnyway.isVisible().catch(() => false)) {
-		await continueAnyway.click();
-	}
-	await page.waitForTimeout(1500);
-	const setupProvider = page.getByRole("button", { name: "Bring API key" });
-	if (await setupProvider.isVisible().catch(() => false)) {
-		await setupProvider.click();
-	} else {
-		await expect(page.locator("button[title='Settings']")).toBeVisible({ timeout: 15_000 });
-		await page.click("button[title='Settings']");
-	}
-	await page.getByRole("button", { name: "Bridge" }).click();
 }
 
 async function createFixtureServer(): Promise<{ baseUrl: string; close: () => Promise<void> }> {
@@ -199,16 +192,6 @@ async function createFixtureServer(): Promise<{ baseUrl: string; close: () => Pr
 	};
 }
 
-async function readResponseById<T>(ws: WebSocket, request: Record<string, unknown>): Promise<T> {
-	ws.send(JSON.stringify(request));
-	for (;;) {
-		const message = await readMessage<Record<string, unknown>>(ws);
-		if (message.id === request.id) {
-			return message as T;
-		}
-	}
-}
-
 async function runCli(bridgePort: number, args: string[]): Promise<CliRunResult> {
 	const cliPath = join(process.cwd(), "dist-cli", "shuvgeist.mjs");
 	const env = {
@@ -244,23 +227,30 @@ test("bridge supports deterministic assertions, workflow pinning, and native ifr
 	const fixture = await createFixtureServer();
 	await bridge.start();
 
-	const { context, extensionId } = await launchExtensionContext();
-	const page = await openExtensionPage(context, extensionId, "sidepanel.html?new=true");
+	const extension = await launchExtensionContext();
 
 	try {
-		await openBridgeSettings(page);
-		const worker = context.serviceWorkers()[0] ?? (await context.waitForEvent("serviceworker"));
-		await worker.evaluate(async ({ port }) => {
-			await chrome.storage.local.set({
+		const worker = await enableExtensionUserScripts(extension.context, extension.extensionId);
+		await worker.evaluate(
+			async ({ port, token }: { port: number; token: string }) => {
+				await chrome.storage.local.set({
 					bridge_settings: {
 						enabled: true,
 						url: `ws://127.0.0.1:${port}/ws`,
-						token: "",
+						token,
 						sensitiveAccessEnabled: true,
 					},
 				});
-			}, { port: bridgePort });
-		await expect(page.locator("bridge-tab").getByText("Connected")).toBeVisible({ timeout: 15_000 });
+			},
+			{ port: bridgePort, token: "playwright-token" },
+		);
+		const opened = await openRealExtensionSidePanel(extension.context, extension.extensionId, worker);
+		expect(opened.descriptor).toMatchObject({
+			clientId: "sidepanel",
+			windowId: opened.windowId,
+			target: { kind: "chrome-tab", tabRef: `window:${opened.windowId}` },
+		});
+		await waitForExtensionSidePanelRuntime(extension.context, opened.panel, opened.descriptor.sessionId);
 
 		const statusResult = await runCli(bridgePort, ["status", "--json"]);
 		expect(statusResult.code, statusResult.stderr).toBe(0);
@@ -270,6 +260,7 @@ test("bridge supports deterministic assertions, workflow pinning, and native ifr
 			throw new Error(JSON.stringify(status, null, 2));
 		}
 		expect(status.extension.capabilities).toContain("page_assert");
+		expect(status.extension.windowId).toBe(opened.windowId);
 
 		const cliNavigate = await runCli(bridgePort, ["navigate", fixture.baseUrl, "--new-tab", "--json"]);
 		expect(cliNavigate.code, cliNavigate.stderr).toBe(0);
@@ -357,10 +348,11 @@ test("bridge supports deterministic assertions, workflow pinning, and native ifr
 		const cli = await openRegisteredClient(`ws://127.0.0.1:${bridgePort}/ws`, "playwright-token", "cli", {
 			name: "deterministic-ci-playwright",
 		});
+		const inbox = new BridgeResponseInbox(cli.ws);
 		try {
-			const workflow = await readResponseById<{
+			const workflow = await inbox.send<{
 				result?: { ok: boolean; steps: Array<{ type: string; method?: string; status: string }> };
-			}>(cli.ws, {
+			}>({
 				id: 201,
 				method: "workflow_run",
 				params: {
@@ -380,7 +372,7 @@ test("bridge supports deterministic assertions, workflow pinning, and native ifr
 				]),
 			);
 
-			const navigate = await readResponseById<{ result?: { tabId: number } }>(cli.ws, {
+			const navigate = await inbox.send<{ result?: { tabId: number } }>({
 				id: 202,
 				method: "navigate",
 				params: { url: fixture.baseUrl, newTab: true },
@@ -388,32 +380,31 @@ test("bridge supports deterministic assertions, workflow pinning, and native ifr
 			const tabId = navigate.result?.tabId;
 			expect(tabId).toBeDefined();
 
-			const textAssert = await readResponseById<{ result?: { ok: boolean; kind: string } }>(cli.ws, {
+			const textAssert = await inbox.send<{ result?: { ok: boolean; kind: string } }>({
 				id: 203,
 				method: "page_assert",
 				params: { tabId, kind: "text", text: "Welcome to Shuvgeist CI", timeoutMs: 2_000 },
 			});
 			expect(textAssert.result).toMatchObject({ ok: true, kind: "text" });
 
-			const roleAssert = await readResponseById<{ result?: { ok: boolean; kind: string } }>(cli.ws, {
+			const roleAssert = await inbox.send<{ result?: { ok: boolean; kind: string } }>({
 				id: 204,
 				method: "page_assert",
 				params: { tabId, kind: "role", role: "button", name: "Continue", visible: true, timeoutMs: 2_000 },
 			});
 			expect(roleAssert.result).toMatchObject({ ok: true, kind: "role" });
 
-			const frameList = await readResponseById<{ result?: Array<{ frameId: number; parentFrameId: number; url: string }> }>(
-				cli.ws,
-				{
-					id: 205,
-					method: "frame_list",
-					params: { tabId },
-				},
-			);
+			const frameList = await inbox.send<{
+				result?: Array<{ frameId: number; parentFrameId: number; url: string }>;
+			}>({
+				id: 205,
+				method: "frame_list",
+				params: { tabId },
+			});
 			const childFrame = frameList.result?.find((frame) => frame.parentFrameId === 0 && frame.url.endsWith("/frame"));
 			expect(childFrame?.frameId).toBeDefined();
 
-			const located = await readResponseById<{ result?: Array<{ refId: string }> }>(cli.ws, {
+			const located = await inbox.send<{ result?: Array<{ refId: string }> }>({
 				id: 206,
 				method: "locate_by_role",
 				params: { tabId, frameId: childFrame?.frameId, role: "button", name: "Increment frame counter" },
@@ -423,7 +414,7 @@ test("bridge supports deterministic assertions, workflow pinning, and native ifr
 				throw new Error(JSON.stringify(located, null, 2));
 			}
 
-			const clicked = await readResponseById<{ result?: { ok: boolean; native?: boolean } }>(cli.ws, {
+			const clicked = await inbox.send<{ result?: { ok: boolean; native?: boolean } }>({
 				id: 207,
 				method: "ref_click",
 				params: { tabId, frameId: childFrame?.frameId, refId, native: true },
@@ -433,21 +424,25 @@ test("bridge supports deterministic assertions, workflow pinning, and native ifr
 			}
 			expect(clicked.result, JSON.stringify(clicked, null, 2)).toMatchObject({ ok: true, native: true });
 
-			const frameAssert = await readResponseById<{ result?: { ok: boolean; kind: string } }>(cli.ws, {
+			const frameAssert = await inbox.send<{ result?: { ok: boolean; kind: string } }>({
 				id: 208,
 				method: "page_assert",
 				params: { tabId, frameId: childFrame?.frameId, kind: "text", text: "Frame count: 1", timeoutMs: 2_000 },
 			});
 			expect(frameAssert.result).toMatchObject({ ok: true, kind: "text" });
 
-			const getFirstRef = async (id: number, method: string, params: Record<string, unknown>): Promise<string> => {
-				const response = await readResponseById<{ result?: Array<{ refId: string }> }>(cli.ws, { id, method, params });
+			const getFirstRef = async (
+				id: number,
+				method: BridgeRequest["method"],
+				params: Record<string, unknown>,
+			): Promise<string> => {
+				const response = await inbox.send<{ result?: Array<{ refId: string }> }>({ id, method, params });
 				const match = response.result?.[0]?.refId;
 				expect(match, JSON.stringify(response, null, 2)).toBeDefined();
 				return match ?? "";
 			};
 
-			const techmart = await readResponseById<{ result?: { tabId: number; finalUrl: string } }>(cli.ws, {
+			const techmart = await inbox.send<{ result?: { tabId: number; finalUrl: string } }>({
 				id: 220,
 				method: "navigate",
 				params: { url: `${fixture.baseUrl}/techmart`, newTab: true },
@@ -461,7 +456,7 @@ test("bridge supports deterministic assertions, workflow pinning, and native ifr
 				name: "Browse Catalog",
 			});
 			await expect(
-				readResponseById<{ result?: { ok: boolean; wait?: { finalUrl?: string; timedOut: boolean } } }>(cli.ws, {
+				inbox.send<{ result?: { ok: boolean; wait?: { finalUrl?: string; timedOut: boolean } } }>({
 					id: 222,
 					method: "ref_click",
 					params: { tabId: techmartTabId, refId: browseRef, waitMs: 2_000 },
@@ -470,14 +465,14 @@ test("bridge supports deterministic assertions, workflow pinning, and native ifr
 
 			const categoryRef = await getFirstRef(223, "locate_by_label", { tabId: techmartTabId, label: "Category" });
 			await expect(
-				readResponseById(cli.ws, {
+				inbox.send({
 					id: 224,
 					method: "ref_fill",
 					params: { tabId: techmartTabId, refId: categoryRef, value: "Electronics" },
 				}),
 			).resolves.toMatchObject({ result: { ok: true } });
 			await expect(
-				readResponseById(cli.ws, {
+				inbox.send({
 					id: 225,
 					method: "page_assert",
 					params: { tabId: techmartTabId, kind: "text", text: "Products: 4", timeoutMs: 2_000 },
@@ -485,13 +480,13 @@ test("bridge supports deterministic assertions, workflow pinning, and native ifr
 			).resolves.toMatchObject({ result: { ok: true } });
 
 			const sortRef = await getFirstRef(226, "locate_by_label", { tabId: techmartTabId, label: "Sort" });
-			await readResponseById(cli.ws, {
+			await inbox.send({
 				id: 227,
 				method: "ref_fill",
 				params: { tabId: techmartTabId, refId: sortRef, value: "Low to High" },
 			});
 			await expect(
-				readResponseById(cli.ws, {
+				inbox.send({
 					id: 228,
 					method: "page_assert",
 					params: { tabId: techmartTabId, kind: "text", text: "First product: USB-C Hub", timeoutMs: 2_000 },
@@ -504,7 +499,7 @@ test("bridge supports deterministic assertions, workflow pinning, and native ifr
 				name: "Select USB-C Hub",
 			});
 			await expect(
-				readResponseById<{ result?: { ok: boolean; wait?: { finalUrl?: string; timedOut: boolean } } }>(cli.ws, {
+				inbox.send<{ result?: { ok: boolean; wait?: { finalUrl?: string; timedOut: boolean } } }>({
 					id: 230,
 					method: "ref_click",
 					params: { tabId: techmartTabId, refId: selectRef, waitMs: 2_000 },
@@ -512,35 +507,36 @@ test("bridge supports deterministic assertions, workflow pinning, and native ifr
 			).resolves.toMatchObject({ result: { ok: true, wait: { timedOut: false } } });
 
 			const nameRef = await getFirstRef(231, "locate_by_label", { tabId: techmartTabId, label: "Name" });
-			await readResponseById(cli.ws, {
+			await inbox.send({
 				id: 232,
 				method: "ref_fill",
 				params: { tabId: techmartTabId, refId: nameRef, value: "Ada Lovelace" },
 			});
 			const emailRef = await getFirstRef(233, "locate_by_label", { tabId: techmartTabId, label: "Email" });
-			await readResponseById(cli.ws, {
+			await inbox.send({
 				id: 234,
 				method: "ref_fill",
 				params: { tabId: techmartTabId, refId: emailRef, value: "ada@example.com" },
 			});
 			const orderRef = await getFirstRef(235, "locate_by_role", { tabId: techmartTabId, role: "button", name: "Place Order" });
-			await readResponseById(cli.ws, {
+			await inbox.send({
 				id: 236,
 				method: "ref_click",
 				params: { tabId: techmartTabId, refId: orderRef, waitMs: 500 },
 			});
 			await expect(
-				readResponseById(cli.ws, {
+				inbox.send({
 					id: 237,
 					method: "page_assert",
 					params: { tabId: techmartTabId, kind: "text", text: "TM-57F23A8F", timeoutMs: 2_000 },
 				}),
 			).resolves.toMatchObject({ result: { ok: true } });
 		} finally {
+			inbox.dispose();
 			cli.ws.close();
 		}
 	} finally {
-		await context.close();
+		await extension.close();
 		await bridge.stop();
 		await fixture.close();
 	}

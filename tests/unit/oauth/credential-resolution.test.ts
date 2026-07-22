@@ -6,7 +6,7 @@ import {
 	serializeFreeTierCredential,
 	serializeOAuthCredentials,
 	type OAuthCredentials,
-} from "../../../src/oauth/index.js";
+} from "@shuvgeist/extension/oauth/index";
 
 describe("OAuth credential resolution", () => {
 	it("returns stored API keys unchanged", async () => {

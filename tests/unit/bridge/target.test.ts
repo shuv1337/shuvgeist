@@ -1,14 +1,21 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import {
 	defaultTarget,
 	formatTargetSpec,
 	parseTargetSpec,
 	requestTarget,
-} from "../../../src/bridge/target.js";
+} from "@shuvgeist/protocol/target";
 
 describe("bridge targets", () => {
 	it("defaults missing request targets to chrome", () => {
 		expect(defaultTarget()).toEqual({ kind: "chrome-tab" });
 		expect(requestTarget({})).toEqual({ kind: "chrome-tab" });
+	});
+
+	it("stays independent from the bridge protocol request graph", () => {
+		const source = readFileSync(resolve(process.cwd(), "packages/protocol/src/target.ts"), "utf8");
+		expect(source).not.toContain('from "./protocol.js"');
 	});
 
 	it("parses and formats chrome targets", () => {

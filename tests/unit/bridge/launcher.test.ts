@@ -1,5 +1,5 @@
 /**
- * Unit tests for the pure helpers exported by `src/bridge/launcher.ts`.
+ * Unit tests for the pure helpers exported by `packages/cli/src/launcher.ts`.
  *
  * The full `launchBrowser` flow spawns a real browser process and polls a
  * bridge HTTP endpoint, so it is exercised by integration / e2e tests rather
@@ -11,8 +11,18 @@
  * opt-out.
  */
 
-import { describe, expect, it } from "vitest";
-import { resolveUserDataDir } from "../../../src/bridge/launcher.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { launchBrowser, resolveUserDataDir } from "shuvgeist/launcher";
+import type {
+	DiscoveryDefaults,
+	DiscoveryOverrides,
+	NodeConfigOwner,
+	ResolvedDiscoveryCandidates,
+} from "@shuvgeist/server/node-config";
+
+afterEach(() => {
+	vi.unstubAllGlobals();
+});
 
 describe("resolveUserDataDir", () => {
 	it("defaults to an isolated, per-browser, persistent Shuvgeist-managed directory", () => {
@@ -57,5 +67,65 @@ describe("resolveUserDataDir", () => {
 		// silently on some platforms.
 		expect(resolved?.startsWith("/")).toBe(true);
 		expect(resolved?.endsWith("relative/path")).toBe(true);
+	});
+});
+
+describe("launchBrowser discovery ownership", () => {
+	it("threads one injected NodeConfigOwner through browser and extension discovery", async () => {
+		const browserPath = "/virtual/google-chrome";
+		const extensionPath = "/virtual/shuvgeist-extension";
+		const resolveDiscoveryCandidates = vi.fn(
+			(
+				flags: DiscoveryOverrides = {},
+				_defaults: DiscoveryDefaults = {},
+			): ResolvedDiscoveryCandidates => ({
+				browser: flags.browser ? [{ value: flags.browser, source: "flags" }] : [],
+				extensionPath: flags.extensionPath ? [{ value: flags.extensionPath, source: "flags" }] : [],
+			}),
+		);
+		const configOwner: Pick<NodeConfigOwner, "paths" | "resolveDiscoveryCandidates"> = {
+			paths: { bridge: "/virtual/bridge.json", discovery: "/virtual/discovery.json" },
+			resolveDiscoveryCandidates,
+		};
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () =>
+				new Response(JSON.stringify({ extension: { connected: true } }), {
+					status: 200,
+					headers: { "content-type": "application/json" },
+				}),
+			),
+		);
+
+		const result = await launchBrowser(
+			{ browser: browserPath, extensionPath },
+			"http://127.0.0.1:9222/status",
+			{
+				discovery: {
+					configOwner,
+					existsSync: (path) =>
+						path === browserPath || path === extensionPath || path === `${extensionPath}/manifest.json`,
+					readFileSync: (path) => {
+						if (path !== `${extensionPath}/manifest.json`) throw new Error(`Unexpected read: ${path}`);
+						return JSON.stringify({ name: "Shuvgeist" });
+					},
+					readdirSync: () => [],
+					resolvePath: (path) => path,
+					which: () => null,
+					developmentRoot: "/virtual/repo-without-build",
+					homeDirectory: "/virtual/home",
+				},
+			},
+		);
+
+		expect(result).toMatchObject({
+			pid: 0,
+			browserPath,
+			extensionPath,
+			browserName: "chrome",
+			alreadyRunning: true,
+		});
+		expect(resolveDiscoveryCandidates).toHaveBeenNthCalledWith(1, { browser: browserPath });
+		expect(resolveDiscoveryCandidates).toHaveBeenNthCalledWith(2, { extensionPath });
 	});
 });

@@ -2,10 +2,11 @@ import {
 	buildLockedSessionsMessage,
 	buildLockResult,
 	initializeOpenSidepanels,
+	markSidepanelClosed,
 	markSidepanelOpen,
 	releaseWindowState,
 	shouldCloseSidepanel,
-} from "../../../src/background-state.js";
+} from "@shuvgeist/extension/background-state";
 
 describe("background state helpers", () => {
 	it("initializes and marks sidepanels open", () => {
@@ -14,7 +15,7 @@ describe("background state helpers", () => {
 		expect([...markSidepanelOpen(initialized, 3)]).toEqual([1, 2, 3]);
 	});
 
-	it("grants and rejects locks based on open owners", () => {
+	it("keeps ownership independent of panel presentation and transfers a window between sessions", () => {
 		const openSidepanels = new Set([7]);
 		expect(buildLockResult({}, openSidepanels, "session-a", 7)).toEqual({
 			response: { type: "lockResult", sessionId: "session-a", success: true },
@@ -30,9 +31,17 @@ describe("background state helpers", () => {
 		});
 		expect(locked.nextLocks).toEqual({ "session-a": 7 });
 
-		const staleOwner = buildLockResult({ "session-a": 7 }, new Set([8]), "session-a", 8);
-		expect(staleOwner.response.success).toBe(true);
-		expect(staleOwner.nextLocks).toEqual({ "session-a": 8 });
+		const closedOwner = buildLockResult({ "session-a": 7 }, new Set([8]), "session-a", 8);
+		expect(closedOwner.response).toEqual({
+			type: "lockResult",
+			sessionId: "session-a",
+			success: false,
+			ownerWindowId: 7,
+		});
+		expect(closedOwner.nextLocks).toEqual({ "session-a": 7 });
+
+		const transferred = buildLockResult({ old: 7, other: 8 }, openSidepanels, "new", 7);
+		expect(transferred.nextLocks).toEqual({ other: 8, new: 7 });
 	});
 
 	it("releases window state and exposes lock snapshots", () => {
@@ -46,6 +55,10 @@ describe("background state helpers", () => {
 			openWindows: [2, 3],
 		});
 		expect(buildLockedSessionsMessage({ a: 1 })).toEqual({ type: "lockedSessions", locks: { a: 1 } });
+		expect(markSidepanelClosed({ sessionLocks: { a: 1 }, openWindows: [1, 2] }, 1)).toEqual({
+			sessionLocks: { a: 1 },
+			openWindows: [2],
+		});
 		expect(shouldCloseSidepanel(new Set([5]), 5)).toBe(true);
 		expect(shouldCloseSidepanel(new Set([5]), 6)).toBe(false);
 	});

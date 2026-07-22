@@ -3,36 +3,36 @@ const selectExecute = vi.fn();
 const extractExecute = vi.fn();
 const debuggerExecute = vi.fn();
 
-vi.mock("../../../src/tools/navigate.js", () => ({
+vi.mock("@shuvgeist/extension/tools/navigate", () => ({
 	NavigateTool: class {
 		execute = navigateExecute;
 	},
 }));
 
-vi.mock("../../../src/tools/ask-user-which-element.js", () => ({
+vi.mock("@shuvgeist/extension/tools/ask-user-which-element", () => ({
 	AskUserWhichElementTool: class {
 		execute = selectExecute;
 	},
 }));
 
-vi.mock("../../../src/tools/extract-image.js", () => ({
+vi.mock("@shuvgeist/extension/tools/extract-image", () => ({
 	ExtractImageTool: class {
 		windowId?: number;
 		execute = extractExecute;
 	},
 }));
 
-vi.mock("../../../src/tools/debugger.js", () => ({
+vi.mock("@shuvgeist/extension/tools/debugger", () => ({
 	DebuggerTool: class {
 		execute = debuggerExecute;
 	},
 }));
 
-vi.mock("../../../src/tools/NativeInputEventsRuntimeProvider.js", () => ({
+vi.mock("@shuvgeist/extension/tools/NativeInputEventsRuntimeProvider", () => ({
 	NativeInputEventsRuntimeProvider: class {},
 }));
 
-vi.mock("../../../src/tools/repl/runtime-providers.js", () => ({
+vi.mock("@shuvgeist/extension/tools/repl/runtime-providers", () => ({
 	BrowserJsRuntimeProvider: class {
 		constructor(_providers: unknown[]) {}
 	},
@@ -57,7 +57,7 @@ globalThis.chrome = {
 	},
 };
 
-const { BrowserCommandExecutor } = await import("../../../src/bridge/browser-command-executor.js");
+const { BrowserCommandExecutor } = await import("@shuvgeist/extension/bridge/browser-command-executor");
 
 describe("BrowserCommandExecutor branch coverage", () => {
 	beforeEach(() => {

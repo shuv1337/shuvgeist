@@ -1,4 +1,4 @@
-import { getFaviconUrl } from "../../../src/utils/favicon.js";
+import { getFaviconUrl } from "@shuvgeist/extension/utils/favicon";
 
 describe("getFaviconUrl", () => {
 	it("normalizes wildcard and path patterns", () => {

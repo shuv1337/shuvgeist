@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import { describe, expect, it } from "vitest";
-import { resolveTtsTextTarget } from "../../../src/tts/text-targeting.js";
+import { resolveTtsTextTarget } from "@shuvgeist/extension/tts/text-targeting";
 
 describe("tts text targeting", () => {
 	it("prefers the current text selection", () => {

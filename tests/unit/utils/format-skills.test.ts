@@ -1,13 +1,6 @@
-import type { Skill } from "../../../src/storage/stores/skills-store.js";
-
-const shownSkills = new Map<string, string>();
-
-vi.mock("../../../src/utils/shown-skills.js", () => ({
-	getShownSkills: () => shownSkills,
-	clearShownSkills: () => shownSkills.clear(),
-}));
-
-const { formatSkills } = await import("../../../src/utils/format-skills.js");
+import type { Skill } from "@shuvgeist/extension/storage/stores/skills-store";
+import { formatSkills } from "@shuvgeist/extension/utils/format-skills";
+import { ShownSkillsState } from "@shuvgeist/extension/utils/shown-skills";
 
 function makeSkill(name: string, lastUpdated: string): Skill {
 	return {
@@ -23,26 +16,28 @@ function makeSkill(name: string, lastUpdated: string): Skill {
 }
 
 describe("formatSkills", () => {
+	let shownSkillsState: ShownSkillsState;
+
 	beforeEach(() => {
-		shownSkills.clear();
+		shownSkillsState = new ShownSkillsState();
 	});
 
 	it("returns full details for new skills and marks them as shown", async () => {
 		const alpha = makeSkill("alpha", "2026-03-22T00:00:00.000Z");
-		const result = await formatSkills([alpha]);
+		const result = await formatSkills([alpha], { shownSkillsState });
 
 		expect(result.newOrUpdated).toEqual([alpha]);
 		expect(result.unchanged).toEqual([]);
 		expect(result.formattedText).toContain("New/Updated Skills");
 		expect(result.formattedText).toContain("alpha description");
-		expect(shownSkills.get("alpha")).toBe(alpha.lastUpdated);
+		expect(shownSkillsState.get("alpha")).toBe(alpha.lastUpdated);
 	});
 
 	it("returns compact output for previously seen skills", async () => {
 		const alpha = makeSkill("alpha", "2026-03-22T00:00:00.000Z");
-		shownSkills.set("alpha", alpha.lastUpdated);
+		shownSkillsState.set("alpha", alpha.lastUpdated);
 
-		const result = await formatSkills([alpha]);
+		const result = await formatSkills([alpha], { shownSkillsState });
 		expect(result.newOrUpdated).toEqual([]);
 		expect(result.unchanged).toEqual([alpha]);
 		expect(result.formattedText).toContain("Previously Seen Skills");
@@ -50,12 +45,37 @@ describe("formatSkills", () => {
 	});
 
 	it("returns a sentinel string when no skills exist", async () => {
-		await expect(formatSkills([]).then((result) => result.formattedText)).resolves.toBe("none found");
+		await expect(formatSkills([], { shownSkillsState }).then((result) => result.formattedText)).resolves.toBe(
+			"none found",
+		);
+	});
+
+	it("does not share shown skills between independent states", async () => {
+		const alpha = makeSkill("alpha", "2026-03-22T00:00:00.000Z");
+		const otherState = new ShownSkillsState();
+
+		await formatSkills([alpha], { shownSkillsState });
+		const sameSession = await formatSkills([alpha], { shownSkillsState });
+		const otherSession = await formatSkills([alpha], { shownSkillsState: otherState });
+
+		expect(sameSession.unchanged).toEqual([alpha]);
+		expect(otherSession.newOrUpdated).toEqual([alpha]);
+	});
+
+	it("uses fresh isolated state when callers do not provide one", async () => {
+		const alpha = makeSkill("alpha", "2026-03-22T00:00:00.000Z");
+
+		const first = await formatSkills([alpha]);
+		const second = await formatSkills([alpha]);
+
+		expect(first.newOrUpdated).toEqual([alpha]);
+		expect(second.newOrUpdated).toEqual([alpha]);
 	});
 
 	it("includes cross-session memories with full skill details", async () => {
 		const alpha = makeSkill("alpha", "2026-03-22T00:00:00.000Z");
 		const result = await formatSkills([alpha], {
+			shownSkillsState,
 			getMemoriesForSkill: async () => [
 				{
 					note: "Prefer the semantic compose button before fallback selectors.",

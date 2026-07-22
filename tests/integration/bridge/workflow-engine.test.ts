@@ -1,4 +1,4 @@
-import { WorkflowEngine } from "../../../src/tools/workflow-engine.js";
+import { WorkflowEngine } from "@shuvgeist/extension/tools/workflow-engine";
 
 describe("workflow engine integration", () => {
 	it("executes sequential, repeat, and each steps through dispatch", async () => {

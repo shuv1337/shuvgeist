@@ -18,7 +18,7 @@ Object.defineProperty(globalThis, "localStorage", {
 	configurable: true,
 });
 
-import { AboutTab } from "../../../src/dialogs/AboutTab.js";
+import { AboutTab } from "@shuvgeist/extension/dialogs/AboutTab";
 
 declare global {
 	var chrome: {

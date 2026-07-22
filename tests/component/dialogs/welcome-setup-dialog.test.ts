@@ -1,4 +1,4 @@
-import { WelcomeSetupDialog } from "../../../src/dialogs/WelcomeSetupDialog.js";
+import { WelcomeSetupDialog } from "@shuvgeist/extension/dialogs/WelcomeSetupDialog";
 
 describe("WelcomeSetupDialog", () => {
 	beforeEach(() => {

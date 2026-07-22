@@ -1,8 +1,8 @@
-import { UserScriptsPermissionDialog } from "../../../src/dialogs/UserScriptsPermissionDialog.js";
+import { UserScriptsPermissionDialog } from "@shuvgeist/extension/dialogs/UserScriptsPermissionDialog";
 
 const requestUserScriptsPermission = vi.fn();
 
-vi.mock("../../../src/tools/repl/userscripts-helpers.js", () => ({
+vi.mock("@shuvgeist/extension/tools/repl/userscripts-helpers", () => ({
 	requestUserScriptsPermission: () => requestUserScriptsPermission(),
 }));
 

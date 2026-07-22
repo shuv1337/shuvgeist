@@ -169,4 +169,4 @@ Use `isCustom: false` when:
 
 **Renderers:**
 - `pi-mono/packages/web-ui/src/tools/renderers/` - Built-in renderers
-- `shuvgeist/src/tools/` - Extension-specific renderers
+- `shuvgeist/packages/extension/src/tools/` - Extension-specific renderers

@@ -1,4 +1,4 @@
-import { isUsableWindowId, resolveTabTarget } from "../../../src/tools/helpers/browser-target.js";
+import { isUsableWindowId, resolveTabTarget } from "@shuvgeist/extension/tools/helpers/browser-target";
 
 declare global {
 	// biome-ignore lint/style/noVar: test-only global augmentation
@@ -90,13 +90,29 @@ describe("resolveTabTarget", () => {
 		expect(chrome.tabs.query).toHaveBeenCalledWith({ active: true, currentWindow: true });
 	});
 
-	it("uses chrome.tabs.get when explicit tabId is provided regardless of windowId", async () => {
+	it("uses chrome.tabs.get for an explicit tab when no usable window restriction exists", async () => {
 		chrome.tabs.get.mockResolvedValue({ id: 99, url: "https://example.com/x" });
 		const result = await resolveTabTarget({ tabId: 99, windowId: 0 });
 		expect(chrome.tabs.get).toHaveBeenCalledWith(99);
 		expect(chrome.tabs.query).not.toHaveBeenCalled();
 		expect(result.tabId).toBe(99);
 		expect(result.source).toBe("explicit");
+	});
+
+	it("rejects an explicit tab that belongs to another authorized window", async () => {
+		chrome.tabs.get.mockResolvedValue({ id: 99, windowId: 8, url: "https://example.com/x" });
+		await expect(resolveTabTarget({ tabId: 99, windowId: 7 })).rejects.toThrow(
+			"Tab 99 belongs to window 8, not authorized window 7",
+		);
+		expect(chrome.tabs.query).not.toHaveBeenCalled();
+	});
+
+	it("accepts an explicit tab in the authorized window", async () => {
+		chrome.tabs.get.mockResolvedValue({ id: 99, windowId: 7, url: "https://example.com/x" });
+		await expect(resolveTabTarget({ tabId: 99, windowId: 7 })).resolves.toMatchObject({
+			tabId: 99,
+			source: "explicit",
+		});
 	});
 
 	it("throws when no active tab can be resolved", async () => {

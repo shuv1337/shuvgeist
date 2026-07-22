@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { DEFAULT_TTS_SETTINGS } from "../../../src/tts/settings.js";
-import { buildProviderConfig, prepareTtsText, synthesizeTts } from "../../../src/tts/service.js";
+import { DEFAULT_TTS_SETTINGS } from "@shuvgeist/extension/tts/settings";
+import { buildProviderConfig, prepareTtsText, synthesizeTts } from "@shuvgeist/extension/tts/service";
 
 describe("tts service", () => {
 	it("clamps long text at 3000 characters", () => {

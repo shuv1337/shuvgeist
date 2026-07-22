@@ -1,0 +1,26 @@
+{
+	"name": "@shuvgeist/protocol",
+	"version": "2.0.0",
+	"private": true,
+	"type": "module",
+	"exports": {
+		".": "./src/protocol.ts",
+		"./cli-grammar": "./src/cli-grammar.ts",
+		"./command-catalog": "./src/command-catalog.ts",
+		"./command-schemas": "./src/command-schemas.ts",
+		"./logging": "./src/logging.ts",
+		"./protocol": "./src/protocol.ts",
+		"./skill-snapshot": "./src/skill-snapshot.ts",
+		"./target": "./src/target.ts",
+		"./telemetry": "./src/telemetry.ts",
+		"./version": "./src/version.ts",
+		"./workflow-schema": "./src/workflow-schema.ts"
+	},
+	"scripts": {
+		"typecheck": "tsc --noEmit -p tsconfig.json",
+		"test": "vitest run --config ../../vitest.config.ts --root ../.. tests/unit/bridge/command-catalog.test.ts tests/unit/bridge/command-schemas.test.ts tests/unit/bridge/protocol.test.ts tests/unit/bridge/skill-snapshot.test.ts tests/unit/bridge/target.test.ts tests/unit/bridge/telemetry.test.ts tests/unit/bridge/workflow-schema.test.ts tests/unit/guardrails/frontier-guardrails.test.ts"
+	},
+	"dependencies": {
+		"@sinclair/typebox": "^0.34.41"
+	}
+}

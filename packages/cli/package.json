@@ -1,0 +1,41 @@
+{
+	"name": "shuvgeist",
+	"version": "2.0.0",
+	"description": "CLI and local bridge tooling for Shuvgeist browser automation",
+	"type": "module",
+	"scripts": {
+		"build": "node ./scripts/build-cli.mjs",
+		"package": "npm run build && node ./scripts/package-cli.mjs && npm pack ../../dist-cli-package --pack-destination ../..",
+		"prepack": "node ./scripts/guard-direct-pack.mjs",
+		"typecheck": "tsc --noEmit -p tsconfig.json",
+		"test": "vitest run --config ../../vitest.config.ts --root ../.. tests/integration/bridge/headless-direct-cdp-runtime.test.ts tests/unit/bridge/bridge-autostart.test.ts tests/unit/bridge/cli-core-coverage.test.ts tests/unit/bridge/cli-core.test.ts tests/unit/bridge/cli-node-runtime.test.ts tests/unit/bridge/cli-status.test.ts tests/unit/bridge/direct-cdp-page-driver.test.ts tests/unit/bridge/direct-cdp-vision-baseline.test.ts tests/unit/bridge/discovery.test.ts tests/unit/bridge/launcher.test.ts tests/unit/bridge/skill-install.test.ts tests/unit/scripts/build-cli.test.ts tests/unit/scripts/package-cli.test.ts"
+	},
+	"exports": {
+		".": "./src/cli.ts",
+		"./bridge-autostart": "./src/bridge-autostart.ts",
+		"./cli-core": "./src/cli-core.ts",
+		"./cli-node-runtime": "./src/cli-node-runtime.ts",
+		"./cli-status": "./src/cli-status.ts",
+		"./discovery": "./src/discovery.ts",
+		"./direct-cdp-runtime": "./src/headless/direct-cdp-runtime.ts",
+		"./launcher": "./src/launcher.ts",
+		"./recording/ffmpeg-encoder": "./src/recording/ffmpeg-encoder.ts",
+		"./skill-install": "./src/skill-install.ts"
+	},
+	"dependencies": {
+		"@shuv1337/pi-agent-core": "0.78.0",
+		"@shuv1337/pi-ai": "0.78.0",
+		"@shuvgeist/driver": "2.0.0",
+		"@shuvgeist/protocol": "2.0.0",
+		"@shuvgeist/server": "2.0.0",
+		"ws": "^8.18.0"
+	},
+	"devDependencies": {
+		"@types/ws": "^8.18.1",
+		"esbuild": "^0.25.10"
+	},
+	"engines": {
+		"node": ">=22"
+	},
+	"license": "AGPL-3.0-only"
+}

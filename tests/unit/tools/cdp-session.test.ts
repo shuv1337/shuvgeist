@@ -4,7 +4,7 @@ import {
 	type ChromeDebuggerEventListener,
 	type ChromeDebuggerManagerLike,
 	type CdpSessionDomain,
-} from "../../../src/tools/helpers/cdp-session.js";
+} from "@shuvgeist/driver/cdp-session";
 
 class FakeChromeDebuggerManager implements ChromeDebuggerManagerLike {
 	readonly acquireCalls: Array<{ tabId: number; owner: string }> = [];

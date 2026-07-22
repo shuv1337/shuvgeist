@@ -1,12 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { bootstrapTokenIfNeeded, getBootstrapUrl } from "../../../src/bridge/bootstrap.js";
+import { bootstrapTokenIfNeeded, getBootstrapUrl } from "@shuvgeist/extension/bridge/bootstrap";
 import {
+	bridgeSettingsFromStorageChange,
 	getDefaultBridgeSettings,
 	loadBridgeSettings,
+	readBridgeSettings,
 	readLegacyBridgeSettingsFromIndexedDb,
 	settingsRequireReconnect,
-} from "../../../src/bridge/settings.js";
-import type { BridgeSettings } from "../../../src/bridge/internal-messages.js";
+	writeBridgeSettings,
+} from "@shuvgeist/extension/bridge/settings";
+import type { BridgeSettings } from "@shuvgeist/extension/bridge/internal-messages";
 
 describe("bridge settings helpers", () => {
 	beforeEach(() => {
@@ -24,6 +27,43 @@ describe("bridge settings helpers", () => {
 				ingestUrl: "http://localhost:3474",
 				publicIngestKey: "",
 			},
+		});
+	});
+
+	it("reads and writes normalized canonical settings through the typed adapter", async () => {
+		const adapter = {
+			getLocalSettings: vi.fn<() => Promise<BridgeSettings | undefined>>().mockResolvedValue({
+				...getDefaultBridgeSettings(),
+				url: "ws://bridge.example/ws",
+			}),
+			setLocalSettings: vi.fn<(_: BridgeSettings) => Promise<void>>().mockResolvedValue(undefined),
+		};
+
+		await expect(readBridgeSettings(adapter)).resolves.toMatchObject({ url: "ws://bridge.example/ws" });
+		await writeBridgeSettings(
+			{
+				...getDefaultBridgeSettings(),
+				enabled: false,
+			},
+			adapter,
+		);
+		expect(adapter.setLocalSettings).toHaveBeenCalledWith(
+			expect.objectContaining({ enabled: false, observability: getDefaultBridgeSettings().observability }),
+		);
+	});
+
+	it("normalizes canonical storage changes and ignores unrelated areas", () => {
+		const change = {
+			bridge_settings: {
+				newValue: { enabled: false, url: "ws://bridge.example/ws" },
+			},
+		} as unknown as Record<string, chrome.storage.StorageChange>;
+
+		expect(bridgeSettingsFromStorageChange(change, "sync")).toBeNull();
+		expect(bridgeSettingsFromStorageChange(change, "local")).toEqual({
+			...getDefaultBridgeSettings(),
+			enabled: false,
+			url: "ws://bridge.example/ws",
 		});
 	});
 

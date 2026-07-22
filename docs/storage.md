@@ -227,7 +227,7 @@ export class SessionsStore extends Store {
 
 ### SkillsStore
 
-Location: `src/storage/stores/skills-store.ts`
+Location: `packages/extension/src/storage/stores/skills-store.ts`
 
 Stores skill definitions including library code.
 
@@ -295,7 +295,7 @@ export function setAppStorage(storage: AppStorage): void {
 
 ### ShuvgeistAppStorage (extension)
 
-Location: `src/storage/app-storage.ts`
+Location: `packages/extension/src/storage/app-storage.ts`
 
 Extends base storage with Shuvgeist-specific stores.
 
@@ -540,5 +540,5 @@ export class DataExporter {
 - [stores/sessions-store.ts](../../pi-mono/packages/web-ui/src/storage/stores/sessions-store.ts)
 
 ### Extension Storage (shuvgeist)
-- [app-storage.ts](../src/storage/app-storage.ts) - ShuvgeistAppStorage
-- [stores/skills-store.ts](../src/storage/stores/skills-store.ts) - Skills repository
+- [app-storage.ts](../packages/extension/src/storage/app-storage.ts) - ShuvgeistAppStorage
+- [stores/skills-store.ts](../packages/extension/src/storage/stores/skills-store.ts) - Skills repository

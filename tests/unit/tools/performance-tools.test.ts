@@ -2,7 +2,7 @@ import {
 	PerformanceTools,
 	parsePerformanceMetrics,
 	summarizePerformanceMetrics,
-} from "../../../src/tools/performance-tools.js";
+} from "@shuvgeist/extension/tools/performance-tools";
 
 type DebuggerListener = (
 	method: string,

@@ -1,4 +1,4 @@
-import { MCP_TOOL_DEFINITIONS, mcpToolCallToBridgeRequest } from "../../../../src/bridge/mcp/tool-adapter.js";
+import { MCP_TOOL_DEFINITIONS, mcpToolCallToBridgeRequest } from "@shuvgeist/server/mcp/tool-adapter";
 
 describe("mcp tool adapter", () => {
 	it("exposes observe, act, extract, and agent tools", () => {

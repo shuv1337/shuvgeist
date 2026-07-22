@@ -1,375 +1,86 @@
-# Settings Storage
+# Settings and runtime state
 
-## Overview
+Shuvgeist separates durable user configuration from browser-session runtime state. Each durable key has a typed accessor; feature code should not call the underlying generic `SettingsStore` or loose Chrome storage keys directly.
 
-Shuvgeist uses a key-value settings store for application configuration like theme, proxy settings, and user preferences. Settings are stored in IndexedDB and accessed through the `SettingsStore` class from `@mariozechner/pi-web-ui`.
+## Persistent application settings
 
-## Architecture
+`packages/extension/src/storage/persistent-settings.ts` owns the typed schema for the IndexedDB `settings` object store in the `shuvgeist-storage` database.
 
-### SettingsStore
+| Keys | Owner | Default behavior |
+| --- | --- | --- |
+| `lastUsedModel` | `loadLastUsedModel()` / `saveLastUsedModel()` | Missing or invalid values return `null`. |
+| `agent.plannerValidator.enabled` | `loadPlannerValidatorEnabled()` | Enabled unless explicitly `false`. |
+| `proxy.enabled`, `proxy.url` | `loadProxySettings()` / `setProxyEnabled()` | Disabled unless explicitly enabled; an empty URL is treated as absent. |
+| `tts.*` | `packages/extension/src/tts/settings.ts` | Normalized through `DEFAULT_TTS_SETTINGS`. |
 
-The `SettingsStore` is a simple key-value store with no schema constraints. It provides basic CRUD operations:
+The proxy keys are retained for compatibility even though current startup explicitly disables the proxy in favor of declarative network rules. Do not remove them without a product decision.
 
-```typescript
-class SettingsStore {
-  async get<T>(key: string): Promise<T | null>
-  async set<T>(key: string, value: T): Promise<void>
-  async delete(key: string): Promise<void>
-  async list(): Promise<string[]>
-  async clear(): Promise<void>
-}
-```
-
-### Accessing Settings
-
-Settings are accessed through the global `AppStorage` instance:
+TTS updates use load-merge-normalize-persist semantics. A partial update changes only the supplied fields, including `readAlongEnabled`, and preserves all other stored values.
 
 ```typescript
-import { getShuvgeistStorage } from "./storage/app-storage.js";
+import { loadPlannerValidatorEnabled, saveLastUsedModel } from "./storage/persistent-settings.js";
+import { saveTtsSettings } from "./tts/settings.js";
 
-const storage = getShuvgeistStorage();
-
-// Read a setting
-const proxyEnabled = await storage.settings.get<boolean>("proxy.enabled");
-
-// Write a setting
-await storage.settings.set("proxy.enabled", true);
+const plannerValidatorEnabled = await loadPlannerValidatorEnabled();
+await saveLastUsedModel(model);
+await saveTtsSettings({ readAlongEnabled: false });
 ```
 
-## Storage Location
+Provider keys, custom providers, sessions, skills, costs, and memories have dedicated IndexedDB stores. They are durable application data, but they are not settings and are not part of this key-value schema.
 
-Settings are stored in IndexedDB under:
-- **Database**: `shuvgeist-storage`
-- **Store**: `settings`
-- **Key Path**: Out-of-line keys (keys stored separately from values)
+## Persistent developer settings
 
-## Existing Settings
+`packages/extension/src/storage/developer-settings.ts` owns the existing `chrome.storage.local` keys:
 
-### Proxy Configuration
+- `debuggerMode`
+- `showJsonMode`
 
-Used for CORS proxy support when making cross-origin requests:
+Both default to `false`. The accessors preserve the established storage keys so existing developer preferences continue to work.
 
-| Key | Type | Description |
-|-----|------|-------------|
-| `proxy.enabled` | `boolean` | Whether the CORS proxy is enabled |
-| `proxy.url` | `string` | URL of the CORS proxy server |
+## Bridge settings
 
-**Example:**
-```typescript
-// Check if proxy is enabled
-const proxyEnabled = await storage.settings.get<boolean>("proxy.enabled");
+Bridge settings remain a separate, typed `chrome.storage.local["bridge_settings"]` object owned by `packages/extension/src/bridge/settings.ts`. The background service worker requires this store before the sidepanel is open. The owner normalizes defaults and performs the one-time migration from legacy IndexedDB bridge keys.
 
-// Set proxy configuration
-await storage.settings.set("proxy.enabled", true);
-await storage.settings.set("proxy.url", "http://localhost:3001");
-```
+The stored object contains connection enablement, URL, token, sensitive-access policy, and observability settings. Components should use the bridge settings owner rather than introducing another mirror.
 
-### Last Used Model
+## Transient browser-session state
 
-Stores the most recently selected model to restore on new sessions:
+`packages/extension/src/bridge/runtime-state.ts` types the following `chrome.storage.session` values:
 
-| Key | Type |
-|-----|------|
-| `lastUsedModel` | `Model<any>` |
+- `agent_runtime_connections`
+- `agent_runtime_state`
+- `bridge_state`
+- `bridge_otel_state`
+- `bridge_electron_state`
+- `sidepanel_open_windows`
+- `session_locks`
 
-**Example:**
-```typescript
-// Save last used model
-await storage.settings.set("lastUsedModel", model);
+The background also owns `shuvgeist.sidepanelWindowAuthority.v2`, a typed, crash-safe authority record for real sidepanel documents. It is intentionally managed by `SidepanelWindowAuthority` rather than the general bridge runtime-state adapter because its prepare/confirm capability ratchet must fail closed on storage absence or persistence failure. Only verifier digests and lease metadata are persisted; raw continuation tokens remain in the sidepanel document's `sessionStorage`.
 
-// Restore last used model
-const model = await storage.settings.get<string>("lastUsedModel");
+These values survive Manifest V3 service-worker suspension but are cleared when the browser session ends. They are runtime coordination state, not persistent settings. The background service worker is their sole writer; sidepanel and settings components are read-only consumers.
 
-if (model) {
-  ...
-}
-```
+## Node-side configuration and operational state
 
-## Adding New Settings
+`~/.shuvgeist/bridge.json` is persistent CLI/server configuration for connection credentials, manual serve binding, Electron policy, and observability. `~/.shuvgeist/config.json` contains browser and extension discovery preferences. `SHUVGEIST_BRIDGE_CONFIG` and `SHUVGEIST_CONFIG` can override those paths. Their precedence, schema validation, and atomic writes belong to `packages/server/src/node-config.ts`, not the extension settings schema.
 
-### Step 1: Define Setting Keys
+The Node owner fails closed for unreadable files, malformed JSON, invalid known fields, and invalid explicit environment or flag values. Mutations merge into the parsed document, preserve unknown top-level and nested fields, write an exclusive temporary file in the same directory, and rename it into place. CLI connection, manual server binding, generated tokens, Node OTEL, Electron policy, doctor output, skill-snapshot placement, and browser/extension discovery all consume the same injected owner.
 
-Use dot notation for namespacing related settings:
+Client URLs and server binds are separate values. Persisted `url` config controls client connections only. Manual `serve` uses its own host/port precedence, while automatic startup first approves an exact `/ws` URL with no query or fragment, plain WebSocket transport, and one of the three canonical loopback hosts, then passes that endpoint as explicit source-server bind arguments. Remote, TLS, wildcard, non-canonical loopback, and custom-path endpoints are never auto-started.
 
-```typescript
-// Good: Namespaced keys
-"feature.enabled"
-"feature.config"
+Generated credentials are persisted only when they belong to the persisted/default client endpoint. If a flag or environment override selects a different local endpoint, its generated token remains process-local so it cannot overwrite an unrelated stored URL. Reusable or concurrent transient endpoints therefore require an explicit `--token` or `SHUVGEIST_BRIDGE_TOKEN`.
 
-// Bad: Flat keys
-"featureEnabled"
-"featureConfig"
-```
+Page snapshots, skill snapshots, PID files, browser profiles, and generated output files are caches or operational state rather than settings.
 
-### Step 2: Define TypeScript Type
+## Adding a durable setting
 
-Create a type for type-safe access:
+1. Add the key and value type to `PersistentAppSettingsSchema`.
+2. Add a domain accessor that owns validation and defaults.
+3. Use only that accessor from feature code.
+4. Add focused tests for missing, invalid, and existing values.
+5. Document migration behavior if an existing key or value shape changes.
 
-```typescript
-interface LastUsedModel {
-  provider: string;
-  modelId: string;
-}
-```
+## See also
 
-### Step 3: Read and Write Settings
-
-```typescript
-// Write
-const model = agent.state.model;
-await storage.settings.set("lastUsedModel.provider", model.provider);
-await storage.settings.set("lastUsedModel.modelId", model.id);
-
-// Read
-const provider = await storage.settings.get<string>("lastUsedModel.provider");
-const modelId = await storage.settings.get<string>("lastUsedModel.modelId");
-
-// Use with validation
-if (provider && modelId) {
-  try {
-    const model = getModel(provider as any, modelId);
-    // Use model
-  } catch (error) {
-    // Handle invalid model (provider/model no longer exists)
-    console.error("Failed to restore model:", error);
-  }
-}
-```
-
-## Best Practices
-
-### 1. Use Namespaced Keys
-
-Group related settings with dot notation:
-
-```typescript
-// ✅ Good
-await storage.settings.set("editor.fontSize", 14);
-await storage.settings.set("editor.theme", "dark");
-
-// ❌ Bad
-await storage.settings.set("editorFontSize", 14);
-await storage.settings.set("editorTheme", "dark");
-```
-
-### 2. Always Type Your Values
-
-Use TypeScript generics for type safety:
-
-```typescript
-// ✅ Good
-const enabled = await storage.settings.get<boolean>("feature.enabled");
-
-// ❌ Bad
-const enabled = await storage.settings.get("feature.enabled"); // Type: unknown
-```
-
-### 3. Handle Missing Values
-
-Settings return `null` if not found. Always handle this case:
-
-```typescript
-// ✅ Good
-const fontSize = await storage.settings.get<number>("editor.fontSize") ?? 14;
-
-// ✅ Also good
-const fontSize = await storage.settings.get<number>("editor.fontSize");
-if (fontSize === null) {
-  // Use default
-}
-
-// ❌ Bad
-const fontSize = await storage.settings.get<number>("editor.fontSize");
-document.body.style.fontSize = `${fontSize}px`; // Crashes if null
-```
-
-### 4. Validate Complex Settings
-
-For settings that depend on external state (like model IDs), validate after reading:
-
-```typescript
-const modelId = await storage.settings.get<string>("lastUsedModel.modelId");
-if (modelId) {
-  try {
-    // Validate the model still exists
-    const model = getModel(provider as any, modelId);
-    agent.setModel(model);
-  } catch (error) {
-    // Model no longer exists, fall back to default
-    console.warn("Saved model not found, using default");
-  }
-}
-```
-
-### 5. Provide Defaults
-
-Always have sensible defaults when settings are missing:
-
-```typescript
-const proxyUrl = await storage.settings.get<string>("proxy.url") ?? "http://localhost:3001";
-const proxyEnabled = await storage.settings.get<boolean>("proxy.enabled") ?? false;
-```
-
-## Settings vs. Session Data
-
-**When to use Settings:**
-- User preferences that persist across all sessions
-- Application configuration
-- Feature flags
-- UI preferences (theme, layout, etc.)
-
-**When to use Session Store:**
-- Conversation history
-- Model state for specific chat
-- Session-specific context
-- Messages and tool results
-
-**Example:**
-```typescript
-// ✅ Settings - Applies to all sessions
-await storage.settings.set("ui.theme", "dark");
-
-// ✅ Session - Specific to one conversation
-await storage.sessions.saveSession(sessionId, {
-  model: currentModel,
-  messages: chatHistory,
-});
-```
-
-## Debugging
-
-### List All Settings
-
-```typescript
-const keys = await storage.settings.list();
-console.log("All settings:", keys);
-
-for (const key of keys) {
-  const value = await storage.settings.get(key);
-  console.log(`${key}:`, value);
-}
-```
-
-### Clear All Settings
-
-```typescript
-// ⚠️ Warning: This deletes ALL settings
-await storage.settings.clear();
-```
-
-### Delete Specific Setting
-
-```typescript
-await storage.settings.delete("proxy.enabled");
-```
-
-## Testing
-
-When testing features that use settings:
-
-```typescript
-// Setup
-beforeEach(async () => {
-  await storage.settings.clear();
-  await storage.settings.set("test.value", 123);
-});
-
-// Teardown
-afterEach(async () => {
-  await storage.settings.clear();
-});
-
-// Test
-test("reads setting", async () => {
-  const value = await storage.settings.get<number>("test.value");
-  expect(value).toBe(123);
-});
-```
-
-## Migration
-
-If you need to rename or restructure settings:
-
-```typescript
-// Migration function
-async function migrateSettings() {
-  // Old key
-  const oldValue = await storage.settings.get("oldKey");
-
-  if (oldValue !== null) {
-    // Write to new key
-    await storage.settings.set("new.key", oldValue);
-
-    // Delete old key
-    await storage.settings.delete("oldKey");
-  }
-}
-
-// Run on app startup
-await migrateSettings();
-```
-
-## Common Patterns
-
-### Feature Flags
-
-```typescript
-async function isFeatureEnabled(feature: string): Promise<boolean> {
-  return await storage.settings.get<boolean>(`features.${feature}`) ?? false;
-}
-
-await storage.settings.set("features.betaMode", true);
-if (await isFeatureEnabled("betaMode")) {
-  // Enable beta features
-}
-```
-
-### User Preferences
-
-```typescript
-interface UserPreferences {
-  theme: "light" | "dark";
-  fontSize: number;
-  autoSave: boolean;
-}
-
-async function getUserPreferences(): Promise<UserPreferences> {
-  return {
-    theme: await storage.settings.get<"light" | "dark">("user.theme") ?? "dark",
-    fontSize: await storage.settings.get<number>("user.fontSize") ?? 14,
-    autoSave: await storage.settings.get<boolean>("user.autoSave") ?? true,
-  };
-}
-```
-
-### Configuration Objects
-
-For complex settings, store as a single JSON object:
-
-```typescript
-interface ProxyConfig {
-  enabled: boolean;
-  url: string;
-  timeout: number;
-}
-
-// Write
-const config: ProxyConfig = {
-  enabled: true,
-  url: "http://localhost:3001",
-  timeout: 5000,
-};
-await storage.settings.set("proxy", config);
-
-// Read
-const config = await storage.settings.get<ProxyConfig>("proxy");
-if (config) {
-  // Use config.enabled, config.url, etc.
-}
-```
-
-## See Also
-
-- [Storage Architecture](./storage.md) - Overall storage system
-- [Session Management](./storage.md#sessions) - Session-specific data
-- [Provider Keys](./storage.md#provider-keys) - API key storage
+- [Storage architecture](./storage.md)
+- [Bridge architecture](../ARCHITECTURE.md#bridge-runtime-ownership)
+- [Dependency policy](./dependencies.md)

@@ -1,4 +1,4 @@
-import { TaskRegistry } from "../../../src/bridge/task-registry.js";
+import { TaskRegistry } from "@shuvgeist/server/task-registry";
 
 describe("TaskRegistry", () => {
 	it("creates queued task handles with generated ids and metadata", () => {

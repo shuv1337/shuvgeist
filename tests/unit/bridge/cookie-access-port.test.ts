@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CookieAccessPort, parseNetscapeCookieFile } from "../../../src/bridge/cookie-access-port.js";
+import { CookieAccessPort, parseNetscapeCookieFile } from "@shuvgeist/server/cookie-access-port";
 
 const fixture = [
 	"# Netscape HTTP Cookie File",

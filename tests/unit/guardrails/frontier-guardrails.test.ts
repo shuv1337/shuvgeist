@@ -1,9 +1,9 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
-import { BridgeCommandCatalog } from "../../../src/bridge/command-catalog.js";
+import { BridgeCommandCatalog } from "@shuvgeist/protocol/command-catalog";
 
 const EXPECTED_BRIDGE_SURFACE = [
-	{ method: "status", route: "extension", capabilities: ["status"], cliCommands: ["status"], sensitive: false, write: false },
+	{ method: "status", route: "extension", capabilities: ["status"], cliCommands: [], sensitive: false, write: false },
 	{
 		method: "navigate",
 		route: "extension",
@@ -12,7 +12,14 @@ const EXPECTED_BRIDGE_SURFACE = [
 		sensitive: false,
 		write: false,
 	},
-	{ method: "repl", route: "extension", capabilities: ["repl"], cliCommands: ["repl"], sensitive: false, write: false },
+	{
+		method: "repl",
+		route: "extension",
+		capabilities: ["repl"],
+		cliCommands: ["repl"],
+		sensitive: false,
+		write: false,
+	},
 	{
 		method: "screenshot",
 		route: "extension",
@@ -474,7 +481,7 @@ const EXPECTED_BRIDGE_SURFACE = [
 		method: "skills_snapshot_status",
 		route: "server-local",
 		capabilities: ["skills_snapshot_status"],
-		cliCommands: ["electron"],
+		cliCommands: [],
 		sensitive: false,
 		write: false,
 	},
@@ -484,9 +491,18 @@ const PRODUCT_COPY_PATHS = [
 	"README.md",
 	"docs",
 	"site/src/frontend",
-	"src/dialogs",
-	"src/tutorials.ts",
-	"src/sidepanel.ts",
+	"packages/extension/src/dialogs",
+	"packages/extension/src/tutorials.ts",
+	"packages/extension/src/sidepanel.ts",
+];
+
+const RUNTIME_PACKAGE_MANIFESTS = [
+	"package.json",
+	"packages/protocol/package.json",
+	"packages/driver/package.json",
+	"packages/extension/package.json",
+	"packages/server/package.json",
+	"packages/cli/package.json",
 ];
 
 const FORBIDDEN_CLAIM_PATTERNS = [
@@ -551,11 +567,12 @@ describe("frontier guardrails", () => {
 	});
 
 	it("does not add mandatory analytics or telemetry dependencies", () => {
-		const packageJson = JSON.parse(readRepoFile("package.json")) as {
-			dependencies?: Record<string, string>;
-			devDependencies?: Record<string, string>;
-		};
-		const runtimeDeps = Object.keys(packageJson.dependencies ?? {});
+		const runtimeDeps = RUNTIME_PACKAGE_MANIFESTS.flatMap((manifestPath) => {
+			const packageJson = JSON.parse(readRepoFile(manifestPath)) as {
+				dependencies?: Record<string, string>;
+			};
+			return Object.keys(packageJson.dependencies ?? {});
+		});
 		expect(runtimeDeps).not.toEqual(expect.arrayContaining(FORBIDDEN_MANDATORY_EGRESS_DEPENDENCIES));
 	});
 

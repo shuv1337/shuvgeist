@@ -25,7 +25,7 @@ interface Skill {
 }
 ```
 
-**Implementation**: [src/storage/stores/skills-store.ts](../src/storage/stores/skills-store.ts)
+**Implementation**: [packages/extension/src/storage/stores/skills-store.ts](../packages/extension/src/storage/stores/skills-store.ts)
 
 ## Skill Tool API
 
@@ -116,7 +116,7 @@ Validates library syntax after patching. Safer than full update when changing sm
 await skill({ action: 'delete', name: 'old-skill' })
 ```
 
-**Implementation**: [src/tools/skill.ts](../src/tools/skill.ts:236-520)
+**Implementation**: [packages/extension/src/tools/skill.ts](../packages/extension/src/tools/skill.ts)
 
 ## Domain Matching
 
@@ -136,7 +136,7 @@ Skills use **minimatch** for glob pattern matching:
 ["youtube.com", "youtu.be"]  // Matches both domains
 ```
 
-**Implementation**: [src/storage/stores/skills-store.ts:81-112](../src/storage/stores/skills-store.ts)
+**Implementation**: [packages/extension/src/storage/stores/skills-store.ts](../packages/extension/src/storage/stores/skills-store.ts)
 
 ## Skill Lifecycle
 
@@ -199,7 +199,7 @@ Shuvgeist ships with built-in skills:
 - **whatsapp** - [Coming soon]
 - **youtube** - Video controls, info extraction, transcripts, comments
 
-**Implementation**: [src/tools/skill.ts:37-114](../src/tools/skill.ts)
+**Implementation**: [packages/extension/src/tools/skill.ts](../packages/extension/src/tools/skill.ts)
 
 ## Syntax Validation
 
@@ -210,7 +210,7 @@ Skills are validated before saving:
 - Timeout protection (5 seconds)
 - Errors reported to user with details
 
-**Implementation**: [src/tools/skill.ts:136-161](../src/tools/skill.ts)
+**Implementation**: [packages/extension/src/tools/skill.ts](../packages/extension/src/tools/skill.ts)
 
 ## Best Practices
 
@@ -238,25 +238,25 @@ Skills are validated before saving:
 
 Users can browse, view, edit, and delete skills via Settings → Skills tab.
 
-**Implementation**: [src/dialogs/SkillsTab.ts](../src/dialogs/SkillsTab.ts)
+**Implementation**: [packages/extension/src/dialogs/SkillsTab.ts](../packages/extension/src/dialogs/SkillsTab.ts)
 
 ### Skill Pills
 
 Skills are shown as interactive pills in the chat when relevant.
 
-**Implementation**: [src/components/SkillPill.ts](../src/components/SkillPill.ts)
+**Implementation**: [packages/extension/src/components/SkillPill.ts](../packages/extension/src/components/SkillPill.ts)
 
 ## Files
 
 **Core Implementation:**
-- [src/tools/skill.ts](../src/tools/skill.ts) - Skill tool, validation, defaults
-- [src/storage/stores/skills-store.ts](../src/storage/stores/skills-store.ts) - Storage and matching
-- [src/prompts/tool-prompts.ts](../src/prompts/tool-prompts.ts) - Tool description for LLM
+- [packages/extension/src/tools/skill.ts](../packages/extension/src/tools/skill.ts) - Skill tool, validation, defaults
+- [packages/extension/src/storage/stores/skills-store.ts](../packages/extension/src/storage/stores/skills-store.ts) - Storage and matching
+- [packages/extension/src/prompts/prompts.ts](../packages/extension/src/prompts/prompts.ts) - Tool description for LLM
 
 **UI Components:**
-- [src/dialogs/SkillsTab.ts](../src/dialogs/SkillsTab.ts) - Settings management UI
-- [src/dialogs/SkillDialog.ts](../src/dialogs/SkillDialog.ts) - Create/edit dialog
-- [src/components/SkillPill.ts](../src/components/SkillPill.ts) - Skill pills in chat
+- [packages/extension/src/dialogs/SkillsTab.ts](../packages/extension/src/dialogs/SkillsTab.ts) - Settings management UI
+- [packages/extension/src/dialogs/SkillDialog.ts](../packages/extension/src/dialogs/SkillDialog.ts) - Create/edit dialog
+- [packages/extension/src/components/SkillPill.ts](../packages/extension/src/components/SkillPill.ts) - Skill pills in chat
 
 **Tool Renderers:**
-- [src/tools/skill.ts:560-700](../src/tools/skill.ts) - Skill tool result renderer
+- [packages/extension/src/tools/skill-renderer.ts](../packages/extension/src/tools/skill-renderer.ts) - Skill tool result renderer

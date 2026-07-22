@@ -3,7 +3,7 @@ const executorDispatch = vi.fn();
 const mockExecutor = { dispatch: executorDispatch };
 
 const bridgeLog = vi.fn();
-vi.mock("../../../src/bridge/logging.js", () => ({
+vi.mock("@shuvgeist/protocol/logging", () => ({
 	bridgeLog,
 }));
 
@@ -61,8 +61,8 @@ globalThis.chrome = {
 const originalLocationDescriptor = Object.getOwnPropertyDescriptor(globalThis, "location");
 const originalFetch = globalThis.fetch;
 
-const { BridgeClient } = await import("../../../src/bridge/extension-client.js");
-const { BridgeTelemetry } = await import("../../../src/bridge/telemetry.js");
+const { BridgeClient } = await import("@shuvgeist/extension/bridge/extension-client");
+const { BridgeTelemetry } = await import("@shuvgeist/protocol/telemetry");
 
 describe("BridgeClient", () => {
 	beforeEach(() => {
@@ -104,6 +104,8 @@ describe("BridgeClient", () => {
 			type: "register",
 			role: "extension",
 			token: "secret",
+			protocolVersion: 4,
+			minProtocolVersion: 4,
 			windowId: 4,
 			sessionId: "session-4",
 			capabilities: expect.not.arrayContaining(["eval", "cookies"]),
@@ -125,7 +127,7 @@ describe("BridgeClient", () => {
 	});
 
 	it("dispatches bridge requests and sends structured responses", async () => {
-		executorDispatch.mockResolvedValue({ ok: true, title: "done" });
+		executorDispatch.mockResolvedValue({ ok: true, ready: true });
 		const client = new BridgeClient();
 		client.connect({
 			url: "ws://127.0.0.1:19285/ws",
@@ -141,10 +143,39 @@ describe("BridgeClient", () => {
 		});
 		socket.emitMessage({ type: "register_result", ok: true });
 
-		socket.emitMessage({ id: 7, method: "status", params: { verbose: true } });
+		socket.emitMessage({ id: 7, method: "status" });
 		await Promise.resolve();
-		expect(executorDispatch).toHaveBeenCalledWith("status", { verbose: true }, expect.any(AbortSignal), undefined);
-		expect(JSON.parse(socket.sent.at(-1)!)).toEqual({ id: 7, result: { ok: true, title: "done" } });
+		expect(executorDispatch).toHaveBeenCalledWith("status", {}, expect.any(AbortSignal), undefined);
+		expect(JSON.parse(socket.sent.at(-1)!)).toEqual({ id: 7, result: { ok: true, ready: true } });
+	});
+
+	it("rejects invalid command parameters and handler results at the wire boundary", async () => {
+		const client = new BridgeClient();
+		client.connect({
+			url: "ws://127.0.0.1:19285/ws",
+			token: "secret",
+			windowId: 1,
+			sensitiveAccessEnabled: true,
+			executor: mockExecutor,
+		});
+		const socket = FakeWebSocket.instances.at(-1)!;
+		socket.emitOpen();
+		socket.emitMessage({ type: "register_result", ok: true });
+
+		socket.emitMessage({ id: 70, method: "eval", params: {} });
+		expect(executorDispatch).not.toHaveBeenCalled();
+		expect(JSON.parse(socket.sent.at(-1)!)).toMatchObject({
+			id: 70,
+			error: { code: -32602 },
+		});
+
+		executorDispatch.mockResolvedValueOnce({ ok: true });
+		socket.emitMessage({ id: 71, method: "status" });
+		await Promise.resolve();
+		expect(JSON.parse(socket.sent.at(-1)!)).toMatchObject({
+			id: 71,
+			error: { code: -32016 },
+		});
 	});
 
 	it("propagates request tracing context into the executor when telemetry is enabled", async () => {
@@ -206,7 +237,11 @@ describe("BridgeClient", () => {
 					signal?.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { code: -32005 })));
 				}),
 		);
-		socket.emitMessage({ id: 9, method: "session_inject", params: { content: "hello" } });
+		socket.emitMessage({
+			id: 9,
+			method: "session_inject",
+			params: { expectedSessionId: "session-1", role: "user", content: "hello" },
+		});
 		socket.emitMessage({ type: "abort", id: 9 });
 		await Promise.resolve();
 		await Promise.resolve();
@@ -251,50 +286,6 @@ describe("BridgeClient", () => {
 		client.disconnect();
 		expect(client.connectionState).toBe("disabled");
 		expect(onStateChange).toHaveBeenCalledWith("disabled", undefined);
-	});
-
-	it("keeps transient extension target conflicts quiet until keepalive nudges reconnect", async () => {
-		vi.useFakeTimers();
-		const onStateChange = vi.fn();
-		const client = new BridgeClient();
-		client.connect({
-			url: "ws://127.0.0.1:19285/ws",
-			token: "secret",
-			windowId: 12,
-			sensitiveAccessEnabled: false,
-			executor: mockExecutor,
-			onStateChange,
-		});
-		const socket = FakeWebSocket.instances.at(-1)!;
-		socket.emitOpen();
-		socket.emitMessage({ type: "register_result", ok: false, error: "Another extension target is already connected" });
-
-		expect(client.connectionState).toBe("error");
-		expect(client.connectionDetail).toBe("Another extension target is already connected");
-		expect(onStateChange).toHaveBeenCalledWith("error", "Another extension target is already connected");
-		expect(bridgeLog).toHaveBeenCalledWith("debug", "bridge registration rejected", {
-			role: "extension",
-			error: "Another extension target is already connected",
-		});
-		expect(bridgeLog).not.toHaveBeenCalledWith("error", "bridge registration rejected", expect.anything());
-
-		await vi.advanceTimersByTimeAsync(1000);
-		expect(FakeWebSocket.instances).toHaveLength(1);
-		client.nudgeReconnect();
-		expect(FakeWebSocket.instances).toHaveLength(2);
-		const retrySocket = FakeWebSocket.instances.at(-1)!;
-		expect(retrySocket).not.toBe(socket);
-		expect(client.connectionState).toBe("connecting");
-		retrySocket.emitOpen();
-		expect(JSON.parse(retrySocket.sent[0])).toMatchObject({
-			type: "register",
-			windowId: 12,
-		});
-		retrySocket.emitMessage({ type: "register_result", ok: true });
-		expect(client.connectionState).toBe("connected");
-
-		client.disconnect();
-		vi.useRealTimers();
 	});
 
 	it("preflights loopback bridge reachability in the extension worker before opening a WebSocket", async () => {

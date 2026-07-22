@@ -8,7 +8,7 @@ import {
 	inspectElectronSourceLayout,
 	listElectronSource,
 	readElectronSourceFile,
-} from "../../../src/bridge/electron/source-inspector.js";
+} from "@shuvgeist/server/electron/source-inspector";
 
 function pickleString(value: string): Buffer {
 	const data = Buffer.from(value, "utf-8");

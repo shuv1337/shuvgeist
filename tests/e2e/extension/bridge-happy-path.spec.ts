@@ -1,12 +1,17 @@
 import { expect, test } from "@playwright/test";
-import { openRegisteredClient, readMessage } from "../../helpers/ws-client.js";
-import { BridgeServer } from "../../../src/bridge/server.js";
-import { launchExtensionContext, openExtensionPage } from "../fixtures/extension.js";
+import { createServer as createTcpServer } from "node:net";
+import { BridgeResponseInbox, openRegisteredClient } from "../../helpers/ws-client.js";
+import { BridgeServer } from "@shuvgeist/server/server";
+import {
+	enableExtensionUserScripts,
+	launchExtensionContext,
+	openRealExtensionSidePanel,
+	waitForExtensionSidePanelRuntime,
+} from "../fixtures/extension.js";
 
 async function getAvailablePort(): Promise<number> {
-	const net = await import("node:net");
 	return new Promise((resolve, reject) => {
-		const server = net.createServer();
+		const server = createTcpServer();
 		server.listen(0, "127.0.0.1", () => {
 			const address = server.address();
 			if (!address || typeof address === "string") {
@@ -22,60 +27,54 @@ async function getAvailablePort(): Promise<number> {
 	});
 }
 
-async function openBridgeSettings(page: import("@playwright/test").Page): Promise<void> {
-	const continueAnyway = page.getByRole("button", { name: "Continue Anyway" });
-	if (await continueAnyway.isVisible().catch(() => false)) {
-		await continueAnyway.click();
-	}
-	await page.waitForTimeout(1500);
-	const setupProvider = page.getByRole("button", { name: "Bring API key" });
-	if (await setupProvider.isVisible().catch(() => false)) {
-		await setupProvider.click();
-	} else {
-		await expect(page.locator("button[title='Settings']")).toBeVisible({ timeout: 15_000 });
-		await page.click("button[title='Settings']");
-	}
-	await page.getByRole("button", { name: "Bridge" }).click();
-}
-
 test("bridge happy path responds to CLI status", async () => {
 	const port = await getAvailablePort();
 	const bridge = new BridgeServer({ host: "127.0.0.1", port, token: "playwright-token" });
 	await bridge.start();
 
-	const { context, extensionId } = await launchExtensionContext();
-	const page = await openExtensionPage(context, extensionId, "sidepanel.html?new=true");
-	await openBridgeSettings(page);
-
-	const worker = context.serviceWorkers()[0] ?? (await context.waitForEvent("serviceworker"));
-	await worker.evaluate(async ({ bridgePort }) => {
-		await chrome.storage.local.set({
-			bridge_settings: {
-				enabled: true,
-				url: `ws://127.0.0.1:${bridgePort}/ws`,
-				token: "",
-				sensitiveAccessEnabled: false,
+	const extension = await launchExtensionContext();
+	try {
+		const worker = await enableExtensionUserScripts(extension.context, extension.extensionId);
+		await worker.evaluate(
+			async ({ bridgePort, token }: { bridgePort: number; token: string }) => {
+				await chrome.storage.local.set({
+					bridge_settings: {
+						enabled: true,
+						url: `ws://127.0.0.1:${bridgePort}/ws`,
+						token,
+						sensitiveAccessEnabled: false,
+					},
+				});
 			},
+			{ bridgePort: port, token: "playwright-token" },
+		);
+		const opened = await openRealExtensionSidePanel(extension.context, extension.extensionId, worker);
+		expect(opened.descriptor).toMatchObject({
+			clientId: "sidepanel",
+			windowId: opened.windowId,
+			target: { kind: "chrome-tab", tabRef: `window:${opened.windowId}` },
 		});
-	}, { bridgePort: port });
+		await waitForExtensionSidePanelRuntime(extension.context, opened.panel, opened.descriptor.sessionId);
 
-	await expect(page.locator("bridge-tab").getByText("Connected")).toBeVisible({ timeout: 15_000 });
+		const cli = await openRegisteredClient(`ws://127.0.0.1:${port}/ws`, "playwright-token", "cli", {
+			name: "playwright-cli",
+		});
+		const inbox = new BridgeResponseInbox(cli.ws);
+		try {
+			const response = await inbox.send<{ id?: number; result?: { ready?: boolean; windowId?: number } }>({
+				id: 101,
+				method: "status",
+			});
 
-	const cli = await openRegisteredClient(`ws://127.0.0.1:${port}/ws`, "playwright-token", "cli", {
-		name: "playwright-cli",
-	});
-	cli.ws.send(JSON.stringify({ id: 101, method: "status" }));
-
-	let response = await readMessage<{ id?: number; type?: string; result?: { ready?: boolean; windowId?: number } }>(cli.ws);
-	if (response.type === "event") {
-		response = await readMessage<{ id?: number; result?: { ready?: boolean; windowId?: number } }>(cli.ws);
+			expect(response.id).toBe(101);
+			expect(response.result?.ready).toBe(true);
+			expect(response.result?.windowId).toBe(opened.windowId);
+		} finally {
+			inbox.dispose();
+			cli.ws.close();
+		}
+	} finally {
+		await extension.close();
+		await bridge.stop();
 	}
-
-	expect(response.id).toBe(101);
-	expect(response.result?.ready).toBe(true);
-	expect(response.result?.windowId).toBeDefined();
-
-	cli.ws.close();
-	await context.close();
-	await bridge.stop();
 });

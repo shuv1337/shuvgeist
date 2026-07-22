@@ -1,4 +1,4 @@
-import { createAgentRuntime } from "../../../src/agent/runtime.js";
+import { createAgentRuntime } from "@shuvgeist/driver/runtime";
 
 const model = {
 	id: "test",

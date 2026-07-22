@@ -1,6 +1,6 @@
-import { buildFrameTree, resolveFrameTarget } from "../../../src/tools/helpers/frame-resolver.js";
-import { RefMap } from "../../../src/tools/helpers/ref-map.js";
-import { buildRefLocatorBundle, locateByRole, type PageSnapshotResult } from "../../../src/tools/page-snapshot.js";
+import { buildFrameTree, resolveFrameTarget } from "@shuvgeist/extension/tools/helpers/frame-resolver";
+import { RefMap } from "@shuvgeist/extension/tools/helpers/ref-map";
+import { buildRefLocatorBundle, locateByRole, type PageSnapshotResult } from "@shuvgeist/extension/tools/page-snapshot";
 
 describe("snapshot/frame helper integration", () => {
 	it("supports frame tree discovery and ref resolution from snapshot matches", () => {

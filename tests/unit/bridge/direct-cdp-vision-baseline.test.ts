@@ -5,9 +5,13 @@ import {
 	buildDirectCdpVisionCandidateBaseline,
 	modelSupportsVision,
 	type DirectCdpScreenshotResult,
-} from "../../../src/bridge/headless/direct-cdp-runtime.js";
-import type { CdpSession, CdpSessionCloseListener, CdpSessionEventListener } from "../../../src/tools/helpers/cdp-session.js";
-import type { PageSnapshotResult } from "../../../src/tools/page-snapshot.js";
+} from "shuvgeist/direct-cdp-runtime";
+import type {
+	CdpSession,
+	CdpSessionCloseListener,
+	CdpSessionEventListener,
+} from "@shuvgeist/driver/cdp-session";
+import type { PageSnapshotResult } from "@shuvgeist/extension/tools/page-snapshot";
 
 class RejectingCdpSession implements CdpSession {
 	readonly target = { kind: "electron-ws" as const, id: "unit" };

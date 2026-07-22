@@ -1,4 +1,4 @@
-import { buildFrameTree, listFrames, MAIN_FRAME_ID, resolveFrameTarget } from "../../../src/tools/helpers/frame-resolver.js";
+import { buildFrameTree, listFrames, MAIN_FRAME_ID, resolveFrameTarget } from "@shuvgeist/extension/tools/helpers/frame-resolver";
 
 declare global {
 	// biome-ignore lint/style/noVar: test-only global augmentation

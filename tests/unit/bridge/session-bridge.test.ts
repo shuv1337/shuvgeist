@@ -5,7 +5,7 @@ import {
 	projectSessionMessages,
 	summarizeForBridge,
 	type SessionSnapshot,
-} from "../../../src/bridge/session-bridge.js";
+} from "@shuvgeist/extension/bridge/session-bridge";
 
 function makeSnapshot(messages: ReturnType<typeof projectSessionMessages>): SessionSnapshot {
 	return {

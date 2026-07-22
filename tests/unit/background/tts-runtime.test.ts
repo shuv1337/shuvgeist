@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_TTS_SETTINGS } from "../../../src/tts/settings.js";
-import { createInitialTtsPlaybackState, reduceTtsPlaybackState } from "../../../src/tts/types.js";
+import { DEFAULT_TTS_SETTINGS } from "@shuvgeist/extension/tts/settings";
+import { createInitialTtsPlaybackState, reduceTtsPlaybackState } from "@shuvgeist/extension/tts/types";
 
 describe("tts runtime state", () => {
 	it("marks the overlay as open and disarmed when launched", () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { PerHandleWriteLock } from "../../../src/bridge/per-handle-write-lock.js";
-import { SessionRegistry } from "../../../src/bridge/session-registry.js";
+import { PerHandleWriteLock } from "@shuvgeist/server/per-handle-write-lock";
+import { SessionRegistry } from "@shuvgeist/server/session-registry";
 
 describe("PerHandleWriteLock", () => {
 	it("enforces one writer per handle until the holder is released", () => {

@@ -3,7 +3,7 @@ import { lstat, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-vi.mock("../../../src/bridge/electron/app-registry.js", () => ({
+vi.mock("@shuvgeist/server/electron/app-registry", () => ({
 	resolveElectronApp: (appRef: string) =>
 		appRef === "fixture"
 			? {
@@ -38,7 +38,7 @@ describe("electron auto attach", () => {
 	});
 
 	it("installs, reports, and uninstalls a reversible Linux shim idempotently", async () => {
-		const { manageElectronAutoAttach } = await import("../../../src/bridge/electron/auto-attach.js");
+		const { manageElectronAutoAttach } = await import("@shuvgeist/server/electron/auto-attach");
 
 		const installed = await manageElectronAutoAttach("install", "fixture");
 		expect(installed.installed).toBe(true);

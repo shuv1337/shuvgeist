@@ -1,4 +1,8 @@
-import { listElectronRegistryEntries, resolveElectronApp } from "../../../src/bridge/electron/app-registry.js";
+import {
+	KNOWN_ELECTRON_APPS,
+	listElectronRegistryEntries,
+	resolveElectronApp,
+} from "@shuvgeist/server/electron/app-registry";
 
 describe("electron app registry", () => {
 	it("resolves known app aliases to canonical ids", () => {
@@ -6,11 +10,31 @@ describe("electron app registry", () => {
 		expect(resolveElectronApp("code")?.id).toBe("com.microsoft.VSCode");
 		expect(resolveElectronApp("shuvscode")?.id).toBe("dev.shuv.shuvscode");
 		expect(resolveElectronApp("shuvcode")).toBeUndefined();
+		expect(resolveElectronApp("codex")?.id).toBe("codex-desktop");
+		expect(resolveElectronApp("codex-desktop")?.id).toBe("codex-desktop");
+		expect(resolveElectronApp("Codex")?.id).toBe("codex-desktop");
 		expect(resolveElectronApp("legcord")?.id).toBe("dev.legcord.Legcord");
 		expect(resolveElectronApp("signal")?.id).toBe("org.signal.Signal");
 		expect(resolveElectronApp("signal-desktop")?.id).toBe("org.signal.Signal");
 		expect(resolveElectronApp("obsidian")?.id).toBe("md.obsidian.Obsidian");
 		expect(resolveElectronApp("missing-app")).toBeUndefined();
+	});
+
+	it("includes the verified Codex Desktop Linux wrapper and runtime paths", () => {
+		const codex = KNOWN_ELECTRON_APPS.find((app) => app.id === "codex-desktop");
+
+		expect(codex).toMatchObject({
+			aliases: ["codex"],
+			displayName: "Codex Desktop",
+			singleInstance: "strict",
+			mainInspectSupported: false,
+		});
+		expect(codex?.paths.linux).toEqual(
+			expect.arrayContaining([
+				"/usr/bin/codex-desktop",
+				"/opt/codex-desktop/codex-desktop-electron",
+			]),
+		);
 	});
 
 	it("lists known apps with allowlist state", () => {
@@ -22,6 +46,11 @@ describe("electron app registry", () => {
 		expect(entries.find((entry) => entry.id === "dev.shuv.shuvscode")).toMatchObject({
 			allowed: true,
 			displayName: "shuvscode",
+		});
+		expect(entries.find((entry) => entry.id === "codex-desktop")).toMatchObject({
+			allowed: false,
+			displayName: "Codex Desktop",
+			aliases: ["codex"],
 		});
 		expect(entries.find((entry) => entry.id === "com.tinyspeck.slackmacgap")).toMatchObject({
 			allowed: false,

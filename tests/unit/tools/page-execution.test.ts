@@ -2,7 +2,7 @@ import {
 	executePageFunction,
 	PageExecutionAbortError,
 	PageExecutionTimeoutError,
-} from "../../../src/tools/helpers/page-execution.js";
+} from "@shuvgeist/extension/tools/helpers/page-execution";
 
 interface ChromeUserScriptsMock {
 	configureWorld: ReturnType<typeof vi.fn>;
@@ -218,6 +218,85 @@ describe("executePageFunction", () => {
 		);
 	});
 
+	it("uses a typed scripting fallback when the primary source is a compiled string", async () => {
+		const scriptingFallback = (value: number) => value + 1;
+		installChromeMock({
+			scripting: {
+				executeScript: vi.fn().mockImplementation(async (config) => [
+					{
+						result: config.func(config.args[0]),
+					},
+				]),
+			},
+		});
+
+		const result = await executePageFunction<number>({ tabId: 20 }, "async function() { return 0; }", {
+			worldId: "test-world",
+			args: [41],
+			scriptingFallback,
+		});
+
+		expect(result.value).toBe(42);
+		expect(scriptingMock().executeScript).toHaveBeenCalledWith(
+			expect.objectContaining({ func: scriptingFallback, args: [41] }),
+		);
+	});
+
+	it("installs a packaged runtime in the exact frame before invoking its typed scripting fallback", async () => {
+		const calls: Array<{ files?: string[]; func?: (...args: unknown[]) => unknown; args?: unknown[] }> = [];
+		const scriptingFallback = (value: number) => {
+			const runtime = (
+				globalThis as typeof globalThis & { __SHUVGEIST_TEST_RUNTIME__?: { run(input: number): number } }
+			).__SHUVGEIST_TEST_RUNTIME__;
+			if (!runtime) throw new Error("missing test runtime");
+			return runtime.run(value);
+		};
+		installChromeMock({
+			scripting: {
+				executeScript: vi.fn().mockImplementation(async (config) => {
+					calls.push(config);
+					if (config.files) {
+						(
+							globalThis as typeof globalThis & { __SHUVGEIST_TEST_RUNTIME__?: { run(input: number): number } }
+						).__SHUVGEIST_TEST_RUNTIME__ = { run: (input) => input + 2 };
+						return [];
+					}
+					return [{ result: config.func(...(config.args ?? [])) }];
+				}),
+			},
+		});
+
+		try {
+			const result = await executePageFunction<number>({ tabId: 20, frameId: 9 }, "compiled source", {
+				worldId: "test-world",
+				args: [999],
+				scriptingFiles: ["page-ref-action-runtime.js"],
+				scriptingFallback,
+				scriptingFallbackArgs: [40],
+			});
+
+			expect(result.value).toBe(42);
+			expect(calls).toHaveLength(2);
+			expect(calls[0]).toEqual(
+				expect.objectContaining({
+					target: { tabId: 20, frameIds: [9] },
+					files: ["page-ref-action-runtime.js"],
+					world: "ISOLATED",
+				}),
+			);
+			expect(calls[1]).toEqual(
+				expect.objectContaining({
+					target: { tabId: 20, frameIds: [9] },
+					func: scriptingFallback,
+					args: [40],
+				}),
+			);
+		} finally {
+			delete (globalThis as typeof globalThis & { __SHUVGEIST_TEST_RUNTIME__?: unknown })
+				.__SHUVGEIST_TEST_RUNTIME__;
+		}
+	});
+
 	it("targets a specific frame with the chrome.scripting fallback", async () => {
 		installChromeMock({
 			scripting: {
@@ -264,5 +343,4 @@ describe("executePageFunction", () => {
 		);
 		expect(scriptingMock().executeScript).not.toHaveBeenCalled();
 	});
-
 });

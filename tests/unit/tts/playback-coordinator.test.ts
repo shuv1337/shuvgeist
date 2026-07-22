@@ -1,10 +1,10 @@
 import {
 	selectTtsProviderForSpeak,
 	TtsPlaybackCoordinator,
-} from "../../../src/tts/playback-coordinator.js";
-import { DEFAULT_TTS_SETTINGS } from "../../../src/tts/settings.js";
-import type { TtsPortMessage, TtsSpeakPayload } from "../../../src/tts/internal-messages.js";
-import type { TtsPlayhead } from "../../../src/tts/types.js";
+} from "@shuvgeist/extension/tts/playback-coordinator";
+import { DEFAULT_TTS_SETTINGS } from "@shuvgeist/extension/tts/settings";
+import type { TtsPortMessage, TtsSpeakPayload } from "@shuvgeist/extension/tts/internal-messages";
+import type { TtsPlayhead } from "@shuvgeist/extension/tts/types";
 
 const pagePayload: TtsSpeakPayload = {
 	sessionId: "session-1",

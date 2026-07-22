@@ -1,10 +1,19 @@
 const executePageFunction = vi.hoisted(() => vi.fn());
 
-vi.mock("../../../src/tools/helpers/page-execution.js", () => ({
+vi.mock("@shuvgeist/extension/tools/helpers/page-execution", () => ({
 	executePageFunction,
 }));
 
-import { buildMainWorldExpressionAssertCode, runPageAssert } from "../../../src/tools/page-assert.js";
+import { buildMainWorldExpressionAssertCode, runPageAssert } from "@shuvgeist/extension/tools/page-assert";
+
+function chromeScope(tabId = 42, frameId = 0) {
+	return {
+		target: { kind: "chrome-tab" as const, tabId, frameId },
+		navigationGeneration: 3,
+		tabId,
+		frameId,
+	};
+}
 
 describe("page assertions", () => {
 	beforeEach(() => {
@@ -27,7 +36,7 @@ describe("page assertions", () => {
 		await expect(
 			runPageAssert(
 				{ kind: "selector", selector: "#ready", timeoutMs: 100, intervalMs: 1 },
-				{ tabId: 42, frameId: 7 },
+				chromeScope(42, 7),
 			),
 		).resolves.toMatchObject({
 			ok: true,
@@ -48,13 +57,15 @@ describe("page assertions", () => {
 		});
 
 		await expect(
-			runPageAssert({ kind: "text", text: "Welcome", timeoutMs: 1, intervalMs: 1 }, { tabId: 42 }),
+			runPageAssert({ kind: "text", text: "Welcome", timeoutMs: 1, intervalMs: 1 }, chromeScope()),
 		).resolves.toMatchObject({
 			ok: false,
 			kind: "text",
 			message: "Text was not found",
 			tabId: 42,
 			frameId: 0,
+			target: { kind: "chrome-tab", tabId: 42, frameId: 0 },
+			navigationGeneration: 3,
 		});
 	});
 

@@ -1,6 +1,6 @@
-import { BridgeRequestHandler, type BridgeRequestTargetHandle } from "../../../src/bridge/request-handler.js";
-import { ErrorCodes, type BridgeRequest } from "../../../src/bridge/protocol.js";
-import type { BridgeTarget } from "../../../src/bridge/target.js";
+import { BridgeRequestHandler, type BridgeRequestTargetHandle } from "@shuvgeist/server/request-handler";
+import { ErrorCodes, type BridgeRequest } from "@shuvgeist/protocol/protocol";
+import type { BridgeTarget } from "@shuvgeist/protocol/target";
 
 function request(method: BridgeRequest["method"], target?: BridgeTarget, params?: Record<string, unknown>): BridgeRequest {
 	return { id: 1, method, target, params };
@@ -52,6 +52,23 @@ describe("BridgeRequestHandler", () => {
 		});
 	});
 
+	it("normalizes omitted no-parameter commands and rejects invalid method parameters", () => {
+		const handler = new BridgeRequestHandler<BridgeRequestTargetHandle>();
+		const statusRequest = request("status");
+		const context = {
+			cliConnectionId: "cli-1",
+			resolveTarget: () => handle({ capabilities: ["status"] }),
+		};
+
+		expect(handler.plan(statusRequest, context)).toMatchObject({ type: "extension" });
+		expect(statusRequest.params).toEqual({});
+		expect(handler.plan(request("eval", undefined, {}), context)).toMatchObject({
+			type: "error",
+			reason: "invalid-params",
+			error: { code: ErrorCodes.INVALID_PARAMS },
+		});
+	});
+
 	it("returns target support and missing extension errors", () => {
 		const handler = new BridgeRequestHandler<BridgeRequestTargetHandle>();
 		const context = {
@@ -87,10 +104,13 @@ describe("BridgeRequestHandler", () => {
 
 	it("acquires writer locks for write methods and reports lock holders", () => {
 		const handler = new BridgeRequestHandler<BridgeRequestTargetHandle>();
-		const acquired = handler.plan(request("session_inject", undefined, { expectedSessionId: "s1" }), {
+		const acquired = handler.plan(
+			request("session_inject", undefined, { expectedSessionId: "s1", role: "user", content: "hello" }),
+			{
 			cliConnectionId: "cli-1",
 			resolveTarget: () => handle({ capabilities: ["session_inject"] }),
-		});
+			},
+		);
 
 		expect(acquired).toMatchObject({
 			type: "extension",
@@ -98,14 +118,17 @@ describe("BridgeRequestHandler", () => {
 			writeLockAcquired: true,
 		});
 
-		const locked = handler.plan(request("session_inject"), {
+		const locked = handler.plan(
+			request("session_inject", undefined, { expectedSessionId: "s1", role: "user", content: "hello" }),
+			{
 			cliConnectionId: "cli-2",
 			resolveTarget: () =>
 				handle({
 					capabilities: ["session_inject"],
 					acquireWriteLock: () => ({ ok: false, holder: { cliConnectionId: "cli-1", sessionId: "s1" } }),
 				}),
-		});
+			},
+		);
 
 		expect(locked).toMatchObject({
 			type: "error",

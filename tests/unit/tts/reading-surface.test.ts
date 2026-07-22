@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import { describe, expect, it } from "vitest";
-import { buildReadingSurface, disposeReadingSurface, findTokenAtCharIndex, findTokenForWord } from "../../../src/tts/reading-surface.js";
+import { buildReadingSurface, disposeReadingSurface, findTokenAtCharIndex, findTokenForWord } from "@shuvgeist/extension/tts/reading-surface";
 
 describe("reading-surface", () => {
 	it("builds a selection-bounded surface across multiple blocks", () => {

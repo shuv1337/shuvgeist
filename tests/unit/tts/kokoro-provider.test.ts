@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { listKokoroVoices, synthesizeWithKokoro } from "../../../src/tts/providers/kokoro.js";
+import { listKokoroVoices, synthesizeWithKokoro } from "@shuvgeist/extension/tts/providers/kokoro";
 
 describe("kokoro provider", () => {
 	it("falls back to the curated voice list when voice discovery fails", async () => {

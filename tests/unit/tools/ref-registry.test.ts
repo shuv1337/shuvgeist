@@ -1,4 +1,4 @@
-import { RefRegistry, type NavigationEventListener } from "../../../src/tools/helpers/ref-registry.js";
+import { RefRegistry, type NavigationEventListener } from "@shuvgeist/extension/tools/helpers/ref-registry";
 
 class ManualNavigationSource {
 	private listener?: NavigationEventListener;

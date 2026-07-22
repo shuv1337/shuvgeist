@@ -35,46 +35,34 @@ class AudioMock {
 	}
 }
 
-const executeMock = vi.fn();
-
-vi.mock("@shuv1337/pi-web-ui", () => ({
-	SandboxIframe: class {
-		style = { display: "" };
-		sandboxUrlProvider = () => "";
-		execute = executeMock;
-		remove = vi.fn();
-	},
-}));
-
-vi.mock("../../../src/bridge/offscreen-runtime-providers.js", () => ({
-	buildOffscreenRuntimeProviders: () => [],
-}));
+const runtimeMessageListeners: Array<(
+	message: Record<string, unknown>,
+	sender: chrome.runtime.MessageSender,
+	sendResponse: (response: unknown) => void,
+) => boolean | void> = [];
 
 describe("offscreen TTS ownership", () => {
 	beforeEach(() => {
 		vi.resetModules();
-		executeMock.mockReset().mockResolvedValue({
-			success: true,
-			console: [],
-			files: [],
-			returnValue: "ok",
-		});
+		runtimeMessageListeners.length = 0;
 		(globalThis as typeof globalThis & { Audio: typeof AudioMock }).Audio = AudioMock as unknown as typeof Audio;
 		(globalThis as typeof globalThis & { chrome: typeof chrome }).chrome = {
 			runtime: {
-				onMessage: { addListener: vi.fn() },
+				onMessage: {
+					addListener: vi.fn((listener) => runtimeMessageListeners.push(listener)),
+				},
 				getURL: vi.fn((value: string) => value),
 			},
 		} as unknown as typeof chrome;
 	});
 
-	it("keeps the shared TTS controller alive across REPL teardown", async () => {
+	it("keeps the shared TTS controller alive across offscreen runtime keepalives", async () => {
 		const createObjectURL = vi.fn(() => "blob:tts");
 		const revokeObjectURL = vi.fn();
 		globalThis.URL.createObjectURL = createObjectURL;
 		globalThis.URL.revokeObjectURL = revokeObjectURL;
 
-		const offscreenModule = await import("../../../src/offscreen.js");
+		const offscreenModule = await import("@shuvgeist/extension/offscreen");
 		await offscreenModule.handleOffscreenTtsMessage({
 			type: "tts-offscreen-synthesize",
 			provider: "kokoro",
@@ -92,8 +80,9 @@ describe("offscreen TTS ownership", () => {
 
 		const controllerBefore = window.__shuvgeistTtsController;
 		expect(controllerBefore).toBeDefined();
-
-		await offscreenModule.executeRepl("return 1", "test");
+		const listener = runtimeMessageListeners[0];
+		expect(listener).toBeDefined();
+		listener?.({ type: "bridge-keepalive-ping" }, {}, vi.fn());
 
 		expect(window.__shuvgeistTtsController).toBe(controllerBefore);
 		expect(revokeObjectURL).not.toHaveBeenCalled();

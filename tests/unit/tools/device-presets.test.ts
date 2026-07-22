@@ -2,7 +2,7 @@ import {
 	DevicePresetController,
 	resolveDevicePreset,
 	type DeviceEmulationRequest,
-} from "../../../src/tools/device-presets.js";
+} from "@shuvgeist/extension/tools/device-presets";
 
 class FakeDebuggerManager {
 	acquire = vi.fn(async (_tabId: number, _owner: string) => undefined);

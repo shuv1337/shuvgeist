@@ -1,0 +1,45 @@
+{
+	"name": "@shuvgeist/driver",
+	"version": "2.0.0",
+	"private": true,
+	"type": "module",
+	"exports": {
+		".": "./src/page-driver.ts",
+		"./cdp-session": "./src/cdp-session.ts",
+		"./driver-artifacts-generated": "./src/injected/driver-artifacts.generated.ts",
+		"./injected-contracts": "./src/injected/contracts.ts",
+		"./injected-invocation": "./src/injected/invocation.ts",
+		"./injected-page-ref-action": "./src/injected/page-ref-action.ts",
+		"./injected-snapshot": "./src/injected/snapshot.ts",
+		"./locator-scoring": "./src/locator-scoring.ts",
+		"./page-action-runtime": "./src/page-action-runtime.ts",
+		"./page-driver": "./src/page-driver.ts",
+		"./page-driver-bindings": "./src/page-driver-bindings.ts",
+		"./page-driver-identity": "./src/page-driver-identity.ts",
+		"./page-driver-results": "./src/page-driver-results.ts",
+		"./page-driver-wire": "./src/page-driver-wire.ts",
+		"./page-network-engine": "./src/page-network-engine.ts",
+		"./page-ref-engine": "./src/page-ref-engine.ts",
+		"./page-screencast-engine": "./src/page-screencast-engine.ts",
+		"./page-snapshot-domain": "./src/page-snapshot-domain.ts",
+		"./page-trusted-input": "./src/page-trusted-input.ts",
+		"./planner-validator": "./src/planner-validator.ts",
+		"./runtime": "./src/runtime.ts",
+		"./snapshot-page-script": "./src/snapshot-page-script.ts",
+		"./trusted-input-provider": "./src/trusted-input-provider.ts",
+		"./websocket-cdp-session": "./src/websocket-cdp-session.ts"
+	},
+	"scripts": {
+		"typecheck": "tsc --noEmit -p tsconfig.json",
+		"test": "vitest run --config ../../vitest.config.ts --root ../.. tests/unit/agent/runtime.test.ts tests/unit/agent/planner-validator.test.ts tests/unit/bridge/electron-cdp-session.test.ts tests/unit/bridge/trusted-input-provider.test.ts tests/unit/injected/page-ref-action.test.ts tests/unit/tools/cdp-session.test.ts tests/unit/tools/locator-scoring.test.ts tests/unit/tools/page-action-runtime.test.ts tests/unit/tools/page-capture-engines.test.ts tests/unit/tools/page-driver.test.ts tests/unit/tools/page-trusted-input.test.ts tests/unit/tools/snapshot-page-script.test.ts"
+	},
+	"dependencies": {
+		"@shuv1337/pi-agent-core": "0.78.0",
+		"@shuv1337/pi-ai": "0.78.0",
+		"@shuvgeist/protocol": "2.0.0",
+		"ws": "^8.18.0"
+	},
+	"devDependencies": {
+		"@types/ws": "^8.18.1"
+	}
+}
