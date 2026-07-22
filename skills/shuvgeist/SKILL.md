@@ -41,23 +41,34 @@ Prefer this skill when the user mentions browser automation, using their logged-
 
 ## Mental model
 
-Shuvgeist has several related layers:
+Shuvgeist has several related runtime layers:
 
-- **Extension layer:** the browser sidepanel assistant, local skills, artifacts, provider/model selection, session history, inspect-element UI, and other browser-native features
-- **CLI bridge layer:** terminal commands that talk to the extension background worker and active tab
+- **Extension layer:** the browser sidepanel, persistent offscreen agent runtime, background coordinator, Chrome adapters, local skills, artifacts, sessions, and settings
+- **Server/bridge layer:** authenticated WebSocket and HTTP routing, Electron sessions, MCP, Node configuration, diagnostics, and server-local execution
+- **CLI layer:** public commands, discovery, browser launch, strict local bridge autostart, and the direct-CDP development runtime
 - **Electron target layer:** bridge-local CDP commands for explicitly allowed local Electron apps, routed without a Chrome/Edge extension target
-- **MCP/HTTP layer:** authenticated Streamable HTTP tools that front extension-routed bridge targets as `shuvgeist_observe`, `shuvgeist_act`, `shuvgeist_extract`, and `shuvgeist_agent`
+- **MCP/HTTP layer:** authenticated Streamable HTTP tools that front extension-routed browser targets as `shuvgeist_observe`, `shuvgeist_act`, `shuvgeist_extract`, and `shuvgeist_agent`
 - **Direct-CDP headless layer:** supported library/runtime entry for no-extension Chromium page targets; this is not a top-level CLI command
+
+When modifying Shuvgeist itself, preserve the workspace ownership boundaries:
+
+- `packages/protocol`: schema-first command catalog, wire contracts, targets, versions, and shared metadata
+- `packages/driver`: target-neutral `PageDriver`, semantic refs, capture engines, and injected driver artifacts
+- `packages/extension`: browser adapters, background/offscreen coordination, sidepanel UI, settings, and persistent agent sessions
+- `packages/server`: bridge routing, Electron control, MCP, Node configuration, and local target execution
+- `packages/cli`: public command grammar, discovery, browser launch/autostart, and direct-CDP runtime
+
+Treat the protocol catalog as the source of truth for bridge methods and target support, and CLI help as the source of truth for public commands and flags. Keep dependencies one-way; `scripts/check-workspace-boundaries.mjs` enforces these edges.
 
 Important operational facts:
 
-- The CLI can auto-start the local bridge when needed.
+- The CLI can auto-start the bridge only for an exact local `ws://.../ws` endpoint on `localhost`, `127.0.0.1`, or `::1`, with no query or fragment. Start every TLS, remote, wildcard, alternate-loopback, or custom-path endpoint explicitly.
 - Most browser commands work even when the sidepanel is closed.
 - REPL execution can run with the sidepanel closed through the offscreen runtime.
 - **Session commands** such as `session`, `inject`, `new-session`, `set-model`, and `artifacts` require an accepted offscreen-backed session. Once created, that session remains available while its sidepanel is closed.
 - Sensitive commands are gated by Bridge settings.
 - Chrome/Edge is the default target. Electron commands require `--target electron:...` unless they are `shuvgeist electron ...` management commands.
-- Some bridge methods are server-local or MCP-only and do not have a first-class CLI wrapper. Do not invent CLI commands for `snapshot_store`, `snapshot_read`, `cookie_import`, or the direct-CDP headless adapter.
+- Some bridge methods are server-local or do not have a first-class CLI wrapper. Do not invent CLI commands for `snapshot_store`, `snapshot_read`, `cookie_import`, or the direct-CDP headless adapter. MCP exposes only its declared tools; it is not a generic wrapper for every bridge method.
 
 ## First command
 
@@ -69,11 +80,12 @@ shuvgeist status --json
 
 Use this to confirm:
 
-- extension connectivity
+- protocol/server versions, extension connectivity, and extension capabilities
+- connected client counts and pending bridge requests
 - active bridge-local Electron sessions and renderer-window health
-- current capabilities
-- target window/tab state
-- whether a sidepanel session is available
+- bridge skill-snapshot state (`missing`, `fresh`, `stale`, or `invalid`)
+
+`status` does not report Chrome tab state or prove that a sidepanel session has been accepted. Use `shuvgeist tabs --json` for tab/window state and `shuvgeist session --json` for the active sidepanel session.
 
 If you only need a quick human-readable check:
 
@@ -114,7 +126,13 @@ Electron targets do not require the Chrome/Edge extension to be installed or con
 
 ### Usually not required manually
 
-You normally **do not** need to start the bridge yourself. The CLI can auto-start it when a command needs it.
+You normally **do not** need to start the bridge yourself. The CLI can auto-start it when a command needs it, but only when the resolved connection URL is:
+
+- plain `ws://`
+- exactly `/ws`, with no query string or fragment
+- hosted at exactly `localhost`, `127.0.0.1`, or `::1`
+
+Eligible autostart runs the development source tree with `<repo>/node_modules/.bin/tsx <repo>/packages/cli/src/cli.ts serve` and binds the approved loopback host and port from the connection URL. It deliberately does not reuse wildcard or persisted manual-serve settings. Start every other endpoint explicitly.
 
 Manual bridge startup is mainly for debugging bridge/server behavior:
 
@@ -141,13 +159,28 @@ shuvgeist close
 
 ### Config resolution
 
-The CLI talks to the local bridge over WebSocket. By default it connects to `ws://127.0.0.1:19285` (the `serve` listener binds `0.0.0.0:19285`). Connection settings resolve in this order:
+The CLI talks to the local bridge over WebSocket. By default it connects to `ws://127.0.0.1:19285/ws`; a manual `serve` listener defaults to `0.0.0.0:19285`. Connection settings resolve in this order:
 
 1. CLI flags: `--url`, `--token`, `--host`, `--port`
 2. Environment: `SHUVGEIST_BRIDGE_URL`, `SHUVGEIST_BRIDGE_TOKEN`, `SHUVGEIST_BRIDGE_HOST`, `SHUVGEIST_BRIDGE_PORT`
-3. Config file: `~/.shuvgeist/bridge.json` (keys: `url`, `token`, `host`, `port`, and an optional `otel` object)
+3. Bridge config: `~/.shuvgeist/bridge.json` (`url`, `token`, and optional `serve`, `electron`, and `otel` objects)
 
 `--url ws://...` overrides host/port entirely.
+
+Configure a manual listener under `serve`; top-level `host` and `port` keys are not listener settings:
+
+```json
+{
+  "url": "ws://127.0.0.1:19285/ws",
+  "token": "replace-with-a-bridge-token",
+  "serve": {
+    "host": "0.0.0.0",
+    "port": 19285
+  }
+}
+```
+
+Manual serve binding resolves `--host`/`--port`, then `SHUVGEIST_BRIDGE_HOST`/`SHUVGEIST_BRIDGE_PORT`, then `serve.host`/`serve.port`, then defaults. Keep browser/extension discovery in the separate `~/.shuvgeist/config.json` file (`browser`, `extensionPath`).
 
 Browser and extension discovery for `launch` can also come from flags, env, config, local dev paths, or installed browser locations.
 
@@ -200,6 +233,8 @@ shuvgeist electron attach codex --json
 ```
 
 Targeted doctor checks require an exact registered-app process match and confirm that process owns its listening `--remote-debugging-port`, so they can find Codex Desktop outside the configured Shuvgeist launch range without probing unrelated apps. `shuvgeist status` reports extension and live Electron health separately; a disconnected extension does not block bridge-local Electron control.
+
+Electron app-specific skills come from a bridge-readable skill snapshot, not directly from live extension storage. After importing or editing skills, open **Settings → Skills** in the extension and select **Sync Bridge Snapshot**. Confirm `skillsSnapshot.state` is `fresh` with `shuvgeist status --json`; `shuvgeist electron doctor <app> --json` also warns when the snapshot is missing, stale, or invalid. Basic Electron control can still work without a fresh snapshot, but matching app skills will not be injected reliably.
 
 Attach to an already running CDP-enabled app, or launch a known app with a debugging port:
 
@@ -583,6 +618,7 @@ MCP tools:
 Operational notes:
 
 - Use the same bridge token as the CLI; HTTP requests require `Authorization: Bearer <token>`.
+- Serve MCP from the same HTTP listener as the WebSocket bridge. For a custom bridge port, use that port with the `/mcp` path.
 - Use `target` objects to pin a Chrome tab/window instead of relying on focus.
 - Use MCP when another agent or tool host needs a browser tool surface without shelling out to the CLI for every step.
 
@@ -592,7 +628,7 @@ Minimal request pattern:
 curl -sS -H "Authorization: Bearer $SHUVGEIST_BRIDGE_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' \
-  http://127.0.0.1:8787/mcp
+  http://127.0.0.1:19285/mcp
 ```
 
 ### Page snapshots
