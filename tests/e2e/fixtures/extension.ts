@@ -464,6 +464,7 @@ export async function createExtensionSidePanelControl(
 		10_000,
 		`Chrome did not create the side-panel control page for window ${windowId}`,
 	);
+	await page.waitForFunction(() => document.body !== null);
 	await page.evaluate((targetWindowId) => {
 		const sidePanel = chrome.sidePanel as typeof chrome.sidePanel & {
 			close(options: { windowId: number }): Promise<void>;

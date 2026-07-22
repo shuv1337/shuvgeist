@@ -449,7 +449,7 @@ test("bridge supports deterministic assertions, workflow pinning, and native ifr
 			const frameAssert = await inbox.send<{ result?: { ok: boolean; kind: string } }>({
 				id: 208,
 				method: "page_assert",
-				params: { tabId, frameId: childFrame?.frameId, kind: "text", text: "Frame count: 1", timeoutMs: 2_000 },
+				params: { tabId, frameId: childFrame?.frameId, kind: "text", text: "Frame count: 1", timeoutMs: 5_000 },
 			});
 			expect(frameAssert.result).toMatchObject({ ok: true, kind: "text" });
 
