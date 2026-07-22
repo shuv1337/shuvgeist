@@ -16,6 +16,7 @@ import { BridgeServer } from "@shuvgeist/server/server";
 import { BridgeResponseInbox, openRegisteredClient } from "../../helpers/ws-client.js";
 import {
 	enableExtensionUserScripts,
+	extensionWindowId,
 	launchExtensionContext,
 	openRealExtensionSidePanel,
 	waitForExtensionSidePanelRuntime,
@@ -217,6 +218,24 @@ async function runCli(bridgePort: number, args: string[]): Promise<CliRunResult>
 	}
 }
 
+async function waitForBridgeExtension(bridgePort: number, expectedWindowId: number): Promise<void> {
+	await expect
+		.poll(
+			async () => {
+				try {
+					const response = await fetch(`http://127.0.0.1:${bridgePort}/status`);
+					if (!response.ok) return undefined;
+					const status = (await response.json()) as BridgeServerStatus;
+					return status.extension.connected ? status.extension.windowId : undefined;
+				} catch {
+					return undefined;
+				}
+			},
+			{ timeout: 20_000, intervals: [100, 250, 500, 1_000] },
+		)
+		.toBe(expectedWindowId);
+}
+
 function parseCliJson<T>(result: CliRunResult): T {
 	return JSON.parse(result.stdout) as T;
 }
@@ -244,7 +263,10 @@ test("bridge supports deterministic assertions, workflow pinning, and native ifr
 			},
 			{ port: bridgePort, token: "playwright-token" },
 		);
+		const expectedWindowId = await extensionWindowId(worker);
+		await waitForBridgeExtension(bridgePort, expectedWindowId);
 		const opened = await openRealExtensionSidePanel(extension.context, extension.extensionId, worker);
+		expect(opened.windowId).toBe(expectedWindowId);
 		expect(opened.descriptor).toMatchObject({
 			clientId: "sidepanel",
 			windowId: opened.windowId,

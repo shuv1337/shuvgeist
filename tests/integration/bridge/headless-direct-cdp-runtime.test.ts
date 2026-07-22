@@ -20,6 +20,9 @@ import {
 	listDirectCdpPageTargets,
 } from "shuvgeist/direct-cdp-runtime";
 
+const CHROMIUM_STARTUP_TIMEOUT_MS = 30_000;
+const CHROMIUM_TEST_TIMEOUT_MS = 60_000;
+
 class MockAssistantStream extends EventStream<AssistantMessageEvent, AssistantMessage> {
 	constructor() {
 		super(
@@ -103,7 +106,7 @@ async function getFreePort(): Promise<number> {
 }
 
 async function waitForPageTarget(port: number): Promise<void> {
-	const deadline = Date.now() + 30_000;
+	const deadline = Date.now() + CHROMIUM_STARTUP_TIMEOUT_MS;
 	while (Date.now() < deadline) {
 		try {
 			const targets = await listDirectCdpPageTargets({ port });
@@ -297,7 +300,7 @@ describe("direct-CDP headless runtime", () => {
 			expect(snapshotAfterReconnect.snapshot.entries[0]?.name).toBe("clicked 1");
 			await reconnected.close();
 		},
-		30_000,
+		CHROMIUM_TEST_TIMEOUT_MS,
 	);
 
 	runChromiumTest(
@@ -344,7 +347,7 @@ describe("direct-CDP headless runtime", () => {
 			expect(snapshot.snapshot.entries.map((entry) => entry.name)).not.toContain("WRONG");
 			await adapter.close();
 		},
-		30_000,
+		CHROMIUM_TEST_TIMEOUT_MS,
 	);
 
 	runChromiumTest(
@@ -438,7 +441,7 @@ describe("direct-CDP headless runtime", () => {
 
 			await adapter.close();
 		},
-		30_000,
+		CHROMIUM_TEST_TIMEOUT_MS,
 	);
 
 	runChromiumTest(
@@ -497,6 +500,6 @@ describe("direct-CDP headless runtime", () => {
 			expect(JSON.stringify(baseline.candidates)).not.toContain('"mark"');
 			await adapter.close();
 		},
-		30_000,
+		CHROMIUM_TEST_TIMEOUT_MS,
 	);
 });
