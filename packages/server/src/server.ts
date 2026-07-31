@@ -59,6 +59,7 @@ import {
 	parseTraceparent,
 	type TelemetryAttributes,
 } from "@shuvgeist/protocol/telemetry";
+import type { BuildIdentity } from "@shuvgeist/protocol/version";
 import { WebSocket, WebSocketServer } from "ws";
 import { CookieAccessPort } from "./cookie-access-port.js";
 import { listElectronRegistryEntries, resolveElectronApp } from "./electron/app-registry.js";
@@ -98,6 +99,7 @@ interface ClientInfo {
 	protocolVersion?: number;
 	minProtocolVersion?: number;
 	appVersion?: string;
+	build?: BuildIdentity;
 	/** CLI-specific metadata. */
 	name?: string;
 }
@@ -623,6 +625,7 @@ export class BridgeServer {
 			client.protocolVersion = msg.protocolVersion;
 			client.minProtocolVersion = clientMinProtocolVersion;
 			client.appVersion = msg.appVersion;
+			client.build = msg.build;
 			this.sessionRegistry.register({
 				kind: "chrome-tab",
 				connection: client,
@@ -654,6 +657,7 @@ export class BridgeServer {
 			client.protocolVersion = msg.protocolVersion;
 			client.minProtocolVersion = clientMinProtocolVersion;
 			client.appVersion = msg.appVersion;
+			client.build = msg.build;
 
 			bridgeLog("info", "cli registered", {
 				...fields,
@@ -1626,6 +1630,7 @@ export class BridgeServer {
 				protocolVersion: BRIDGE_PROTOCOL_VERSION,
 				minProtocolVersion: BRIDGE_PROTOCOL_MIN_VERSION,
 				serverVersion: this.config.serverVersion ?? "dev",
+				serverBuild: this.config.serverBuild,
 				extension: ext
 					? {
 							connected: true,
@@ -1636,6 +1641,7 @@ export class BridgeServer {
 							protocolVersion: ext.protocolVersion,
 							minProtocolVersion: ext.connection.minProtocolVersion,
 							appVersion: ext.appVersion,
+							build: ext.connection.build,
 						}
 					: { connected: false },
 				clients: {

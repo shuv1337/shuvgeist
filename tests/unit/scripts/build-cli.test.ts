@@ -1,4 +1,4 @@
-const { fsMock, buildMock } = vi.hoisted(() => ({
+const { fsMock, buildMock, computeBuildIdentityMock } = vi.hoisted(() => ({
 	fsMock: {
 		chmodSync: vi.fn(),
 		mkdirSync: vi.fn(),
@@ -6,11 +6,18 @@ const { fsMock, buildMock } = vi.hoisted(() => ({
 		rmSync: vi.fn(),
 	},
 	buildMock: vi.fn().mockResolvedValue(undefined),
+	computeBuildIdentityMock: vi.fn(() => ({
+		id: "development-0123456789abcdef01234567",
+		kind: "development",
+	})),
 }));
 
 vi.mock("node:fs", () => fsMock);
 vi.mock("esbuild", () => ({
 	build: buildMock,
+}));
+vi.mock("../../../scripts/build-identity.mjs", () => ({
+	computeBuildIdentity: computeBuildIdentityMock,
 }));
 
 describe("build-cli script", () => {
@@ -22,6 +29,7 @@ describe("build-cli script", () => {
 		fsMock.readFileSync.mockClear();
 		fsMock.rmSync.mockClear();
 		buildMock.mockClear();
+		computeBuildIdentityMock.mockClear();
 	});
 
 	afterEach(() => {
@@ -36,6 +44,10 @@ describe("build-cli script", () => {
 		expect(buildMock).toHaveBeenCalledTimes(1);
 		expect(buildMock).toHaveBeenCalledWith(
 			expect.objectContaining({
+				define: expect.objectContaining({
+					__SHUVGEIST_BUILD_ID__: JSON.stringify("development-0123456789abcdef01234567"),
+					__SHUVGEIST_BUILD_KIND__: JSON.stringify("development"),
+				}),
 				entryPoints: {
 					"direct-cdp-runtime": expect.stringContaining("packages/cli/src/headless/direct-cdp-runtime.ts"),
 					shuvgeist: expect.stringContaining("packages/cli/src/cli.ts"),

@@ -10,6 +10,7 @@ permissions:
 
 env:
   MINI_LIT_VERSION: 0.2.1
+  SHUVGEIST_BUILD_KIND: release
 
 jobs:
   build:

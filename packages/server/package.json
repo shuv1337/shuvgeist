@@ -8,6 +8,7 @@
 		"test": "vitest run --config ../../vitest.config.ts --root ../.. tests/integration/bridge/server.test.ts tests/unit/bridge/cookie-access-port.test.ts tests/unit/bridge/electron-app-registry.test.ts tests/unit/bridge/electron-auto-attach.test.ts tests/unit/bridge/electron-config.test.ts tests/unit/bridge/electron-doctor.test.ts tests/unit/bridge/electron-process-discovery.test.ts tests/unit/bridge/electron-session-manager.test.ts tests/unit/bridge/electron-session-store.test.ts tests/unit/bridge/electron-source-inspector.test.ts tests/unit/bridge/electron-target-handler-registry.test.ts tests/unit/bridge/electron-window-executor.test.ts tests/unit/bridge/mcp/tool-adapter.test.ts tests/unit/bridge/node-config.test.ts tests/unit/bridge/page-snapshot-store.test.ts tests/unit/bridge/request-handler.test.ts tests/unit/bridge/session-registry.test.ts tests/unit/bridge/target-execution.test.ts tests/unit/bridge/task-registry.test.ts"
 	},
 	"exports": {
+		"./build-identity": "./src/build-identity.ts",
 		"./cookie-access-port": "./src/cookie-access-port.ts",
 		"./electron/app-registry": "./src/electron/app-registry.ts",
 		"./electron/auto-attach": "./src/electron/auto-attach.ts",

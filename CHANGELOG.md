@@ -8,6 +8,7 @@
 
 ### Added
 
+- Exact source/build fingerprints now identify the CLI, bridge, and connected extension, and the read-only `shuvgeist doctor` command reports package, protocol, artifact, authentication, ffmpeg, and stale-instance diagnostics with stable JSON codes.
 - Tab lifecycle: close tabs by Chrome tab ID or title/url filter via navigate tool and `shuvgeist tabs close`, with dry-run and `--yes` safety for filters.
 - Tab list enrichment: `windowId`, `index`, `pinned`, `status`, plus optional windows summary on `listTabs`.
 - Browser window list/close via `shuvgeist windows` / `shuvgeist windows close` (maps to navigate `listWindows` / `closeWindow`).

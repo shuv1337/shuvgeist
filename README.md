@@ -194,6 +194,7 @@ The source workspace is intentionally not directly packable: `npm pack --workspa
 Basic examples:
 
 ```bash
+shuvgeist doctor
 shuvgeist status
 shuvgeist navigate "https://example.com"
 shuvgeist tabs --json
@@ -330,13 +331,14 @@ Security notes:
 
 Troubleshooting:
 
+- Run `shuvgeist doctor --json` first for a read-only diagnosis of the CLI, bridge, extension artifact, authentication, protocol compatibility, exact build identity, and recording dependency. It does not auto-start the bridge or modify local configuration. A `BRIDGE_BUILD_MISMATCH` or `EXTENSION_BUILD_MISMATCH` means that process came from different source or lockfile content; rebuild and restart the reported component. The versioned JSON schema and failure-code contract are documented in [docs/doctor.md](docs/doctor.md).
 - Unknown app: run `shuvgeist electron list --json` and use one of the listed IDs or aliases.
 - App is not allowlisted: run `shuvgeist electron allow <app-id-or-alias>`.
 - No CDP port found: restart the app with `--remote-debugging-port=<port>` and pass `--port <port>`.
 - Wrong window: run `shuvgeist electron windows --json`, label the intended window, then target the label.
 - Extension disconnected errors on Electron commands usually mean the command was not given an Electron `--target`; Chrome is the default target.
 
-`shuvgeist status` reports browser-extension connectivity and server-verified Electron liveness separately. Cached sessions whose CDP endpoint or renderer page has disappeared are reported as stale; a disconnected extension does not block a live Electron session.
+`shuvgeist status` reports package, protocol, exact build identity, browser-extension connectivity, and server-verified Electron liveness separately. Cached sessions whose CDP endpoint or renderer page has disappeared are reported as stale; a disconnected extension does not block a live Electron session.
 
 The CLI auto-starts the local bridge when needed. Bridge config is resolved from:
 

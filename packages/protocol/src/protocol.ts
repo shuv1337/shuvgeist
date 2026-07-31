@@ -26,6 +26,7 @@ import type {
 	ResolvedPageTarget as SchemaResolvedPageTarget,
 	TargetedBridgeParams as SchemaTargetedBridgeParams,
 } from "./command-schemas.js";
+import type { BuildIdentity } from "./version.js";
 
 export {
 	formatBridgeCommandValidationErrors,
@@ -86,6 +87,7 @@ export interface ExtensionRegistration {
 	protocolVersion: number;
 	minProtocolVersion: number;
 	appVersion: string;
+	build?: BuildIdentity;
 	windowId: number;
 	sessionId?: string;
 	capabilities: BridgeCapability[];
@@ -98,6 +100,7 @@ export interface CliRegistration {
 	protocolVersion: number;
 	minProtocolVersion: number;
 	appVersion: string;
+	build?: BuildIdentity;
 	name?: string;
 }
 
@@ -347,6 +350,7 @@ export interface BridgeServerStatus {
 	protocolVersion: number;
 	minProtocolVersion: number;
 	serverVersion: string;
+	serverBuild?: BuildIdentity;
 	extension:
 		| {
 				connected: true;
@@ -357,6 +361,7 @@ export interface BridgeServerStatus {
 				protocolVersion?: number;
 				minProtocolVersion?: number;
 				appVersion?: string;
+				build?: BuildIdentity;
 		  }
 		| { connected: false };
 	clients: {
@@ -445,6 +450,7 @@ export interface BridgeServerConfig {
 	port: number;
 	token: string;
 	serverVersion?: string;
+	serverBuild?: BuildIdentity;
 	otel?: {
 		enabled?: boolean;
 		ingestUrl?: string;

@@ -54,6 +54,7 @@ import { BridgeTelemetry } from "@shuvgeist/protocol/telemetry";
 import { formatWorkflowValidationErrors, validateWorkflowDefinition } from "@shuvgeist/protocol/workflow-schema";
 import { BridgeServer } from "@shuvgeist/server/server";
 import { WebSocket } from "ws";
+import { resolveCliBuildIdentity, resolveDevelopmentRoot } from "./build-identity.js";
 import {
 	bridgeStatusUrl,
 	createCommandPlan,
@@ -66,14 +67,21 @@ import {
 } from "./cli-core.js";
 import { type CliNodeRuntime, createCliNodeRuntime } from "./cli-node-runtime.js";
 import { formatBridgeStatusText, isBridgeStatusReady } from "./cli-status.js";
+import { collectDoctorReport, formatDoctorReportText } from "./doctor.js";
 import { closeBrowser, type LaunchOptions, launchBrowser, setupForegroundHandlers } from "./launcher.js";
 import { assertFfmpegAvailable, FfmpegWebmEncoder } from "./recording/ffmpeg-encoder.js";
 import { ensureSkillInstalled, installSkill, resolveSkillTargetDir } from "./skill-install.js";
 
 declare const __SHUVGEIST_VERSION__: string;
 const VERSION = typeof __SHUVGEIST_VERSION__ !== "undefined" ? __SHUVGEIST_VERSION__ : "dev";
+let cliBuild: ReturnType<typeof resolveCliBuildIdentity> | undefined;
 const DEFAULT_NODE_CONFIG_DIRECTORY = join(homedir(), ".shuvgeist");
 let nodeRuntime: CliNodeRuntime | undefined;
+
+function requireCliBuildIdentity(): ReturnType<typeof resolveCliBuildIdentity> {
+	cliBuild ??= resolveCliBuildIdentity();
+	return cliBuild;
+}
 
 function requireNodeRuntime(): CliNodeRuntime {
 	if (!nodeRuntime) throw new Error("CLI Node runtime was used before initialization");
@@ -143,6 +151,7 @@ function sendRequest(
 					protocolVersion: BRIDGE_PROTOCOL_VERSION,
 					minProtocolVersion: BRIDGE_PROTOCOL_MIN_VERSION,
 					appVersion: VERSION,
+					build: requireCliBuildIdentity(),
 					name: "shuvgeist-cli",
 				}),
 			);
@@ -370,7 +379,11 @@ async function fetchBridgeStatus(flags: { url?: string; host?: string; port?: st
 		if (jsonMode) {
 			console.log(JSON.stringify(status, null, 2));
 		} else {
-			for (const line of formatBridgeStatusText(status, { cliVersion: VERSION, statusUrl })) {
+			for (const line of formatBridgeStatusText(status, {
+				cliVersion: VERSION,
+				cliBuild: requireCliBuildIdentity(),
+				statusUrl,
+			})) {
 				console.log(line);
 			}
 		}
@@ -379,6 +392,32 @@ async function fetchBridgeStatus(flags: { url?: string; host?: string; port?: st
 		printError(err instanceof Error ? err.message : String(err), jsonMode);
 		process.exit(3);
 	}
+}
+
+async function cmdDoctor(flags: {
+	url?: string;
+	host?: string;
+	port?: string;
+	token?: string;
+	json?: boolean;
+	timeout?: string;
+}): Promise<void> {
+	const runtime = requireNodeRuntime();
+	const connection = runtime.resolveConnection(flags);
+	const report = await collectDoctorReport({
+		connection,
+		cliVersion: VERSION,
+		cliBuild: requireCliBuildIdentity(),
+		timeoutMs: parseTimeout(flags.timeout, BridgeDefaults.STATUS_TIMEOUT_MS) ?? BridgeDefaults.STATUS_TIMEOUT_MS,
+		developmentRoot: resolveDevelopmentRoot(),
+		configOwner: runtime.owner,
+	});
+	if (flags.json) {
+		console.log(JSON.stringify(report, null, 2));
+	} else {
+		for (const line of formatDoctorReportText(report)) console.log(line);
+	}
+	process.exit(report.ok ? 0 : 1);
 }
 
 async function cmdServe(args: string[]): Promise<void> {
@@ -409,6 +448,7 @@ async function cmdServe(args: string[]): Promise<void> {
 			port: binding.port,
 			token,
 			serverVersion: VERSION,
+			serverBuild: requireCliBuildIdentity(),
 			otel: {
 				enabled: otel.enabled,
 				ingestUrl: otel.ingestUrl,
@@ -719,6 +759,7 @@ async function cmdRecord(
 				protocolVersion: BRIDGE_PROTOCOL_VERSION,
 				minProtocolVersion: BRIDGE_PROTOCOL_MIN_VERSION,
 				appVersion: VERSION,
+				build: requireCliBuildIdentity(),
 				name: "shuvgeist-cli-record",
 			}),
 		);
@@ -906,6 +947,7 @@ async function cmdSession(flags: {
 				protocolVersion: BRIDGE_PROTOCOL_VERSION,
 				minProtocolVersion: BRIDGE_PROTOCOL_MIN_VERSION,
 				appVersion: VERSION,
+				build: requireCliBuildIdentity(),
 				name: "shuvgeist-cli-follow",
 			}),
 		);
@@ -1268,6 +1310,7 @@ function printUsage(): void {
 
 Usage:
   shuvgeist serve [--host HOST] [--port PORT] [--token TOKEN]
+  shuvgeist doctor [--json] [--timeout 10s]
   shuvgeist launch [<url>] [--browser path] [--extension-path path] [--url url]
                    [--headless] [--foreground] [--profile name]
                    [--user-data-dir path] [--use-default-profile]
@@ -1537,9 +1580,8 @@ async function main(): Promise<void> {
 
 	// Best-effort: keep the packaged skill synced to ~/.agents/skills on every
 	// real command run (version-gated, silent, never fatal).
-	ensureSkillInstalled(VERSION);
-
 	const command = args[0];
+	if (command !== "doctor") ensureSkillInstalled(VERSION);
 	const rest = args.slice(1);
 	const { flags, positionals } = parseCliArguments(rest);
 	const plan = createCommandPlan(command, positionals, flags, (path) => readFileSync(path, "utf-8"));
@@ -1557,7 +1599,7 @@ async function main(): Promise<void> {
 	// extra wait here. JSON callers still get a single-shot view: the wait is
 	// silent and bounded, and commands that do not require an extension target
 	// (e.g. a disconnected `status --json`) still complete after the timeout.
-	if (plan.kind !== "serve" && plan.kind !== "usage-error") {
+	if (plan.kind !== "serve" && plan.kind !== "doctor" && plan.kind !== "usage-error") {
 		const runtime = requireNodeRuntime();
 		const bridgeFlags = plan.kind === "launch" ? { host: flags.host, port: flags.port, token: flags.token } : flags;
 		const connection = await runtime.ensureServer(bridgeFlags);
@@ -1593,6 +1635,9 @@ async function main(): Promise<void> {
 			break;
 		case "status":
 			await fetchBridgeStatus(flags);
+			break;
+		case "doctor":
+			await cmdDoctor(flags);
 			break;
 		case "one-shot":
 			await runOneShot(

@@ -27,7 +27,7 @@ import {
 } from "@shuvgeist/protocol/protocol";
 import type { BridgeTelemetry } from "@shuvgeist/protocol/telemetry";
 import { parseTraceparent } from "@shuvgeist/protocol/telemetry";
-import { getShuvgeistVersion } from "@shuvgeist/protocol/version";
+import { getInjectedBuildIdentity, getShuvgeistVersion } from "@shuvgeist/protocol/version";
 import { isUsableWindowId } from "../tools/helpers/browser-target.js";
 import type { CommandDispatcher } from "./command-dispatcher.js";
 import { isLoopbackBridgeUrl } from "./settings.js";
@@ -216,6 +216,7 @@ export class BridgeClient {
 			const capabilities = this.options?.capabilitiesProvider
 				? this.options.capabilitiesProvider()
 				: getBridgeCapabilities(sensitiveAccessEnabled);
+			const build = getInjectedBuildIdentity();
 			const registration = {
 				type: "register",
 				role: "extension",
@@ -226,6 +227,7 @@ export class BridgeClient {
 				windowId,
 				sessionId,
 				capabilities,
+				...(build ? { build } : {}),
 			};
 			ws.send(JSON.stringify(registration));
 		};

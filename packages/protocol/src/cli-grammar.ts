@@ -198,6 +198,13 @@ export const LocalCliCommandDefinitions = [
 		codec: "local-status",
 	},
 	{
+		family: "doctor",
+		usage: "Usage: shuvgeist doctor [--json] [--timeout 10s]",
+		flags: [],
+		positionals: [],
+		codec: "local-doctor",
+	},
+	{
 		family: "serve",
 		usage: "Usage: shuvgeist serve [--host host] [--port port] [--token token]",
 		flags: [cliFlag("host"), cliFlag("port"), cliFlag("token")],

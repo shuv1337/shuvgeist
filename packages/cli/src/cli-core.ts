@@ -95,6 +95,7 @@ export type ResolveConfigResult = { ok: true; url: string; token: string } | { o
 
 export type CliCommandPlan =
 	| { kind: "status" }
+	| { kind: "doctor" }
 	| { kind: "serve" }
 	| {
 			kind: "one-shot";
@@ -936,6 +937,7 @@ function createBridgeCommandPlan(command: string, context: CliCommandPlannerCont
 
 const LocalCliCodecRegistry = {
 	"local-status": () => ({ kind: "status" as const }),
+	"local-doctor": () => ({ kind: "doctor" as const }),
 	"local-serve": () => ({ kind: "serve" as const }),
 	"local-launch": ({ positionals, flags }: CliCommandPlannerContext) => ({
 		kind: "launch" as const,

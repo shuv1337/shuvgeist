@@ -494,7 +494,12 @@ describe("BridgeServer", () => {
 		port = await getAvailablePort();
 		baseUrl = `ws://127.0.0.1:${port}/ws`;
 		server = new BridgeServer(
-			{ host: "127.0.0.1", port, token: "secret-token" },
+			{
+				host: "127.0.0.1",
+				port,
+				token: "secret-token",
+				serverBuild: { id: "development-server-fixture", kind: "development" },
+			},
 			{ electronSessionManager },
 		);
 		await server.start();
@@ -588,6 +593,7 @@ describe("BridgeServer", () => {
 			windowId: 7,
 			sessionId: "session-7",
 			capabilities: ["status", "navigate"],
+			build: { id: "development-extension-fixture", kind: "development" },
 		});
 		expect(extension.registerResult.ok).toBe(true);
 
@@ -595,7 +601,13 @@ describe("BridgeServer", () => {
 		expect(cli.registerResult.ok).toBe(true);
 
 		const status = await fetch(`http://127.0.0.1:${port}/status`).then((response) => response.json());
-		expect(status.extension).toMatchObject({ connected: true, windowId: 7, sessionId: "session-7" });
+		expect(status.serverBuild).toEqual({ id: "development-server-fixture", kind: "development" });
+		expect(status.extension).toMatchObject({
+			connected: true,
+			windowId: 7,
+			sessionId: "session-7",
+			build: { id: "development-extension-fixture", kind: "development" },
+		});
 		expect(status.clients).toMatchObject({ cli: 1, extension: 1, total: 2 });
 
 		extension.ws.close();

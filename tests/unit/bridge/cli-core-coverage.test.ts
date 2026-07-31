@@ -75,6 +75,7 @@ describe("cli-core coverage cases", () => {
 	it("covers remaining command plan branches", () => {
 		const readFileText = vi.fn((path: string) => `code from ${path}`);
 		expect(createCommandPlan("status", [], {}, readFileText)).toEqual({ kind: "status" });
+		expect(createCommandPlan("doctor", [], {}, readFileText)).toEqual({ kind: "doctor" });
 		expect(createCommandPlan("serve", [], {}, readFileText)).toEqual({ kind: "serve" });
 		expect(createCommandPlan("screenshot", [], { maxWidth: "640" }, readFileText)).toEqual({
 			kind: "screenshot",

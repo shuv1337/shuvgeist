@@ -72,7 +72,15 @@ Important operational facts:
 
 ## First command
 
-Start with structured status:
+Start with the read-only environment doctor:
+
+```bash
+shuvgeist doctor --json
+```
+
+`doctor` does not auto-start the bridge, install the skill, or write configuration. It checks CLI, bridge, and extension package/protocol/build identity; bridge authentication; extension artifact discovery; and `ffmpeg`. Treat `BRIDGE_BUILD_MISMATCH` and `EXTENSION_BUILD_MISMATCH` as stale-process evidence: rebuild and restart the named component. JSON consumers should branch on `schemaVersion` and each check's stable `code`; the complete contract is in `docs/doctor.md`.
+
+Then inspect structured runtime status:
 
 ```bash
 shuvgeist status --json
@@ -80,7 +88,7 @@ shuvgeist status --json
 
 Use this to confirm:
 
-- protocol/server versions, extension connectivity, and extension capabilities
+- package, protocol, and exact build identities; extension connectivity and capabilities
 - connected client counts and pending bridge requests
 - active bridge-local Electron sessions and renderer-window health
 - bridge skill-snapshot state (`missing`, `fresh`, `stale`, or `invalid`)
