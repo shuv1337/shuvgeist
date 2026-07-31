@@ -174,6 +174,19 @@ function createPageDriverHarness(tabId = 42, frameId = 0) {
 		value: request.expression === "document.title" ? "Example" : undefined,
 		type: "string",
 	}));
+	const authenticatedJson = vi.fn(async () => ({
+		scope,
+		result: {
+			success: true as const,
+			status: 200,
+			origin: "https://example.com",
+			path: "/api/me",
+			method: "GET" as const,
+			mutation: false,
+			responseBytes: 12,
+			data: { name: "Ada" },
+		},
+	}));
 	const networkStats = () => ({
 		scope,
 		active: false,
@@ -188,6 +201,7 @@ function createPageDriverHarness(tabId = 42, frameId = 0) {
 		snapshot,
 		actOnRef,
 		evaluate,
+		authenticatedJson,
 		dispose: vi.fn(async () => undefined),
 		network: {
 			start: vi.fn(async () => ({ ...networkStats(), active: true })),
@@ -218,7 +232,7 @@ function createPageDriverHarness(tabId = 42, frameId = 0) {
 		release: vi.fn(async () => undefined),
 		dispose: vi.fn(async () => undefined),
 	} satisfies ChromePageDriverRegistryLike;
-	return { registry, driver, snapshot, actOnRef, evaluate, entry, scope };
+	return { registry, driver, snapshot, actOnRef, evaluate, authenticatedJson, entry, scope };
 }
 
 describe("BrowserCommandExecutor", () => {
@@ -227,6 +241,11 @@ describe("BrowserCommandExecutor", () => {
 	it("gates record capabilities behind sensitive access", () => {
 		expect(getBridgeCapabilities(false)).not.toEqual(expect.arrayContaining(["record_start", "record_stop", "record_status"]));
 		expect(getBridgeCapabilities(true)).toEqual(expect.arrayContaining(["record_start", "record_stop", "record_status"]));
+	});
+
+	it("advertises authenticated JSON only with sensitive access", () => {
+		expect(getBridgeCapabilities(false)).not.toContain("authenticated_json_request");
+		expect(getBridgeCapabilities(true)).toContain("authenticated_json_request");
 	});
 	beforeEach(() => {
 		navigateExecute.mockReset();
@@ -508,8 +527,9 @@ describe("BrowserCommandExecutor", () => {
 		const disabled = new BrowserCommandExecutor({ windowId: 1, sensitiveAccessEnabled: false });
 		await expect(disabled.evalCode({ code: "document.title" })).rejects.toMatchObject({ code: -32008 });
 		await expect(disabled.cookies({})).rejects.toMatchObject({ code: -32008 });
+		await expect(disabled.authenticatedJson({ path: "/api/me" })).rejects.toMatchObject({ code: -32008 });
 
-		const { registry, evaluate } = createPageDriverHarness();
+		const { registry, evaluate, authenticatedJson } = createPageDriverHarness();
 		debuggerExecute.mockResolvedValueOnce({ details: { value: [{ name: "auth_token", value: "secret" }] } });
 		const enabled = new BrowserCommandExecutor({
 			windowId: 1,
@@ -525,6 +545,15 @@ describe("BrowserCommandExecutor", () => {
 			returnByValue: true,
 			signal: undefined,
 		});
+		await expect(enabled.authenticatedJson({ path: "/api/me", tabId: 42 })).resolves.toMatchObject({
+			ok: true,
+			data: { name: "Ada" },
+			sensitive: true,
+			noStore: true,
+		});
+		expect(authenticatedJson).toHaveBeenCalledWith(
+			expect.objectContaining({ path: "/api/me", tabId: 42, signal: undefined }),
+		);
 		await expect(enabled.evalCode({ code: "document.title", tabId: 42, frameId: 7 })).rejects.toThrow(
 			"Frame-targeted eval requires frame context support",
 		);

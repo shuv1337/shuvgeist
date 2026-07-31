@@ -15,6 +15,7 @@ import type { PageDriver } from "@shuvgeist/driver/page-driver";
 import { createWebSocketCdpPageDriver } from "@shuvgeist/driver/page-driver-bindings";
 import type { PageDriverScope } from "@shuvgeist/driver/page-driver-identity";
 import {
+	pageDriverAuthenticatedJsonToWire,
 	pageDriverNetworkBodyToWire,
 	pageDriverNetworkCurlToWire,
 	pageDriverNetworkGetToWire,
@@ -32,6 +33,7 @@ import type {
 import { ElectronWsCdpSession } from "@shuvgeist/driver/websocket-cdp-session";
 import type { BridgeCommandResult, ResolvedPageTarget } from "@shuvgeist/protocol/command-schemas";
 import type {
+	AuthenticatedJsonRequestParams,
 	BridgeScreenshotResult,
 	LocateByLabelParams,
 	LocateByRoleParams,
@@ -576,6 +578,20 @@ export class ElectronSessionManager {
 		return pageDriverNetworkStatsToWire(result, pageTarget);
 	}
 
+	async authenticatedJson(
+		target: BridgeTarget,
+		params: AuthenticatedJsonRequestParams,
+		signal?: AbortSignal,
+	): Promise<BridgeCommandResult<"authenticated_json_request">> {
+		const { state, pageTarget } = await this.resolvePageRuntime(
+			target,
+			params.frameId,
+			"authenticated JSON request",
+			"authenticated_json_request",
+		);
+		return pageDriverAuthenticatedJsonToWire(await state.driver.authenticatedJson({ ...params, signal }), pageTarget);
+	}
+
 	async networkStop(target: BridgeTarget): Promise<BridgeCommandResult<"network_stop">> {
 		const { state, pageTarget } = await this.resolvePageRuntime(target);
 		return pageDriverNetworkStatsToWire(await state.driver.network.stop(), pageTarget);
@@ -997,7 +1013,14 @@ export class ElectronSessionManager {
 
 	private assertCapabilityAllowed(
 		session: ElectronSession,
-		capability: "eval" | "cookies" | "main_inspect" | "ipc_tap" | "main_network_tap" | "cdp_input",
+		capability:
+			| "eval"
+			| "cookies"
+			| "main_inspect"
+			| "ipc_tap"
+			| "main_network_tap"
+			| "cdp_input"
+			| "authenticated_json_request",
 	): void {
 		const appId = session.appId ?? session.appRef;
 		if (!appId) {
@@ -1007,7 +1030,11 @@ export class ElectronSessionManager {
 		}
 		const config = normalizeElectronConfig(this.configOwner.readBridgeConfig());
 		const appCapabilities = config.capabilities[appId] ?? {};
-		if (capability === "cdp_input" ? appCapabilities.cdp_input !== true : appCapabilities[capability] === false) {
+		if (
+			capability === "cdp_input" || capability === "authenticated_json_request"
+				? appCapabilities[capability] !== true
+				: appCapabilities[capability] === false
+		) {
 			throw new Error(`Electron capability '${capability}' is disabled for app '${appId}' in bridge config.`);
 		}
 	}

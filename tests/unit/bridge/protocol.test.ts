@@ -59,6 +59,7 @@ describe("bridge protocol", () => {
 		expect(getBridgeCapabilities(false)).not.toContain("cookies");
 		expect(getBridgeCapabilities(false)).not.toContain("cookie_import");
 		expect(getBridgeCapabilities(false)).not.toContain("cookie_import_apply");
+		expect(getBridgeCapabilities(false)).not.toContain("authenticated_json_request");
 		expect(getBridgeCapabilities(false)).not.toContain("network_get");
 		expect(getBridgeCapabilities(false)).not.toContain("network_body");
 		expect(getBridgeCapabilities(false)).not.toContain("network_curl");
@@ -73,6 +74,7 @@ describe("bridge protocol", () => {
 					cap !== "cookies" &&
 					cap !== "cookie_import" &&
 					cap !== "cookie_import_apply" &&
+					cap !== "authenticated_json_request" &&
 					cap !== "network_get" &&
 					cap !== "network_body" &&
 					cap !== "network_curl" &&

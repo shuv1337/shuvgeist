@@ -5,9 +5,11 @@
 	"type": "module",
 	"exports": {
 		".": "./src/page-driver.ts",
+		"./authenticated-json": "./src/authenticated-json.ts",
 		"./cdp-session": "./src/cdp-session.ts",
 		"./driver-artifacts-generated": "./src/injected/driver-artifacts.generated.ts",
 		"./injected-contracts": "./src/injected/contracts.ts",
+		"./injected-authenticated-json": "./src/injected/authenticated-json.ts",
 		"./injected-invocation": "./src/injected/invocation.ts",
 		"./injected-page-ref-action": "./src/injected/page-ref-action.ts",
 		"./injected-snapshot": "./src/injected/snapshot.ts",

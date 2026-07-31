@@ -220,6 +220,8 @@ Each bridge response also carries a compact `aftermath` summary. The server pers
 
 Network capture replaces credentials with stable secret references before results enter normal output paths, omits ambiguous bodies, and gates mutating curl exports behind `--review-mutation`. Electron stores lossless values separately in a mode-0600 local profile; Chrome keeps them only in extension memory. See [docs/network-secret-references.md](docs/network-secret-references.md).
 
+For tightly bounded use of a page's live authenticated session, `shuvgeist request-json <relative-path>` performs a same-origin, no-redirect, no-store JSON request with timeout, byte, mutation-review, and optional schema gates. See [docs/authenticated-json-requests.md](docs/authenticated-json-requests.md).
+
 ### Deterministic e2e smoke
 
 Use `assert` for CI-style page checks instead of embedding assertions in REPL snippets. Assertions run against the page context by default and return structured results in `--json` mode.

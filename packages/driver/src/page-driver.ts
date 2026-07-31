@@ -1,12 +1,22 @@
+import {
+	type AuthenticatedJsonRequest,
+	type AuthenticatedJsonResult,
+	normalizeAuthenticatedJsonRequest,
+	validateAuthenticatedJsonData,
+} from "./authenticated-json.js";
 import type { CdpSession } from "./cdp-session.js";
 import type {
+	AuthenticatedJsonInjectionResult,
 	PageRefActionInjectionRequest,
 	PageRefActionInjectionResult,
 	SnapshotInjectionConfig,
 	SnapshotInjectionEntry,
 	SnapshotInjectionResponse,
 } from "./injected/contracts.js";
-import { PAGE_REF_ACTION_INJECTED_ARTIFACT } from "./injected/driver-artifacts.generated.js";
+import {
+	AUTHENTICATED_JSON_INJECTED_ARTIFACT,
+	PAGE_REF_ACTION_INJECTED_ARTIFACT,
+} from "./injected/driver-artifacts.generated.js";
 import { buildInjectedArtifactInvocation } from "./injected/invocation.js";
 import {
 	createPageDriverScope,
@@ -42,6 +52,7 @@ import {
 import { normalizeSnapshotResult } from "./page-snapshot-domain.js";
 import { createPageTrustedInputDriver } from "./page-trusted-input.js";
 
+export type * from "./authenticated-json.js";
 export type * from "./network-redaction.js";
 export type { PageDriverScope, PageDriverTransport, PageIdentity } from "./page-driver-identity.js";
 export {
@@ -92,6 +103,7 @@ export interface PageDriver {
 	readonly ready: Promise<void>;
 	readonly network: PageNetworkEngine;
 	readonly screencast: PageScreencastEngine;
+	authenticatedJson(request: AuthenticatedJsonRequest): Promise<AuthenticatedJsonResult>;
 	evaluate<T = unknown>(request: PageEvaluateRequest): Promise<PageEvaluateResult<T>>;
 	snapshot(request?: PageSnapshotRequest): Promise<PageSnapshotResult>;
 	actOnRef(request: PageRefActionRequest): Promise<PageRefActionResult>;
@@ -179,6 +191,55 @@ class CdpPageDriver implements PageDriver {
 			type: response.result?.type,
 			description: response.result?.description,
 		};
+	}
+
+	async authenticatedJson(request: AuthenticatedJsonRequest): Promise<AuthenticatedJsonResult> {
+		this.assertActive();
+		throwIfAborted(request.signal, "Authenticated JSON request aborted");
+		const startedScope = this.scope;
+		const token = crypto.randomUUID();
+		const normalized = normalizeAuthenticatedJsonRequest(request, token);
+		const serialized = JSON.stringify(normalized).replace(/</g, "\\u003c");
+		const abort = () => {
+			const tokenSource = JSON.stringify(token);
+			const expression = `globalThis.__SHUVGEIST_AUTHENTICATED_JSON_CONTROLLERS__?.get(${tokenSource})?.abort()`;
+			void this.#cdp
+				.send("Runtime.evaluate", { expression, awaitPromise: false, returnByValue: true })
+				.catch(() => undefined);
+		};
+		request.signal?.addEventListener("abort", abort, { once: true });
+		try {
+			const response = await this.evaluateRaw({
+				expression: buildInjectedArtifactInvocation(AUTHENTICATED_JSON_INJECTED_ARTIFACT, [serialized]),
+				awaitPromise: true,
+				returnByValue: true,
+				signal: request.signal,
+			});
+			const result = response.result?.value;
+			if (!isAuthenticatedJsonInjectionResult(result)) {
+				throw new Error("Authenticated JSON page runtime returned an invalid result");
+			}
+			if (!sameScopeGeneration(startedScope, this.scope)) {
+				throw new PageDriverTargetChangedError("Page changed during the authenticated JSON request");
+			}
+			if (result.success) {
+				const issues = validateAuthenticatedJsonData(result.data, request.schema);
+				if (issues.length > 0) {
+					return {
+						scope: startedScope,
+						result: {
+							success: false,
+							code: "schema_validation_failed",
+							message: `Authenticated JSON response failed declared schema validation (${issues.length} issue${issues.length === 1 ? "" : "s"}).`,
+							issues,
+						},
+					};
+				}
+			}
+			return { scope: startedScope, result };
+		} finally {
+			request.signal?.removeEventListener("abort", abort);
+		}
 	}
 
 	async snapshot(request: PageSnapshotRequest = {}): Promise<PageSnapshotResult> {
@@ -387,6 +448,24 @@ function sameScopeGeneration(left: PageDriverScope, right: PageDriverScope): boo
 
 function throwIfAborted(signal: AbortSignal | undefined, message: string): void {
 	if (signal?.aborted) throw new Error(message);
+}
+
+function isAuthenticatedJsonInjectionResult(value: unknown): value is AuthenticatedJsonInjectionResult {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+	const result = value as Record<string, unknown>;
+	if (typeof result.success !== "boolean") return false;
+	if (result.success) {
+		return (
+			typeof result.status === "number" &&
+			typeof result.origin === "string" &&
+			typeof result.path === "string" &&
+			typeof result.method === "string" &&
+			typeof result.mutation === "boolean" &&
+			typeof result.responseBytes === "number" &&
+			Object.hasOwn(result, "data")
+		);
+	}
+	return typeof result.code === "string" && typeof result.message === "string";
 }
 
 function isPageRefActionInjectionResult(value: unknown): value is PageRefActionInjectionResult {

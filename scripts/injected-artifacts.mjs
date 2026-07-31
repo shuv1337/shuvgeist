@@ -27,6 +27,11 @@ const artifactGroups = [
 				entryPoint: join(driverRoot, "src/injected/page-ref-action.ts"),
 				globalName: "__SHUVGEIST_INJECTED_PAGE_REF_ACTION__",
 			},
+			{
+				exportName: "AUTHENTICATED_JSON_INJECTED_ARTIFACT",
+				entryPoint: join(driverRoot, "src/injected/authenticated-json.ts"),
+				globalName: "__SHUVGEIST_INJECTED_AUTHENTICATED_JSON__",
+			},
 		],
 	},
 	{

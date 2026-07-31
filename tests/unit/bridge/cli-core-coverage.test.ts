@@ -188,6 +188,37 @@ describe("cli-core coverage cases", () => {
 			params: { last: 25 },
 			defaultTimeoutMs: 60_000,
 		});
+		expect(
+			createCommandPlan(
+				"request-json",
+				["/api/items"],
+				{
+					method: "POST",
+					body: '{"name":"Ada"}',
+					schema: '{"type":"object"}',
+					timeout: "5s",
+					maxResponseBytes: "4096",
+					reviewMutation: true,
+					tabId: "42",
+				},
+				readFileText,
+			),
+		).toEqual({
+			kind: "one-shot",
+			method: "authenticated_json_request",
+			params: {
+				path: "/api/items",
+				method: "POST",
+				body: { name: "Ada" },
+				schema: { type: "object" },
+				timeoutMs: 5_000,
+				maxResponseBytes: 4_096,
+				reviewMutation: true,
+				tabId: 42,
+			},
+			defaultTimeoutMs: 120_000,
+			target: { kind: "chrome-tab", tabId: 42 },
+		});
 		expect(createCommandPlan("mystery", [], {}, readFileText)).toEqual({
 			kind: "usage-error",
 			message: "Unknown command: mystery",

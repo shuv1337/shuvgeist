@@ -156,6 +156,27 @@ const evalParamsSchema = Type.Object(
 	{ additionalProperties: false },
 );
 
+const authenticatedJsonMethodSchema = Type.Union([
+	Type.Literal("GET"),
+	Type.Literal("POST"),
+	Type.Literal("PUT"),
+	Type.Literal("PATCH"),
+	Type.Literal("DELETE"),
+]);
+const authenticatedJsonParamsSchema = Type.Object(
+	{
+		...targetedBridgeParamProperties,
+		path: Type.String({ minLength: 1, maxLength: 4096 }),
+		method: Type.Optional(authenticatedJsonMethodSchema),
+		body: Type.Optional(jsonValueSchema),
+		timeoutMs: Type.Optional(Type.Integer({ minimum: 100, maximum: 60_000 })),
+		maxResponseBytes: Type.Optional(Type.Integer({ minimum: 1, maximum: 1_048_576 })),
+		reviewMutation: Type.Optional(Type.Boolean()),
+		schema: Type.Optional(jsonObjectSchema),
+	},
+	{ additionalProperties: false },
+);
+
 const cookiesParamsSchema = Type.Object({ url: Type.Optional(Type.String()) }, { additionalProperties: false });
 
 const cookieSchema = Type.Object(
@@ -1106,6 +1127,51 @@ const networkRequestResultSchema = Type.Object({
 	hasRequestBody: Type.Boolean(),
 	hasResponseBody: Type.Boolean(),
 });
+const authenticatedJsonFailureCodeSchema = Type.Union([
+	Type.Literal("invalid_page_origin"),
+	Type.Literal("invalid_relative_path"),
+	Type.Literal("cross_origin"),
+	Type.Literal("mutation_review_required"),
+	Type.Literal("redirect_rejected"),
+	Type.Literal("request_aborted"),
+	Type.Literal("request_timed_out"),
+	Type.Literal("response_too_large"),
+	Type.Literal("non_json_response"),
+	Type.Literal("invalid_json_response"),
+	Type.Literal("http_error"),
+	Type.Literal("schema_validation_failed"),
+]);
+const authenticatedJsonResultSchema = Type.Union([
+	Type.Object(
+		{
+			...resolvedPageScopeResultProperties,
+			ok: Type.Literal(true),
+			status: Type.Integer({ minimum: 200, maximum: 299 }),
+			origin: Type.String(),
+			path: Type.String(),
+			method: authenticatedJsonMethodSchema,
+			mutation: Type.Boolean(),
+			responseBytes: Type.Integer({ minimum: 0 }),
+			data: wireValueSchema,
+			sensitive: Type.Literal(true),
+			noStore: Type.Literal(true),
+		},
+		{ additionalProperties: false },
+	),
+	Type.Object(
+		{
+			...resolvedPageScopeResultProperties,
+			ok: Type.Literal(false),
+			code: authenticatedJsonFailureCodeSchema,
+			message: Type.String({ maxLength: 1000 }),
+			status: Type.Optional(Type.Integer({ minimum: 0, maximum: 599 })),
+			issues: Type.Optional(Type.Array(Type.String({ maxLength: 500 }), { maxItems: 10 })),
+			sensitive: Type.Literal(true),
+			noStore: Type.Literal(true),
+		},
+		{ additionalProperties: false },
+	),
+]);
 const networkStatsResultSchema = Type.Object({
 	...resolvedPageScopeResultProperties,
 	active: Type.Boolean(),
@@ -1653,6 +1719,35 @@ export const BridgeCommandDefinitions = [
 		sensitive: true,
 		params: evalParamsSchema,
 		result: evalResultSchema,
+	},
+	{
+		method: "authenticated_json_request",
+		capabilities: ["authenticated_json_request"],
+		route: "extension",
+		targets: ["chrome-tab", "electron-window"],
+		cli: bridgeCli(
+			defineCliBinding({
+				family: "request-json",
+				select: [],
+				usage: "Usage: shuvgeist request-json <relative-path> [--method GET|POST|PUT|PATCH|DELETE] [--body JSON] [--schema JSON] [--review-mutation]",
+				flags: [
+					...cliTargetFlags,
+					cliFlag("method", { param: "method" }),
+					cliFlag("body", { param: "body", parse: "json" }),
+					cliFlag("schema", { param: "schema", parse: "json" }),
+					cliFlag("timeout", { param: "timeoutMs", parse: "duration" }),
+					cliFlag("maxResponseBytes", { param: "maxResponseBytes", parse: "integer" }),
+					cliFlag("reviewMutation", { param: "reviewMutation", parse: "boolean" }),
+				],
+				positionals: [cliPositional("path", { source: "index", index: 0, param: "path", required: true })],
+				codec: "generic",
+			}),
+		),
+		defaultTimeout: "slow",
+		sensitive: true,
+		write: true,
+		params: authenticatedJsonParamsSchema,
+		result: authenticatedJsonResultSchema,
 	},
 	{
 		method: "cookies",

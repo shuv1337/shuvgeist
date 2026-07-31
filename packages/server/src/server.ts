@@ -914,6 +914,9 @@ export class BridgeServer {
 		const startedAt = Date.now();
 		const sessionIdentity = this.operationSessionIdentity(client, target);
 		const completedRecordingIds = new Set<string>();
+		const controller = new AbortController();
+		const abortOnDisconnect = () => controller.abort();
+		client.ws.once("close", abortOnDisconnect);
 		span?.setAttributes(electronTargetTelemetryAttributes(target));
 		try {
 			if (!isElectronTargetBridgeMethod(req.method)) {
@@ -927,6 +930,7 @@ export class BridgeServer {
 				{
 					sessions: this.electronSessions,
 					target,
+					signal: controller.signal,
 					emitRecordFrame: (data) => {
 						if (data.final && typeof data.recordingId === "string") {
 							completedRecordingIds.add(data.recordingId);
@@ -1014,6 +1018,8 @@ export class BridgeServer {
 					target,
 				),
 			);
+		} finally {
+			client.ws.removeListener("close", abortOnDisconnect);
 		}
 	}
 

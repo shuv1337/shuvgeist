@@ -9,6 +9,7 @@
 import type { SnapshotInjectionEntry } from "@shuvgeist/driver/injected-contracts";
 import type { PageSnapshotResult as DriverPageSnapshotResult } from "@shuvgeist/driver/page-driver";
 import {
+	pageDriverAuthenticatedJsonToWire,
 	pageDriverLocatorMatchesToWire,
 	pageDriverNetworkBodyToWire,
 	pageDriverNetworkCurlToWire,
@@ -30,6 +31,7 @@ import {
 	validateBridgeCommandResult,
 } from "@shuvgeist/protocol/command-schemas";
 import type {
+	AuthenticatedJsonRequestParams,
 	BridgeMethod,
 	BridgeReplResult,
 	BridgeScreenshotResult,
@@ -197,6 +199,7 @@ export class BrowserCommandExecutor {
 		repl: ({ signal, traceContext }, params) => this.repl(params, signal, traceContext),
 		screenshot: ({ signal, traceContext }, params) => this.screenshot(params, signal, traceContext),
 		eval: ({ signal, traceContext }, params) => this.evalCode(params, signal, traceContext),
+		authenticated_json_request: ({ signal }, params) => this.authenticatedJson(params, signal),
 		cookies: ({ signal, traceContext }, params) => this.cookies(params, signal, traceContext),
 		cookie_import_apply: (_context, params) => this.applyCookieImport(params),
 		select_element: ({ signal }, params) => this.selectElement(params, signal),
@@ -425,6 +428,24 @@ export class BrowserCommandExecutor {
 			signal,
 		});
 		return { value: result.value };
+	}
+
+	async authenticatedJson(
+		params: AuthenticatedJsonRequestParams,
+		signal?: AbortSignal,
+	): Promise<BridgeCommandResult<"authenticated_json_request">> {
+		if (!this.sensitiveAccessEnabled) {
+			const error = new Error(
+				"Authenticated JSON requests are disabled unless sensitive browser data access is enabled",
+			);
+			(error as Error & { code?: number }).code = ErrorCodes.CAPABILITY_DISABLED;
+			throw error;
+		}
+		const frameId = params.frameId ?? 0;
+		if (frameId !== 0) throw new Error("Authenticated JSON requests currently require the top-level page frame");
+		const resolved = await this.resolvePageDriver(params.tabId, frameId);
+		const result = await resolved.driver.authenticatedJson({ ...params, signal });
+		return pageDriverAuthenticatedJsonToWire(result, chromeResultTarget(resolved.tabId));
 	}
 
 	async cookies(

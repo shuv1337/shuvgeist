@@ -45,6 +45,49 @@ export interface PageExecutionInjectionResult {
 	console: PageExecutionConsoleEntry[];
 }
 
+export type AuthenticatedJsonMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+
+export interface AuthenticatedJsonInjectionRequest {
+	token: string;
+	path: string;
+	method: AuthenticatedJsonMethod;
+	body?: unknown;
+	timeoutMs: number;
+	maxResponseBytes: number;
+	reviewMutation: boolean;
+}
+
+export interface AuthenticatedJsonInjectionSuccess {
+	success: true;
+	status: number;
+	origin: string;
+	path: string;
+	method: AuthenticatedJsonMethod;
+	mutation: boolean;
+	responseBytes: number;
+	data: unknown;
+}
+
+export interface AuthenticatedJsonInjectionFailure {
+	success: false;
+	code:
+		| "invalid_page_origin"
+		| "invalid_relative_path"
+		| "cross_origin"
+		| "mutation_review_required"
+		| "redirect_rejected"
+		| "request_aborted"
+		| "request_timed_out"
+		| "response_too_large"
+		| "non_json_response"
+		| "invalid_json_response"
+		| "http_error";
+	message: string;
+	status?: number;
+}
+
+export type AuthenticatedJsonInjectionResult = AuthenticatedJsonInjectionSuccess | AuthenticatedJsonInjectionFailure;
+
 export interface SnapshotInjectionConfig {
 	frameId: number;
 	maxEntries: number;

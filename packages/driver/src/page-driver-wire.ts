@@ -1,4 +1,5 @@
 import type { BridgeCommandResult, ResolvedPageTarget } from "@shuvgeist/protocol/command-schemas";
+import type { AuthenticatedJsonResult } from "./authenticated-json.js";
 import type { SnapshotInjectionEntry } from "./injected/contracts.js";
 import type { PageDriverScope } from "./page-driver-identity.js";
 import type { PageRefActionResult, PageRefDiagnosticCandidate, PageSnapshotResult } from "./page-driver-results.js";
@@ -109,6 +110,38 @@ export function pageDriverNetworkStatsToWire(
 		requestCount: result.requestCount,
 		storedBodyBytes: result.storedBodyBytes,
 		evictedRequests: result.evictedRequests,
+	};
+}
+
+export function pageDriverAuthenticatedJsonToWire(
+	result: AuthenticatedJsonResult,
+	target: ResolvedPageTarget,
+): BridgeCommandResult<"authenticated_json_request"> {
+	const scope = pageDriverScopeToWire(result.scope, target);
+	if (!result.result.success) {
+		return {
+			...scope,
+			ok: false,
+			code: result.result.code,
+			message: result.result.message,
+			...("status" in result.result && result.result.status !== undefined ? { status: result.result.status } : {}),
+			...("issues" in result.result ? { issues: [...result.result.issues] } : {}),
+			sensitive: true,
+			noStore: true,
+		};
+	}
+	return {
+		...scope,
+		ok: true,
+		status: result.result.status,
+		origin: result.result.origin,
+		path: result.result.path,
+		method: result.result.method,
+		mutation: result.result.mutation,
+		responseBytes: result.result.responseBytes,
+		data: result.result.data,
+		sensitive: true,
+		noStore: true,
 	};
 }
 

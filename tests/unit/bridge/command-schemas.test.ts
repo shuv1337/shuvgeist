@@ -140,6 +140,33 @@ describe("bridge command schemas", () => {
 		).toMatchObject({ ok: true });
 		expect(validateBridgeCommandResult("network_list", [])).toMatchObject({ ok: false });
 		expect(
+			validateBridgeCommandParams("authenticated_json_request", {
+				path: "/api/me",
+				method: "GET",
+				timeoutMs: 5_000,
+				maxResponseBytes: 4_096,
+				schema: { type: "object", required: ["name"] },
+			}),
+		).toMatchObject({ ok: true });
+		expect(
+			validateBridgeCommandParams("authenticated_json_request", { path: "/api/me", timeoutMs: 0 }),
+		).toMatchObject({ ok: false });
+		expect(
+			validateBridgeCommandResult("authenticated_json_request", {
+				...chromeScope,
+				ok: true,
+				status: 200,
+				origin: "https://example.test",
+				path: "/api/me",
+				method: "GET",
+				mutation: false,
+				responseBytes: 12,
+				data: { name: "Ada" },
+				sensitive: true,
+				noStore: true,
+			}),
+		).toMatchObject({ ok: true });
+		expect(
 			validateBridgeCommandResult("network_body", {
 				...electronScope,
 				requestId: "r1",

@@ -108,7 +108,10 @@ export class McpHttpHandler {
 				true,
 			);
 		}
-		const succeeded = this.options.taskRegistry.succeed(task.id, response.result);
+		const succeeded = this.options.taskRegistry.succeed(
+			task.id,
+			isNoStoreResult(response.result) ? { sensitive: true, noStore: true } : response.result,
+		);
 		return this.toolResult(
 			{ task: succeeded, result: response.result, ...(response.aftermath ? { aftermath: response.aftermath } : {}) },
 			false,
@@ -131,7 +134,17 @@ export class McpHttpHandler {
 	}
 
 	private writeJson(res: ServerResponse, status: number, value: unknown): void {
-		res.writeHead(status, { "Content-Type": "application/json" });
+		res.writeHead(status, { "Content-Type": "application/json", "Cache-Control": "no-store" });
 		res.end(JSON.stringify(value));
 	}
+}
+
+function isNoStoreResult(value: unknown): boolean {
+	return (
+		typeof value === "object" &&
+		value !== null &&
+		!Array.isArray(value) &&
+		(value as Record<string, unknown>).sensitive === true &&
+		(value as Record<string, unknown>).noStore === true
+	);
 }

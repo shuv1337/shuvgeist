@@ -13,6 +13,7 @@ import type { ElectronSessionManager } from "./session-manager.js";
 export interface ElectronTargetHandlerContext {
 	sessions: ElectronSessionManager;
 	target: BridgeTarget;
+	signal?: AbortSignal;
 	emitRecordFrame(data: RecordFrameEventData): void;
 }
 
@@ -24,6 +25,8 @@ export interface ElectronTargetHandlerContext {
 export const ElectronTargetCommandHandlers = {
 	screenshot: ({ sessions, target }, params) => sessions.screenshot(target, params.maxWidth, params.frameId),
 	eval: ({ sessions, target }, params) => sessions.evaluate(target, params.code, params.frameId),
+	authenticated_json_request: ({ sessions, target, signal }, params) =>
+		sessions.authenticatedJson(target, params, signal),
 	page_snapshot: ({ sessions, target }, params) => sessions.snapshot(target, params),
 	page_assert: ({ sessions, target }, params) => sessions.assert(target, params),
 	locate_by_role: ({ sessions, target }, params) => sessions.locateByRole(target, params),

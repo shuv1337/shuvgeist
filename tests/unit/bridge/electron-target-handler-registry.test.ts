@@ -11,17 +11,27 @@ describe("electron target command handlers", () => {
 		const evaluate = vi.fn(async () => ({ output: "ok", result: "ok" }));
 		const recordStop = vi.fn(async () => ({ ok: true }));
 		const recordStatus = vi.fn(async () => ({ active: false }));
-		const sessions = { screenshot, evaluate, recordStop, recordStatus } as unknown as ElectronSessionManager;
+		const authenticatedJson = vi.fn(async () => ({ ok: true }));
+		const sessions = {
+			screenshot,
+			evaluate,
+			authenticatedJson,
+			recordStop,
+			recordStatus,
+		} as unknown as ElectronSessionManager;
 		const target = { kind: "electron-window" as const, sessionId: "e1", windowRef: "w1" };
-		const context = { sessions, target, emitRecordFrame: vi.fn() };
+		const controller = new AbortController();
+		const context = { sessions, target, signal: controller.signal, emitRecordFrame: vi.fn() };
 
 		await ElectronTargetCommandHandlers.screenshot(context, { maxWidth: 320, frameId: 4 });
 		await ElectronTargetCommandHandlers.eval(context, { code: "document.title", frameId: 5 });
+		await ElectronTargetCommandHandlers.authenticated_json_request(context, { path: "/api/me" });
 		await ElectronTargetCommandHandlers.record_stop(context, { frameId: 6 });
 		await ElectronTargetCommandHandlers.record_status(context, { frameId: 7 });
 
 		expect(screenshot).toHaveBeenCalledWith(target, 320, 4);
 		expect(evaluate).toHaveBeenCalledWith(target, "document.title", 5);
+		expect(authenticatedJson).toHaveBeenCalledWith(target, { path: "/api/me" }, controller.signal);
 		expect(recordStop).toHaveBeenCalledWith(target, 6);
 		expect(recordStatus).toHaveBeenCalledWith(target, 7);
 	});

@@ -8,7 +8,18 @@ export interface ElectronBridgeConfig {
 	defaultFlags: Record<string, string[]>;
 	capabilities: Record<
 		string,
-		Partial<Record<"eval" | "cookies" | "main_inspect" | "ipc_tap" | "main_network_tap" | "cdp_input", boolean>>
+		Partial<
+			Record<
+				| "eval"
+				| "cookies"
+				| "main_inspect"
+				| "ipc_tap"
+				| "main_network_tap"
+				| "cdp_input"
+				| "authenticated_json_request",
+				boolean
+			>
+		>
 	>;
 }
 

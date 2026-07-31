@@ -1389,6 +1389,7 @@ Usage:
   shuvgeist snapshot diff <baseline-record-id> [snapshot options] [--json]
                     (snapshotIds are usable as refIds)
   shuvgeist journal [--last N] [--json]
+  shuvgeist request-json <relative-path> [--method METHOD] [--body JSON] [--schema JSON] [--review-mutation]
   shuvgeist locate <role|text|label> <query> [--tab-id N] [--frame-id N] [--json]
   shuvgeist ref <click|fill> <refId> [--value text] [--native | --trusted] [--tab-id N] [--frame-id N] [--timeout 5s] [--json]
   shuvgeist frame <list|tree> [--tab-id N] [--json]
@@ -1465,6 +1466,9 @@ Global options:
   --url-pattern <re>  URL assertion regex
   --search <text>     Network list filter
   --review-mutation  Confirm review before exporting a mutating request
+  --body <JSON>      JSON request body for request-json
+  --schema <JSON>    Optional bounded response schema for request-json
+  --max-response-bytes <N> Maximum request-json response bytes
   --include-sensitive Deprecated; secret values are never placed in exports
   --preset <name>     Device preset
   --width <px>        Device viewport width
