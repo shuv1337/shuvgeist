@@ -25,6 +25,10 @@ describe("bridge command schemas", () => {
 		});
 		expect(validateBridgeCommandParams("electron_attach", {})).toMatchObject({ ok: false });
 		expect(validateBridgeCommandParams("record_start", { fps: 31 })).toMatchObject({ ok: false });
+		expect(
+			validateBridgeCommandParams("record_start", { mode: "tab-capture", audio: true }),
+		).toMatchObject({ ok: true });
+		expect(validateBridgeCommandParams("record_start", { mode: "other" })).toMatchObject({ ok: false });
 		expect(validateBridgeCommandParams("page_assert", { kind: "text" })).toMatchObject({ ok: false });
 		expect(validateBridgeCommandParams("page_assert", { kind: "text", text: "Ready" })).toMatchObject({ ok: true });
 		expect(validateBridgeCommandParams("electron_windows", { appRef: "vscode" })).toMatchObject({ ok: false });

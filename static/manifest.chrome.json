@@ -40,6 +40,7 @@
 		"cookies",
 		"declarativeNetRequest",
 		"offscreen",
+		"tabCapture",
 		"alarms"
 	],
 	"host_permissions": [

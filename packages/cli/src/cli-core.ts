@@ -719,6 +719,15 @@ function createRecordStartParams(context: CliCodecContext): CliCodecResult {
 		};
 	}
 	const params = { ...materialized.value.params };
+	const mode = context.flags.recordingMode ?? "cdp";
+	if (mode !== "cdp" && mode !== "tab-capture") {
+		return { ok: false, message: "--mode must be cdp or tab-capture" };
+	}
+	if (context.flags.audio && mode !== "tab-capture") {
+		return { ok: false, message: "--audio requires --mode tab-capture" };
+	}
+	if (context.flags.recordingMode) params.mode = mode;
+	if (context.flags.audio) params.audio = true;
 	const maxDurationMs = parseTimeout(context.flags.maxDuration, BridgeDefaults.RECORD_DEFAULT_MAX_DURATION_MS);
 	if (typeof maxDurationMs !== "number" || maxDurationMs <= 0) {
 		return { ok: false, message: "--max-duration must be greater than 0" };

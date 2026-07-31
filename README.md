@@ -79,7 +79,7 @@ Current CLI surface:
 - deterministic workflows: `workflow run`, `workflow validate`
 - semantic page inspection: `snapshot`, `locate`, `ref`, `frame`
 - debugger-backed diagnostics: `network`, `device`, `perf`
-- video repro capture: `record start`, `record stop`, `record status` using CDP screencast plus CLI-side ffmpeg encoding
+- video repro capture: `record start`, `record stop`, `record status` using CDP screencast by default, with explicit Chrome tab-capture WebM and optional audio
 - Electron desktop targets: `electron list`, `electron allow`, `electron attach`, `electron launch`, `electron windows`, and `--target electron:...`
 - session control: `session`, `inject`, `new-session`, `set-model`, `artifacts`
 
@@ -204,6 +204,7 @@ shuvgeist tabs close --title-match shuvplan --yes --json
 shuvgeist windows --json
 shuvgeist screenshot --out page.png
 shuvgeist record start --out /tmp/example.webm --max-duration 5s
+shuvgeist record start --mode tab-capture --audio --out /tmp/example-with-audio.webm --max-duration 5s
 shuvgeist repl 'return await browserjs(() => document.title)'
 shuvgeist assert text "Example Domain" --timeout 10s
 shuvgeist snapshot --json
@@ -338,7 +339,7 @@ Security notes:
 - Electron commands operate over local CDP and can read renderer DOM, screenshots, page state, and recording frames.
 - `shuvgeist cookies` remains a Chrome/Edge extension command and is not routed to Electron targets. The parsed Electron `cookies` capability key is retained for configuration compatibility but does not enable Electron cookie access.
 - Renderer input requires the separate per-app `cdp_input` capability and is re-authorized against the live session/window before dispatch.
-- `record start` still requires `ffmpeg` on PATH because the CLI encodes received CDP frames into WebM.
+- Default CDP and Electron recording require `ffmpeg` on PATH because the CLI encodes received frames into WebM. Explicit Chrome `--mode tab-capture` writes MediaRecorder WebM chunks directly and does not use ffmpeg.
 - Recording JSON distinguishes raw captured-frame bytes (`sourceBytes`) from the final WebM file size (`encodedSizeBytes`); deprecated `sizeBytes`, when present, is the encoded size.
 
 Troubleshooting:

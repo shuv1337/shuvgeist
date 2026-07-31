@@ -305,6 +305,15 @@ describe("RecordingTools", () => {
 		expect(engine.startCalls).toHaveLength(1);
 	});
 
+	it("keeps CDP as the default and rejects audio without explicit tab capture", async () => {
+		const { tools, engine } = createFixture();
+		await expect(tools.start({ tabId: 9, audio: true })).rejects.toThrow(
+			"Tab audio requires --mode tab-capture",
+		);
+		expect(engine.startCalls).toEqual([]);
+		await expect(tools.start({ tabId: 9 })).resolves.toMatchObject({ mode: "cdp", audio: false });
+	});
+
 	it("rejects non-top-frame start, status, and stop requests", async () => {
 		const { tools, engine } = createFixture();
 		await expect(tools.start({ tabId: 9, frameId: 2 })).rejects.toThrow(

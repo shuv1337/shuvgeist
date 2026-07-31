@@ -704,6 +704,9 @@ export class ElectronSessionManager {
 		params: RecordStartParams,
 		emit: (event: RecordFrameEventData) => void,
 	): Promise<RecordStartResult> {
+		if (params.mode === "tab-capture" || params.audio) {
+			throw new Error("Tab-capture recording and tab audio are Chrome-only; Electron recording remains CDP-only.");
+		}
 		const { state, pageTarget } = await this.resolvePageRuntime(target, params.frameId, "recording");
 		const started = await state.driver.screencast.start(params, {
 			onFrame: (frame) => emit(this.recordFrameToWire(frame, pageTarget)),

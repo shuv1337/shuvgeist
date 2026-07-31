@@ -36,6 +36,7 @@ const reviewedManifest = {
 		"cookies",
 		"declarativeNetRequest",
 		"offscreen",
+		"tabCapture",
 		"alarms",
 	],
 	host_permissions: ["<all_urls>"],

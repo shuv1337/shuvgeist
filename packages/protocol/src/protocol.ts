@@ -340,7 +340,7 @@ export interface RecordFrameEventData {
 	summary?: RecordStopResult;
 }
 
-/** Legacy MediaRecorder chunk event kept during the 1.1.x to 1.2.x transition. */
+/** WebM chunks emitted by the explicit Chrome tab-capture recording mode. */
 export interface RecordChunkEventData {
 	recordingId: string;
 	target: ResolvedPageTarget;

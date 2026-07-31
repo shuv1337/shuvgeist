@@ -503,6 +503,8 @@ const perfTraceStartParamsSchema = Type.Object(
 const recordStartParamsSchema = Type.Object(
 	{
 		...targetedBridgeParamProperties,
+		mode: Type.Optional(Type.Union([Type.Literal("cdp"), Type.Literal("tab-capture")])),
+		audio: Type.Optional(Type.Boolean()),
 		maxDurationMs: Type.Optional(Type.Integer({ minimum: 1, maximum: 120_000 })),
 		videoBitsPerSecond: Type.Optional(Type.Integer({ minimum: 1 })),
 		mimeType: Type.Optional(Type.String()),
@@ -1255,6 +1257,10 @@ const recordOutcomeSchema = Type.Union([
 const recordStartResultSchema = Type.Object({
 	...resolvedPageScopeResultProperties,
 	ok: Type.Literal(true),
+	mode: Type.Optional(Type.Union([Type.Literal("cdp"), Type.Literal("tab-capture")])),
+	audio: Type.Optional(Type.Boolean()),
+	indicator: Type.Optional(Type.Literal("visible")),
+	artifactState: Type.Optional(Type.Literal("streaming")),
 	recordingId: Type.String(),
 	startedAt: Type.String(),
 	mimeType: Type.String(),
@@ -1264,6 +1270,9 @@ const recordStartResultSchema = Type.Object({
 const recordStopResultSchema = Type.Object({
 	...resolvedPageScopeResultProperties,
 	ok: Type.Literal(true),
+	mode: Type.Optional(Type.Union([Type.Literal("cdp"), Type.Literal("tab-capture")])),
+	audio: Type.Optional(Type.Boolean()),
+	artifactState: Type.Optional(Type.Union([Type.Literal("complete"), Type.Literal("partial")])),
 	recordingId: Type.String(),
 	startedAt: Type.String(),
 	endedAt: Type.String(),
@@ -1286,6 +1295,10 @@ const recordStatusResultSchema = Type.Union([
 	Type.Object({
 		...resolvedPageScopeResultProperties,
 		active: Type.Literal(true),
+		mode: Type.Optional(Type.Union([Type.Literal("cdp"), Type.Literal("tab-capture")])),
+		audio: Type.Optional(Type.Boolean()),
+		indicator: Type.Optional(Type.Literal("visible")),
+		artifactState: Type.Optional(Type.Literal("streaming")),
 		recordingId: Type.String(),
 		startedAt: Type.String(),
 		mimeType: Type.String(),
@@ -2547,6 +2560,8 @@ export const BridgeCommandDefinitions = [
 					cliFlag("maxWidth", { input: "maxWidth" }),
 					cliFlag("maxHeight", { input: "maxHeight" }),
 					cliFlag("mimeType", { input: "mimeType" }),
+					cliFlag("recordingMode", { input: "recordingMode" }),
+					cliFlag("audio", { input: "audio" }),
 				],
 				positionals: [],
 				codec: "record-start",

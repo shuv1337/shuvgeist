@@ -102,8 +102,31 @@ describe("cli-core", () => {
 			expect.arrayContaining(["target", "tabId", "frameId", "out", "noViewportJson"]),
 		);
 		expect(flagsFor("record_start")).not.toContain("noViewportJson");
+		expect(flagsFor("record_start")).toEqual(expect.arrayContaining(["recordingMode", "audio"]));
 		expect(flagsFor("ref_click")).toEqual(expect.arrayContaining(["native", "trusted"]));
 		expect(flagsFor("ref_fill")).toEqual(expect.arrayContaining(["native", "trusted"]));
+	});
+
+	it("plans explicit tab-capture recording and keeps audio opt-in", () => {
+		expect(
+			createCommandPlan(
+				"record",
+				["start"],
+				{ out: "/tmp/tab.webm", recordingMode: "tab-capture", audio: true, maxDuration: "5s" },
+				() => "",
+			),
+		).toMatchObject({
+			kind: "record",
+			action: "start",
+			params: {
+				mode: "tab-capture",
+				audio: true,
+				maxDurationMs: 5_000,
+			},
+		});
+		expect(
+			createCommandPlan("record", ["start"], { out: "/tmp/tab.webm", audio: true }, () => ""),
+		).toMatchObject({ kind: "usage-error", message: "--audio requires --mode tab-capture" });
 	});
 
 	it("records every intentional pre-parser exception", () => {

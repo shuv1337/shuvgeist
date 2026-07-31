@@ -45,6 +45,7 @@ const reviewedPermissions = Object.freeze([
 	"cookies",
 	"declarativeNetRequest",
 	"offscreen",
+	"tabCapture",
 	"alarms",
 ]);
 const reviewedHostPermissions = Object.freeze(["<all_urls>"]);

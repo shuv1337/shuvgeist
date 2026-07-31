@@ -8,6 +8,7 @@
 
 ### Added
 
+- Explicit Chrome tab-capture recording can stream MediaRecorder WebM directly to the CLI with opt-in tab audio, visible in-tab and badge controls, deterministic lifecycle summaries, and no ffmpeg dependency.
 - Origin-bound authenticated JSON requests use the selected Chrome or explicitly authorized Electron page session with relative-path, redirect, timeout, byte, mutation-review, schema, and no-store gates.
 - Exact-target human handoffs pause the extension agent, CLI, or MCP caller behind an in-page acknowledgement and resume overlay, with generation-bound completion and fail-closed timeout/cancellation.
 - Bridge operations now return privacy-bounded aftermath summaries and append them to rotating, corruption-tolerant per-session local journals readable with `shuvgeist journal`.

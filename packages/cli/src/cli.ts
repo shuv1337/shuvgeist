@@ -21,7 +21,7 @@
  *   3 — auth/configuration/network error
  */
 
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { parseArgs } from "node:util";
@@ -327,6 +327,9 @@ function printRecordStopSummary(result: RecordStopResult, jsonMode: boolean, out
 	}
 	console.log(`Recording stopped: ${result.outcome}`);
 	console.log(`  File: ${outPath ?? "(not written by this command)"}`);
+	if (result.mode) console.log(`  Mode: ${result.mode}`);
+	if (result.mode === "tab-capture") console.log(`  Audio: ${result.audio === true ? "included" : "disabled"}`);
+	if (result.artifactState) console.log(`  Artifact: ${result.artifactState}`);
 	console.log(`  Duration: ${result.durationMs}ms`);
 	console.log(`  Frames: ${result.frameCount}`);
 	console.log(`  Source bytes: ${result.sourceBytes}`);
@@ -341,6 +344,9 @@ function printRecordStopSummary(result: RecordStopResult, jsonMode: boolean, out
 	}
 	if (typeof result.droppedFrameCount === "number") {
 		console.log(`  Dropped source frames: ${result.droppedFrameCount}`);
+	}
+	if (typeof result.chunkCount === "number") {
+		console.log(`  WebM chunks: ${result.chunkCount}`);
 	}
 }
 
@@ -378,7 +384,7 @@ function isRecordFrameEvent(event: BridgeEvent): event is BridgeEvent & { data: 
 	);
 }
 
-function isLegacyRecordChunkEvent(event: BridgeEvent): event is BridgeEvent & { data: RecordChunkEventData } {
+function isRecordChunkEvent(event: BridgeEvent): event is BridgeEvent & { data: RecordChunkEventData } {
 	const data = event.data as Partial<RecordChunkEventData> | undefined;
 	return (
 		event.event === "record_chunk" &&
@@ -706,11 +712,14 @@ async function cmdRecord(
 		printError("record start requires --out", jsonMode);
 		process.exit(1);
 	}
-	try {
-		assertFfmpegAvailable();
-	} catch (error) {
-		printError(error instanceof Error ? error.message : String(error), jsonMode);
-		process.exit(1);
+	const requestedMode = params.mode === "tab-capture" ? "tab-capture" : "cdp";
+	if (requestedMode === "cdp") {
+		try {
+			assertFfmpegAvailable();
+		} catch (error) {
+			printError(error instanceof Error ? error.message : String(error), jsonMode);
+			process.exit(1);
+		}
 	}
 
 	const resolved = requireNodeRuntime().requireConnection(flags);
@@ -731,6 +740,9 @@ async function cmdRecord(
 	let stopRequested = false;
 	let timeout: ReturnType<typeof setTimeout> | undefined;
 	let encoder: FfmpegWebmEncoder | undefined;
+	let activeMode: "cdp" | "tab-capture" = requestedMode;
+	let directOutputReady = false;
+	const pendingChunks: Buffer[] = [];
 	let encoderQueue = Promise.resolve();
 	const pendingFrames: Array<{ frame: Buffer; capturedAtMs: number }> = [];
 	const telemetry = resolveCliTelemetry();
@@ -764,6 +776,19 @@ async function cmdRecord(
 		span?.end("error");
 		printError(message, jsonMode);
 		finish(code);
+	};
+
+	const appendDirectChunk = (chunk: Buffer): boolean => {
+		try {
+			appendFileSync(outPath, chunk);
+			return true;
+		} catch (error) {
+			fail(
+				`Could not write tab-capture artifact ${outPath}: ${error instanceof Error ? error.message : String(error)}`,
+				1,
+			);
+			return false;
+		}
 	};
 
 	const sendStop = (): void => {
@@ -822,6 +847,9 @@ async function cmdRecord(
 				return;
 			}
 			ws.send(JSON.stringify(request));
+			if (!jsonMode && requestedMode === "tab-capture") {
+				console.log("Requesting Chrome tab capture. Approve the in-tab prompt if Chrome requires confirmation.");
+			}
 			return;
 		}
 		if (typeof msg.id === "number" && msg.id === requestId) {
@@ -841,17 +869,37 @@ async function cmdRecord(
 			const result: RecordStartResult = resultValidation.value;
 			recordingId = result.recordingId;
 			started = true;
-			encoder = new FfmpegWebmEncoder();
-			encoder.start({
-				outPath,
-				fps: typeof params.fps === "number" ? params.fps : BridgeDefaults.RECORD_DEFAULT_FPS,
-				mimeType: result.mimeType,
-				videoBitsPerSecond: result.videoBitsPerSecond,
-			});
-			for (const pendingFrame of pendingFrames.splice(0)) {
-				encoderQueue = encoderQueue
-					.then(() => encoder?.pushFrame(pendingFrame.frame, pendingFrame.capturedAtMs))
-					.then(() => undefined);
+			activeMode = result.mode === "tab-capture" ? "tab-capture" : "cdp";
+			if (activeMode === "tab-capture") {
+				try {
+					mkdirSync(dirname(outPath), { recursive: true });
+					writeFileSync(outPath, Buffer.alloc(0));
+				} catch (error) {
+					fail(
+						`Could not initialize tab-capture artifact ${outPath}: ${
+							error instanceof Error ? error.message : String(error)
+						}`,
+						1,
+					);
+					return;
+				}
+				directOutputReady = true;
+				for (const chunk of pendingChunks.splice(0)) {
+					if (!appendDirectChunk(chunk)) return;
+				}
+			} else {
+				encoder = new FfmpegWebmEncoder();
+				encoder.start({
+					outPath,
+					fps: typeof params.fps === "number" ? params.fps : BridgeDefaults.RECORD_DEFAULT_FPS,
+					mimeType: result.mimeType,
+					videoBitsPerSecond: result.videoBitsPerSecond,
+				});
+				for (const pendingFrame of pendingFrames.splice(0)) {
+					encoderQueue = encoderQueue
+						.then(() => encoder?.pushFrame(pendingFrame.frame, pendingFrame.capturedAtMs))
+						.then(() => undefined);
+				}
 			}
 			span?.setAttributes({
 				"record.recording_id": result.recordingId,
@@ -873,6 +921,10 @@ async function cmdRecord(
 		if (msg.type !== "event") return;
 		const event = msg as BridgeEvent;
 		if (isRecordFrameEvent(event)) {
+			if (activeMode === "tab-capture") {
+				fail("Tab-capture mode received an unexpected CDP frame event.", 3);
+				return;
+			}
 			if (recordingId && event.data.recordingId !== recordingId) return;
 			if (!recordingId) recordingId = event.data.recordingId;
 			if (event.data.dataBase64) {
@@ -921,8 +973,40 @@ async function cmdRecord(
 			}
 			return;
 		}
-		if (isLegacyRecordChunkEvent(event)) {
-			fail("Bridge sent legacy record_chunk data; restart the extension to use debugger screencast recording.", 3);
+		if (isRecordChunkEvent(event)) {
+			if (recordingId && event.data.recordingId !== recordingId) return;
+			if (!recordingId) recordingId = event.data.recordingId;
+			if (requestedMode !== "tab-capture" && activeMode !== "tab-capture") {
+				fail("Bridge sent tab-capture chunks for a CDP recording.", 3);
+				return;
+			}
+			if (event.data.chunkBase64) {
+				const chunk = Buffer.from(event.data.chunkBase64, "base64");
+				if (directOutputReady) {
+					if (!appendDirectChunk(chunk)) return;
+				} else pendingChunks.push(chunk);
+			}
+			if (event.data.final && event.data.summary) {
+				const summaryValidation = validateBridgeCommandResult("record_stop", event.data.summary);
+				if (!summaryValidation.ok) {
+					fail(
+						`Invalid result for 'record_stop': ${formatBridgeCommandValidationErrors(summaryValidation.errors)}`,
+						3,
+					);
+					return;
+				}
+				const summary = summaryValidation.value;
+				span?.setAttributes({
+					"record.duration_ms": summary.durationMs,
+					"record.source_bytes": summary.sourceBytes,
+					"record.encoded_size_bytes": summary.encodedSizeBytes,
+					"record.chunk_count": summary.chunkCount,
+					"record.outcome": summary.outcome,
+				});
+				span?.end(summary.outcome === "stopped_error" ? "error" : "ok");
+				printRecordStopSummary(summary, jsonMode, outPath);
+				finish(summary.outcome === "stopped_error" ? 1 : 0);
+			}
 		}
 	});
 
@@ -1397,6 +1481,7 @@ Usage:
   shuvgeist device <emulate|reset> [...] [--json]
   shuvgeist perf <metrics|trace-start|trace-stop> [...] [--json]
   shuvgeist record start --out file.webm [--tab-id N] [--max-duration 30s]
+                         [--mode cdp|tab-capture] [--audio]
                          [--fps N] [--quality N] [--max-width N] [--max-height N]
                          [--video-bitrate N] [--mime-type video/webm;codecs=vp9]
   shuvgeist record stop [--tab-id N] [--json]
@@ -1483,6 +1568,8 @@ Global options:
   --quality <n>       Recording JPEG quality (1-100)
   --video-bitrate <n> Recording encoder video bitrate
   --mime-type <type>  Recording WebM mime type
+  --mode <mode>       Recording capture mode: cdp (default) or tab-capture
+  --audio             Include tab audio (requires --mode tab-capture)
   --user-data-dir <path>     Launch: explicit Chromium user-data-dir
                              (default: ~/.shuvgeist/profile/<browser>)
   --use-default-profile      Launch: share the user's existing browser profile
