@@ -42,6 +42,7 @@ import {
 import { normalizeSnapshotResult } from "./page-snapshot-domain.js";
 import { createPageTrustedInputDriver } from "./page-trusted-input.js";
 
+export type * from "./network-redaction.js";
 export type { PageDriverScope, PageDriverTransport, PageIdentity } from "./page-driver-identity.js";
 export {
 	createPageDriverScope,

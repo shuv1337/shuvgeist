@@ -32,6 +32,7 @@
 
 ### Changed
 
+- Network capture now replaces credentials with stable secret references, omits ambiguous bodies, stores Electron secret values in a separate mode-0600 profile, and requires explicit review before exporting mutating curl commands.
 - Extension releases now use an exact reviewed file and permission allowlist to produce reproducible ZIP bytes with a published SHA-256 digest.
 - Replaced CLI-side duplicate JPEG writes during recording with timestamped MJPEG/Matroska input and explicit frame accounting.
 - Bridge commands now derive wire schemas, correlated TypeScript contracts, CLI planning, capability advertising, and typed handler registries from one definition source, with runtime validation at transport boundaries. (#44)

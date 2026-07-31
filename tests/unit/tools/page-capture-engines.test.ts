@@ -164,22 +164,27 @@ describe("page capture engines", () => {
 			response: { status: 200, headers: { "Set-Cookie": "session=secret", Server: "fixture" } },
 		});
 		emitRequest(secondCdp, "other");
-		firstCdp.setBody("body", { body: "ééé", base64Encoded: false });
+		firstCdp.emit("Network.responseReceived", {
+			requestId: "body",
+			response: { status: 200, mimeType: "application/json", headers: { "Content-Type": "application/json" } },
+		});
+		firstCdp.setBody("body", { body: '{"value":"ééé"}', base64Encoded: false });
 		firstCdp.emit("Network.loadingFinished", { requestId: "body", encodedDataLength: 99 });
 
 		await vi.waitFor(() => expect(first.get("body").request.hasResponseBody).toBe(true));
 		expect(first.list().requests.map((request) => request.requestId)).toEqual(["secret", "body"]);
 		expect(first.list().requests[0]).toMatchObject({
-			requestHeaders: { Authorization: "<redacted>", "X-Trace": "visible" },
-			responseHeaders: { "Set-Cookie": "<redacted>", Server: "fixture" },
+			requestHeaders: { Authorization: expect.stringContaining("{{shuvgeist-secret:"), "X-Trace": "visible" },
+			responseHeaders: { "Set-Cookie": expect.stringContaining("{{shuvgeist-secret:"), Server: "fixture" },
 			hasRequestBody: true,
+			requestBodyOmitted: true,
 		});
 		expect(first.list().requests[0]).not.toHaveProperty("requestBody");
 		expect(first.list().requests[1]).not.toHaveProperty("responseBody");
 		expect(second.list().requests.map((request) => request.requestId)).toEqual(["other"]);
 		expect(first.get("body").request).toMatchObject({
-			responseBody: "éé",
-			responseBodySize: 6,
+			responseBody: '{"val',
+			responseBodySize: expect.any(Number),
 			responseBodyTruncated: true,
 		});
 		expect(first.stats()).toMatchObject({ active: true, requestCount: 2, storedBodyBytes: 5, evictedRequests: 1 });
@@ -187,13 +192,13 @@ describe("page capture engines", () => {
 		expect(second.stats().scope.page.pageId).toBe("second");
 		expect(firstCdp.ensuredDomains).toEqual(["Network"]);
 
-		const redacted = first.toCurl("secret");
-		expect(redacted.command).toContain("Authorization: <redacted>");
+		const redacted = first.toCurl("secret", { reviewMutation: true });
+		expect(redacted.command).toContain("Authorization: {{shuvgeist-secret:");
 		expect(redacted.command).toContain("X-Trace: visible");
-		expect(redacted.redactedHeaders).toEqual(["Authorization"]);
-		expect(first.toCurl("secret", { redactSensitiveHeaders: false }).command).toContain(
-			"Authorization: Bearer secret",
-		);
+		expect(redacted.redactedHeaders).toEqual(expect.arrayContaining(["Authorization", "Set-Cookie"]));
+		expect(
+			first.toCurl("secret", { redactSensitiveHeaders: false, reviewMutation: true }).command,
+		).not.toContain("Bearer secret");
 
 		await first.stop();
 		expect(first.stats().active).toBe(false);

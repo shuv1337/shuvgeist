@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { createServer } from "node:net";
+import { dirname, join } from "node:path";
 import { SNAPSHOT_INJECTED_ARTIFACT } from "@shuvgeist/driver/driver-artifacts-generated";
 import type { SnapshotInjectionConfig } from "@shuvgeist/driver/injected-contracts";
 import { buildInjectedArtifactInvocation } from "@shuvgeist/driver/injected-invocation";
@@ -9,6 +10,7 @@ import {
 	rankLocatorCandidates,
 	type SemanticLocatorCandidate,
 } from "@shuvgeist/driver/locator-scoring";
+import type { NetworkSecretStore } from "@shuvgeist/driver/network-redaction";
 import type { PageDriver } from "@shuvgeist/driver/page-driver";
 import { createWebSocketCdpPageDriver } from "@shuvgeist/driver/page-driver-bindings";
 import type { PageDriverScope } from "@shuvgeist/driver/page-driver-identity";
@@ -54,6 +56,7 @@ import type {
 } from "@shuvgeist/protocol/protocol";
 import { matchSnapshotSkillsForApp } from "@shuvgeist/protocol/skill-snapshot";
 import type { BridgeTarget } from "@shuvgeist/protocol/target";
+import { FileNetworkSecretProfile } from "../network-secret-profile.js";
 import { createNodeConfigOwner, NodeConfigError, type NodeConfigOwner } from "../node-config.js";
 import { KNOWN_ELECTRON_APPS, resolveExecutable } from "./app-registry.js";
 import { normalizeElectronConfig } from "./config.js";
@@ -103,6 +106,7 @@ export interface ElectronSessionManagerOptions {
 	apps?: readonly ElectronApp[];
 	attachTimeoutMs?: number;
 	livenessTimeoutMs?: number;
+	networkSecretStore?: NetworkSecretStore & { flush?: () => Promise<void> };
 }
 
 interface VerifiedElectronEndpoint {
@@ -139,9 +143,13 @@ export class ElectronSessionManager {
 	private readonly attachTimeoutMs: number;
 	private readonly livenessTimeoutMs: number;
 	private readonly configOwner: NodeConfigOwner;
+	private readonly networkSecretStore: NetworkSecretStore & { flush?: () => Promise<void> };
 
 	constructor(options: ElectronSessionManagerOptions = {}) {
 		this.configOwner = options.configOwner ?? createNodeConfigOwner();
+		this.networkSecretStore =
+			options.networkSecretStore ??
+			new FileNetworkSecretProfile(join(dirname(this.configOwner.paths.bridge), "profiles", "network-secrets.json"));
 		this.listElectronProcesses = options.listProcesses ?? listElectronProcesses;
 		this.listeningPidsForPort = options.listeningPidsForPort ?? findListeningPidsForPort;
 		this.connectPage = options.connectPage ?? ElectronWsCdpSession.connect;
@@ -161,6 +169,7 @@ export class ElectronSessionManager {
 	async dispose(): Promise<void> {
 		await Promise.all([...this.pageDrivers.values()].map((entry) => this.disposePageDriverEntry(entry)));
 		await Promise.all([...this.pendingPageDriverDisposals]);
+		await this.networkSecretStore.flush?.();
 	}
 
 	async launch(appRef: string, options: { inspectMain?: boolean } = {}): Promise<ElectronSessionSummary> {
@@ -562,6 +571,7 @@ export class ElectronSessionManager {
 		const result = await state.driver.network.start({
 			maxEntries: params.maxEntries,
 			maxBodyBytes: params.maxBodyBytes,
+			sensitiveFields: params.sensitiveFields,
 		});
 		return pageDriverNetworkStatsToWire(result, pageTarget);
 	}
@@ -599,7 +609,7 @@ export class ElectronSessionManager {
 	async networkCurl(target: BridgeTarget, params: NetworkCurlParams): Promise<BridgeCommandResult<"network_curl">> {
 		const { state, pageTarget } = await this.resolvePageRuntime(target, undefined, "network curl export");
 		return pageDriverNetworkCurlToWire(
-			state.driver.network.toCurl(params.requestId, { redactSensitiveHeaders: params.includeSensitive !== true }),
+			state.driver.network.toCurl(params.requestId, { reviewMutation: params.reviewMutation === true }),
 			pageTarget,
 		);
 	}
@@ -1082,6 +1092,7 @@ export class ElectronSessionManager {
 				cdp,
 				buildSnapshotExpression: buildElectronSnapshotExpression,
 				authorizeCdpInput: (scope) => this.authorizeCdpInput(scope, entry),
+				network: { secretStore: this.networkSecretStore },
 			});
 			await driver.ready;
 		} catch (error) {

@@ -1,13 +1,14 @@
 import type { CdpSession } from "./cdp-session.js";
+import { NetworkRedactor, type NetworkSecretStore } from "./network-redaction.js";
 import type { PageDriverScope } from "./page-driver-identity.js";
 
-const REDACTED_HEADERS = new Set(["authorization", "cookie", "set-cookie", "x-api-key", "proxy-authorization"]);
 const DEFAULT_MAX_ENTRIES = 250;
 const DEFAULT_MAX_BODY_BYTES = 256_000;
 
 export interface PageNetworkCaptureOptions {
 	maxEntries?: number;
 	maxBodyBytes?: number;
+	sensitiveFields?: string[];
 	signal?: AbortSignal;
 }
 
@@ -29,6 +30,11 @@ export interface PageNetworkRequest {
 	responseBodyTruncated?: boolean;
 	requestBodySize?: number;
 	responseBodySize?: number;
+	requestBodyOmitted?: boolean;
+	responseBodyOmitted?: boolean;
+	redactedHeaders?: string[];
+	redactedFields?: string[];
+	secretReferences?: string[];
 	hasRequestBody: boolean;
 	hasResponseBody: boolean;
 }
@@ -63,6 +69,10 @@ export interface PageNetworkBodyResult {
 	responseBody?: string;
 	requestBodyTruncated: boolean;
 	responseBodyTruncated: boolean;
+	requestBodyOmitted: boolean;
+	responseBodyOmitted: boolean;
+	redactedFields: string[];
+	secretReferences: string[];
 }
 
 export interface PageNetworkCurlResult {
@@ -80,7 +90,10 @@ export interface PageNetworkEngine {
 	list(options?: PageNetworkListOptions): PageNetworkListResult;
 	get(requestId: string): PageNetworkGetResult;
 	body(requestId: string): PageNetworkBodyResult;
-	toCurl(requestId: string, options?: { redactSensitiveHeaders?: boolean }): PageNetworkCurlResult;
+	toCurl(
+		requestId: string,
+		options?: { redactSensitiveHeaders?: boolean; reviewMutation?: boolean },
+	): PageNetworkCurlResult;
 	dispose(): Promise<void>;
 }
 
@@ -89,6 +102,8 @@ export interface CreatePageNetworkEngineOptions {
 	getScope: () => PageDriverScope;
 	maxEntries?: number;
 	maxBodyBytes?: number;
+	secretStore?: NetworkSecretStore;
+	sensitiveFields?: string[];
 }
 
 type CapturePhase = "starting" | "active" | "stopping" | "inactive";
@@ -124,6 +139,8 @@ class CdpPageNetworkEngine implements PageNetworkEngine {
 	private order: string[] = [];
 	private maxEntries: number;
 	private maxBodyBytes: number;
+	private redactor: NetworkRedactor;
+	private readonly secretStore?: NetworkSecretStore;
 	private storedBodyBytes = 0;
 	private evictedRequests = 0;
 	private nextEpoch = 1;
@@ -138,6 +155,11 @@ class CdpPageNetworkEngine implements PageNetworkEngine {
 		this.getScope = options.getScope;
 		this.maxEntries = normalizePositiveInteger(options.maxEntries, DEFAULT_MAX_ENTRIES, "maxEntries");
 		this.maxBodyBytes = normalizeNonNegativeInteger(options.maxBodyBytes, DEFAULT_MAX_BODY_BYTES, "maxBodyBytes");
+		this.secretStore = options.secretStore;
+		this.redactor = new NetworkRedactor({
+			store: this.secretStore,
+			sensitiveFields: options.sensitiveFields,
+		});
 		this.ownerPrefix = `page-network:${nextEngineId++}`;
 	}
 
@@ -151,6 +173,12 @@ class CdpPageNetworkEngine implements PageNetworkEngine {
 
 		this.maxEntries = normalizePositiveInteger(options.maxEntries, this.maxEntries, "maxEntries");
 		this.maxBodyBytes = normalizeNonNegativeInteger(options.maxBodyBytes, this.maxBodyBytes, "maxBodyBytes");
+		if (options.sensitiveFields) {
+			this.redactor = new NetworkRedactor({
+				store: this.secretStore,
+				sensitiveFields: options.sensitiveFields,
+			});
+		}
 		this.evictOverflow();
 
 		const epoch = this.nextEpoch++;
@@ -241,26 +269,33 @@ class CdpPageNetworkEngine implements PageNetworkEngine {
 			responseBody: request.responseBody,
 			requestBodyTruncated: request.requestBodyTruncated === true,
 			responseBodyTruncated: request.responseBodyTruncated === true,
+			requestBodyOmitted: request.requestBodyOmitted === true,
+			responseBodyOmitted: request.responseBodyOmitted === true,
+			redactedFields: [...(request.redactedFields ?? [])],
+			secretReferences: [...(request.secretReferences ?? [])],
 		};
 	}
 
-	toCurl(requestId: string, options: { redactSensitiveHeaders?: boolean } = {}): PageNetworkCurlResult {
+	toCurl(
+		requestId: string,
+		options: { redactSensitiveHeaders?: boolean; reviewMutation?: boolean } = {},
+	): PageNetworkCurlResult {
 		const request = this.requireRequest(requestId);
-		const redactSensitiveHeaders = options.redactSensitiveHeaders !== false;
-		const redactedHeaders = redactSensitiveHeaders
-			? Object.keys(request.requestHeaders ?? {}).filter((key) => REDACTED_HEADERS.has(key.toLowerCase()))
-			: [];
+		if (isMutationMethod(request.method) && options.reviewMutation !== true) {
+			throw new Error(
+				`Refusing to export replay command for mutating ${request.method} request without explicit mutation review`,
+			);
+		}
 		const parts = ["curl", "-X", shellEscape(request.method), shellEscape(request.url)];
 		for (const [key, value] of Object.entries(request.requestHeaders ?? {})) {
-			const outputValue = redactSensitiveHeaders && REDACTED_HEADERS.has(key.toLowerCase()) ? "<redacted>" : value;
-			parts.push("-H", shellEscape(`${key}: ${outputValue}`));
+			parts.push("-H", shellEscape(`${key}: ${value}`));
 		}
 		if (request.requestBody !== undefined) parts.push("--data-raw", shellEscape(request.requestBody));
 		return {
 			scope: this.getScope(),
 			requestId,
 			command: parts.join(" "),
-			redactedHeaders,
+			redactedHeaders: [...(request.redactedHeaders ?? [])],
 		};
 	}
 
@@ -368,19 +403,33 @@ class CdpPageNetworkEngine implements PageNetworkEngine {
 		if (!requestId) return;
 		const requestPayload = asRecord(payload.request);
 		const existing = this.requests.get(requestId);
+		const rawUrl = stringValue(requestPayload?.url);
 		const request: PageNetworkRequest = existing ?? {
 			requestId,
 			method: stringValue(requestPayload?.method) || "GET",
-			url: stringValue(requestPayload?.url),
+			url: rawUrl,
 			startedAt: Date.now(),
 			hasRequestBody: false,
 			hasResponseBody: false,
 		};
 		request.method = stringValue(requestPayload?.method) || request.method;
-		request.url = stringValue(requestPayload?.url) || request.url;
+		const source = networkSecretSource(rawUrl || request.url, "request");
+		const redactedUrl = this.redactor.redactUrl(rawUrl || request.url, `${source}.url`);
+		request.url = redactedUrl.url;
+		request.redactedFields = uniqueStrings([...(request.redactedFields ?? []), ...redactedUrl.redactedFields]);
+		request.secretReferences = uniqueStrings([...(request.secretReferences ?? []), ...redactedUrl.secretReferences]);
 		request.resourceType = optionalString(payload.type) ?? request.resourceType;
-		request.requestHeaders = stringMapFrom(requestPayload?.headers);
-		this.setRequestBody(request, optionalString(requestPayload?.postData));
+		const rawHeaders = stringMapFrom(requestPayload?.headers);
+		const headers = this.redactor.redactHeaders(rawHeaders, `${source}.header`);
+		request.requestHeaders = headers.headers;
+		request.redactedHeaders = uniqueStrings([...(request.redactedHeaders ?? []), ...headers.redactedHeaders]);
+		request.secretReferences = uniqueStrings([...(request.secretReferences ?? []), ...headers.secretReferences]);
+		this.setRequestBody(
+			request,
+			optionalString(requestPayload?.postData),
+			headerValue(rawHeaders, "content-type"),
+			`${source}.body`,
+		);
 		if (!existing) this.order.push(requestId);
 		this.requests.set(requestId, request);
 		this.evictOverflow();
@@ -392,8 +441,13 @@ class CdpPageNetworkEngine implements PageNetworkEngine {
 		if (!request) return;
 		const response = asRecord(payload.response);
 		request.status = typeof response?.status === "number" ? response.status : request.status;
-		request.responseHeaders = stringMapFrom(response?.headers);
-		request.contentType = optionalString(response?.mimeType) ?? request.contentType;
+		const rawHeaders = stringMapFrom(response?.headers);
+		const headers = this.redactor.redactHeaders(rawHeaders, `${networkSecretSource(request.url, "response")}.header`);
+		request.responseHeaders = headers.headers;
+		request.redactedHeaders = uniqueStrings([...(request.redactedHeaders ?? []), ...headers.redactedHeaders]);
+		request.secretReferences = uniqueStrings([...(request.secretReferences ?? []), ...headers.secretReferences]);
+		request.contentType =
+			optionalString(response?.mimeType) ?? headerValue(rawHeaders, "content-type") ?? request.contentType;
 	}
 
 	private async finishRequest(lifecycle: CaptureLifecycle, payload: Record<string, unknown>): Promise<void> {
@@ -423,20 +477,35 @@ class CdpPageNetworkEngine implements PageNetworkEngine {
 		request.durationMs = request.endedAt - request.startedAt;
 	}
 
-	private setRequestBody(request: PageNetworkRequest, body: string | undefined): void {
+	private setRequestBody(
+		request: PageNetworkRequest,
+		body: string | undefined,
+		contentType: string | undefined,
+		source: string,
+	): void {
 		this.storedBodyBytes -= utf8ByteLength(request.requestBody);
 		if (body === undefined) {
 			request.requestBody = undefined;
 			request.requestBodySize = undefined;
 			request.requestBodyTruncated = false;
+			request.requestBodyOmitted = false;
 			request.hasRequestBody = false;
 			return;
 		}
-		const bounded = boundUtf8Text(body, this.maxBodyBytes);
-		request.requestBody = bounded.text;
-		request.requestBodySize = bounded.originalBytes;
-		request.requestBodyTruncated = bounded.truncated;
+		const redacted = this.redactor.redactBody(body, contentType, source);
+		request.redactedFields = uniqueStrings([...(request.redactedFields ?? []), ...redacted.redactedFields]);
+		request.secretReferences = uniqueStrings([...(request.secretReferences ?? []), ...redacted.secretReferences]);
+		request.requestBodyOmitted = redacted.omitted;
+		request.requestBodySize = utf8ByteLength(body);
 		request.hasRequestBody = true;
+		if (redacted.text === undefined) {
+			request.requestBody = undefined;
+			request.requestBodyTruncated = false;
+			return;
+		}
+		const bounded = boundUtf8Text(redacted.text, this.maxBodyBytes);
+		request.requestBody = bounded.text;
+		request.requestBodyTruncated = bounded.truncated;
 		this.storedBodyBytes += bounded.storedBytes;
 	}
 
@@ -446,14 +515,28 @@ class CdpPageNetworkEngine implements PageNetworkEngine {
 			request.responseBody = undefined;
 			request.responseBodySize = undefined;
 			request.responseBodyTruncated = false;
+			request.responseBodyOmitted = false;
 			request.hasResponseBody = false;
 			return;
 		}
-		const bounded = boundUtf8Text(body, this.maxBodyBytes);
-		request.responseBody = bounded.text;
-		request.responseBodySize = bounded.originalBytes;
-		request.responseBodyTruncated = bounded.truncated;
+		const redacted = this.redactor.redactBody(
+			body,
+			request.contentType,
+			`${networkSecretSource(request.url, "response")}.body`,
+		);
+		request.redactedFields = uniqueStrings([...(request.redactedFields ?? []), ...redacted.redactedFields]);
+		request.secretReferences = uniqueStrings([...(request.secretReferences ?? []), ...redacted.secretReferences]);
+		request.responseBodyOmitted = redacted.omitted;
+		request.responseBodySize = utf8ByteLength(body);
 		request.hasResponseBody = true;
+		if (redacted.text === undefined) {
+			request.responseBody = undefined;
+			request.responseBodyTruncated = false;
+			return;
+		}
+		const bounded = boundUtf8Text(redacted.text, this.maxBodyBytes);
+		request.responseBody = bounded.text;
+		request.responseBodyTruncated = bounded.truncated;
 		this.storedBodyBytes += bounded.storedBytes;
 	}
 
@@ -499,8 +582,11 @@ function cloneRequest(
 ): PageNetworkRequest {
 	const cloned: PageNetworkRequest = {
 		...request,
-		requestHeaders: cloneHeaders(request.requestHeaders, options.redactSensitiveHeaders === true),
-		responseHeaders: cloneHeaders(request.responseHeaders, options.redactSensitiveHeaders === true),
+		requestHeaders: cloneHeaders(request.requestHeaders),
+		responseHeaders: cloneHeaders(request.responseHeaders),
+		redactedHeaders: [...(request.redactedHeaders ?? [])],
+		redactedFields: [...(request.redactedFields ?? [])],
+		secretReferences: [...(request.secretReferences ?? [])],
 	};
 	if (options.omitBodies) {
 		delete cloned.requestBody;
@@ -509,17 +595,9 @@ function cloneRequest(
 	return cloned;
 }
 
-function cloneHeaders(
-	headers: Record<string, string> | undefined,
-	redactSensitiveHeaders: boolean,
-): Record<string, string> | undefined {
+function cloneHeaders(headers: Record<string, string> | undefined): Record<string, string> | undefined {
 	if (!headers) return undefined;
-	return Object.fromEntries(
-		Object.entries(headers).map(([key, value]) => [
-			key,
-			redactSensitiveHeaders && REDACTED_HEADERS.has(key.toLowerCase()) ? "<redacted>" : value,
-		]),
-	);
+	return { ...headers };
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -570,4 +648,28 @@ function throwIfAborted(signal?: AbortSignal): void {
 
 function shellEscape(value: string): string {
 	return `'${value.replaceAll("'", `'"'"'`)}'`;
+}
+
+function headerValue(headers: Record<string, string> | undefined, name: string): string | undefined {
+	if (!headers) return undefined;
+	const entry = Object.entries(headers).find(([key]) => key.toLowerCase() === name);
+	return entry?.[1];
+}
+
+function uniqueStrings(values: readonly string[]): string[] {
+	return [...new Set(values)];
+}
+
+function isMutationMethod(method: string): boolean {
+	return !["GET", "HEAD", "OPTIONS"].includes(method.toUpperCase());
+}
+
+function networkSecretSource(url: string, direction: "request" | "response"): string {
+	try {
+		const parsed = new URL(url);
+		if (parsed.protocol === "http:" || parsed.protocol === "https:") return `${direction}.${parsed.origin}`;
+	} catch {
+		// Invalid and non-network URLs receive a non-origin-specific fail-closed slot.
+	}
+	return `${direction}.unknown-origin`;
 }

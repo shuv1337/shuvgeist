@@ -1464,7 +1464,8 @@ Global options:
   --max-count <N>     Assertion maximum match count
   --url-pattern <re>  URL assertion regex
   --search <text>     Network list filter
-  --include-sensitive Include sensitive data in network curl export
+  --review-mutation  Confirm review before exporting a mutating request
+  --include-sensitive Deprecated; secret values are never placed in exports
   --preset <name>     Device preset
   --width <px>        Device viewport width
   --height <px>       Device viewport height

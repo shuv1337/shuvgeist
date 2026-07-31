@@ -146,6 +146,10 @@ describe("bridge command schemas", () => {
 				responseBody: "ok",
 				requestBodyTruncated: false,
 				responseBodyTruncated: false,
+				requestBodyOmitted: false,
+				responseBodyOmitted: false,
+				redactedFields: [],
+				secretReferences: [],
 			}),
 		).toMatchObject({ ok: true });
 		expect(

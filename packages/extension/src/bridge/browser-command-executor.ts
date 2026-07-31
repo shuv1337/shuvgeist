@@ -766,6 +766,7 @@ export class BrowserCommandExecutor {
 			await resolved.driver.network.start({
 				maxEntries: params.maxEntries,
 				maxBodyBytes: params.maxBodyBytes,
+				sensitiveFields: params.sensitiveFields,
 				signal,
 			}),
 			chromeResultTarget(resolved.tabId),
@@ -821,7 +822,7 @@ export class BrowserCommandExecutor {
 		const resolved = await this.resolvePageDriver(params.tabId);
 		return pageDriverNetworkCurlToWire(
 			resolved.driver.network.toCurl(params.requestId, {
-				redactSensitiveHeaders: params.includeSensitive !== true,
+				reviewMutation: params.reviewMutation === true,
 			}),
 			chromeResultTarget(resolved.tabId),
 		);

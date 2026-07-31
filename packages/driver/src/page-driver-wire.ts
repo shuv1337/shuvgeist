@@ -143,6 +143,10 @@ export function pageDriverNetworkBodyToWire(
 		...(result.responseBody !== undefined ? { responseBody: result.responseBody } : {}),
 		requestBodyTruncated: result.requestBodyTruncated,
 		responseBodyTruncated: result.responseBodyTruncated,
+		requestBodyOmitted: result.requestBodyOmitted,
+		responseBodyOmitted: result.responseBodyOmitted,
+		redactedFields: [...result.redactedFields],
+		secretReferences: [...result.secretReferences],
 	};
 }
 

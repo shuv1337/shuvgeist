@@ -18,6 +18,7 @@ export const CliFlagDefinitions = [
 	{ names: ["--follow"], key: "follow", kind: "boolean" },
 	{ names: ["--include-hidden"], key: "includeHidden", kind: "boolean" },
 	{ names: ["--include-sensitive"], key: "includeSensitive", kind: "boolean" },
+	{ names: ["--review-mutation"], key: "reviewMutation", kind: "boolean" },
 	{ names: ["--no-viewport-json"], key: "noViewportJson", kind: "boolean" },
 	{ names: ["--exact"], key: "exact", kind: "boolean" },
 	{ names: ["--visible"], key: "visible", kind: "boolean" },

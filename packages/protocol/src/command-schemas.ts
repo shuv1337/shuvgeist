@@ -421,6 +421,7 @@ const networkStartParamsSchema = Type.Object(
 		tabId: Type.Optional(Type.Integer({ minimum: 0 })),
 		maxEntries: Type.Optional(Type.Integer({ minimum: 1, maximum: 100_000 })),
 		maxBodyBytes: Type.Optional(Type.Integer({ minimum: 0, maximum: 67_108_864 })),
+		sensitiveFields: Type.Optional(Type.Array(Type.String({ minLength: 1 }), { maxItems: 100 })),
 	},
 	{ additionalProperties: false },
 );
@@ -441,6 +442,7 @@ const networkCurlParamsSchema = Type.Object(
 		tabId: Type.Optional(Type.Integer({ minimum: 0 })),
 		requestId: Type.String({ minLength: 1 }),
 		includeSensitive: Type.Optional(Type.Boolean()),
+		reviewMutation: Type.Optional(Type.Boolean()),
 	},
 	{ additionalProperties: false },
 );
@@ -1096,6 +1098,11 @@ const networkRequestResultSchema = Type.Object({
 	responseBodyTruncated: Type.Optional(Type.Boolean()),
 	requestBodySize: Type.Optional(Type.Integer({ minimum: 0 })),
 	responseBodySize: Type.Optional(Type.Integer({ minimum: 0 })),
+	requestBodyOmitted: Type.Optional(Type.Boolean()),
+	responseBodyOmitted: Type.Optional(Type.Boolean()),
+	redactedHeaders: Type.Optional(Type.Array(Type.String())),
+	redactedFields: Type.Optional(Type.Array(Type.String())),
+	secretReferences: Type.Optional(Type.Array(Type.String())),
 	hasRequestBody: Type.Boolean(),
 	hasResponseBody: Type.Boolean(),
 });
@@ -1113,6 +1120,10 @@ const networkBodyResultSchema = Type.Object({
 	responseBody: Type.Optional(Type.String()),
 	requestBodyTruncated: Type.Boolean(),
 	responseBodyTruncated: Type.Boolean(),
+	requestBodyOmitted: Type.Boolean(),
+	responseBodyOmitted: Type.Boolean(),
+	redactedFields: Type.Array(Type.String()),
+	secretReferences: Type.Array(Type.String()),
 });
 const networkCurlResultSchema = Type.Object({
 	...resolvedPageScopeResultProperties,
@@ -2300,8 +2311,12 @@ export const BridgeCommandDefinitions = [
 			defineCliBinding({
 				family: "network",
 				select: ["curl"],
-				usage: "Usage: shuvgeist network curl <requestId> [--include-sensitive]",
-				flags: [...cliTabTargetFlags, cliFlag("includeSensitive", { param: "includeSensitive", parse: "boolean" })],
+				usage: "Usage: shuvgeist network curl <requestId> [--review-mutation]",
+				flags: [
+					...cliTabTargetFlags,
+					cliFlag("includeSensitive", { param: "includeSensitive", parse: "boolean" }),
+					cliFlag("reviewMutation", { param: "reviewMutation", parse: "boolean" }),
+				],
 				positionals: [
 					cliPositional("requestId", { source: "index", index: 0, param: "requestId", required: true }),
 				],

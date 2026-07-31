@@ -1054,13 +1054,18 @@ describe("electron session manager", () => {
 			},
 		});
 
-		const redacted = await manager.networkCurl(target, { requestId: "req-1" });
-		expect(redacted.command).toContain("Authorization: <redacted>");
+		await expect(manager.networkCurl(target, { requestId: "req-1" })).rejects.toThrow(/explicit mutation review/u);
+		const redacted = await manager.networkCurl(target, { requestId: "req-1", reviewMutation: true });
+		expect(redacted.command).toContain("Authorization: {{shuvgeist-secret:");
 		expect(redacted.command).not.toContain("Bearer secret");
 		expect(redacted.redactedHeaders).toEqual(["Authorization"]);
 		expect("tabId" in redacted).toBe(false);
-		const sensitive = await manager.networkCurl(target, { requestId: "req-1", includeSensitive: true });
-		expect(sensitive.command).toContain("Bearer secret");
+		const sensitive = await manager.networkCurl(target, {
+			requestId: "req-1",
+			includeSensitive: true,
+			reviewMutation: true,
+		});
+		expect(sensitive.command).not.toContain("Bearer secret");
 		await manager.dispose();
 	});
 

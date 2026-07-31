@@ -192,14 +192,14 @@ export class NetworkCaptureEngine {
 		return undefined;
 	}
 
-	curl(tabId: number, requestId: string, includeSensitive = false): string {
-		return this.entry(tabId).engine.toCurl(requestId, { redactSensitiveHeaders: !includeSensitive }).command;
+	curl(tabId: number, requestId: string, reviewMutation = false): string {
+		return this.entry(tabId).engine.toCurl(requestId, { reviewMutation }).command;
 	}
 
 	toCurl(
 		tabId: number,
 		requestId: string,
-		options: { redactSensitiveHeaders?: boolean } = {},
+		options: { redactSensitiveHeaders?: boolean; reviewMutation?: boolean } = {},
 	): { command: string; redactedHeaders: string[] } {
 		const result = this.entry(tabId).engine.toCurl(requestId, options);
 		return { command: result.command, redactedHeaders: result.redactedHeaders };

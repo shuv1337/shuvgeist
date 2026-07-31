@@ -19,6 +19,7 @@
 		"./page-driver-results": "./src/page-driver-results.ts",
 		"./page-driver-wire": "./src/page-driver-wire.ts",
 		"./page-network-engine": "./src/page-network-engine.ts",
+		"./network-redaction": "./src/network-redaction.ts",
 		"./page-ref-engine": "./src/page-ref-engine.ts",
 		"./page-screencast-engine": "./src/page-screencast-engine.ts",
 		"./page-snapshot-domain": "./src/page-snapshot-domain.ts",

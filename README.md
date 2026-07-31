@@ -218,6 +218,8 @@ Human handoffs are bound to the exact task, session, Chrome tab, frame, and navi
 
 Each bridge response also carries a compact `aftermath` summary. The server persists the same bounded record in a per-session journal under `~/.shuvgeist/journals/`; `shuvgeist journal` reads it without requiring an extension connection. JSON CLI output uses `{ "result": ..., "aftermath": ... }` for journaled commands. See [docs/operation-journal.md](docs/operation-journal.md) for retention and privacy rules.
 
+Network capture replaces credentials with stable secret references before results enter normal output paths, omits ambiguous bodies, and gates mutating curl exports behind `--review-mutation`. Electron stores lossless values separately in a mode-0600 local profile; Chrome keeps them only in extension memory. See [docs/network-secret-references.md](docs/network-secret-references.md).
+
 ### Deterministic e2e smoke
 
 Use `assert` for CI-style page checks instead of embedding assertions in REPL snippets. Assertions run against the page context by default and return structured results in `--json` mode.
