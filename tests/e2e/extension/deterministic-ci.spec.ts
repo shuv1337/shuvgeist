@@ -237,7 +237,16 @@ async function waitForBridgeExtension(bridgePort: number, expectedWindowId: numb
 }
 
 function parseCliJson<T>(result: CliRunResult): T {
-	return JSON.parse(result.stdout) as T;
+	const parsed: unknown = JSON.parse(result.stdout);
+	if (
+		typeof parsed === "object" &&
+		parsed !== null &&
+		"result" in parsed &&
+		"aftermath" in parsed
+	) {
+		return parsed.result as T;
+	}
+	return parsed as T;
 }
 
 test("bridge supports deterministic assertions, workflow pinning, and native iframe refs", async () => {
