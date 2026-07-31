@@ -13,6 +13,7 @@ import {
 	type BridgeCapability,
 	ErrorCodes,
 	getBridgeCapabilities,
+	type RecordChunkEventData,
 	type SessionArtifactsResult,
 	type SessionInjectParams,
 	type SessionInjectResult,
@@ -70,6 +71,7 @@ import {
 } from "./bridge/browser-command-executor.js";
 import { ChromePageDriverRegistry } from "./bridge/chrome-page-driver-registry.js";
 import { BridgeClient, type BridgeConnectionState } from "./bridge/extension-client.js";
+import { sharedHandoffCoordinator } from "./bridge/handoff-coordinator.js";
 import type {
 	AgentRuntimeAbortIntent,
 	AgentRuntimeConnectionDescriptor,
@@ -96,6 +98,13 @@ import {
 } from "./bridge/settings.js";
 import { createNavigationMessage } from "./messages/navigation-context.js";
 import { SYSTEM_PROMPT } from "./prompts/prompts.js";
+import { ChromeTabCaptureRecorder } from "./recording/chrome-tab-capture-recorder.js";
+import {
+	isTabCaptureOffscreenEvent,
+	type TabCaptureOffscreenEvent,
+	type TabCaptureOffscreenMessage,
+	type TabCaptureOffscreenResponse,
+} from "./recording/tab-capture-messages.js";
 import { normalizeModelForRuntime, resolveModelSpec } from "./sidepanel/model-resolution.js";
 import { ShuvgeistAppStorage } from "./storage/app-storage.js";
 import { loadDeveloperSettings } from "./storage/developer-settings.js";
@@ -348,7 +357,12 @@ async function closeTtsOverlay(tabId = ttsOverlayTabId): Promise<void> {
 }
 
 export function getOffscreenDocumentReasons(): chrome.offscreen.Reason[] {
-	return [chrome.offscreen.Reason.WORKERS, chrome.offscreen.Reason.AUDIO_PLAYBACK, chrome.offscreen.Reason.BLOBS];
+	return [
+		chrome.offscreen.Reason.WORKERS,
+		chrome.offscreen.Reason.AUDIO_PLAYBACK,
+		chrome.offscreen.Reason.BLOBS,
+		chrome.offscreen.Reason.USER_MEDIA,
+	];
 }
 
 let offscreenReady = false;
@@ -894,6 +908,111 @@ async function captureScreenshotForWindow(
 
 const recordingToolsByWindowId = new Map<number, RecordingTools>();
 const pageDriverRegistriesByWindowId = new Map<number, ChromePageDriverRegistry>();
+const tabCaptureApprovals = new Map<
+	string,
+	{
+		tabId: number;
+		resolve: (streamId: string) => void;
+		reject: (error: Error) => void;
+		timeout: ReturnType<typeof setTimeout>;
+	}
+>();
+
+function installTabCaptureApproval(token: string): void {
+	const elementId = "__shuvgeist-tab-capture-approval";
+	document.getElementById(elementId)?.remove();
+	const container = document.createElement("div");
+	container.id = elementId;
+	container.style.cssText =
+		"position:fixed;top:12px;right:12px;z-index:2147483647;max-width:300px;padding:12px;border-radius:8px;background:#172033;color:white;font:500 13px/1.35 system-ui,sans-serif;box-shadow:0 3px 16px #0009";
+	const text = document.createElement("div");
+	text.textContent = "Shuvgeist is ready to record this tab. Chrome requires your confirmation.";
+	const actions = document.createElement("div");
+	actions.style.cssText = "display:flex;gap:8px;justify-content:flex-end;margin-top:10px";
+	const cancel = document.createElement("button");
+	cancel.type = "button";
+	cancel.textContent = "Cancel";
+	const start = document.createElement("button");
+	start.type = "button";
+	start.textContent = "Start recording";
+	for (const button of [cancel, start]) {
+		button.style.cssText =
+			"border:1px solid #ffffff88;border-radius:5px;background:white;color:#172033;padding:5px 8px;font:inherit;cursor:pointer";
+	}
+	const respond = (approved: boolean): void => {
+		start.disabled = true;
+		cancel.disabled = true;
+		void chrome.runtime
+			.sendMessage({ type: "tab-capture-approval", token, approved })
+			.finally(() => container.remove());
+	};
+	start.addEventListener("click", () => respond(true));
+	cancel.addEventListener("click", () => respond(false));
+	actions.append(cancel, start);
+	container.append(text, actions);
+	document.documentElement.append(container);
+}
+
+function removeTabCaptureApproval(): void {
+	document.getElementById("__shuvgeist-tab-capture-approval")?.remove();
+}
+
+function removeTabCaptureIndicator(): void {
+	document.getElementById("__shuvgeist-tab-capture-indicator")?.remove();
+}
+
+function tabCaptureEventToWire(event: TabCaptureOffscreenEvent): RecordChunkEventData {
+	return {
+		target: { kind: "chrome-tab", tabId: event.tabId, frameId: 0 },
+		navigationGeneration: event.navigationGeneration,
+		tabId: event.tabId,
+		frameId: 0,
+		recordingId: event.recordingId,
+		seq: event.seq,
+		mimeType: event.mimeType,
+		chunkBase64: event.type === "tab-capture-chunk" ? event.chunkBase64 : "",
+		...(event.type === "tab-capture-complete" ? { final: true, summary: event.summary } : {}),
+	};
+}
+
+async function requestTabCaptureStreamId(tabId: number): Promise<string> {
+	try {
+		const streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tabId });
+		if (streamId) return streamId;
+	} catch {
+		// Chrome may require a fresh user invocation. Continue with an in-tab approval.
+	}
+	const token = crypto.randomUUID();
+	const approval = new Promise<string>((resolve, reject) => {
+		const timeout = setTimeout(() => {
+			tabCaptureApprovals.delete(token);
+			void chrome.scripting
+				.executeScript({ target: { tabId }, func: removeTabCaptureApproval })
+				.catch(() => undefined);
+			reject(new Error("Timed out waiting for tab-capture approval."));
+		}, 60_000);
+		tabCaptureApprovals.set(token, { tabId, resolve, reject, timeout });
+	});
+	try {
+		await chrome.scripting.executeScript({
+			target: { tabId },
+			func: installTabCaptureApproval,
+			args: [token],
+		});
+	} catch (error) {
+		const pending = tabCaptureApprovals.get(token);
+		if (pending) {
+			clearTimeout(pending.timeout);
+			tabCaptureApprovals.delete(token);
+		}
+		throw new Error(
+			`Chrome requires a user gesture for tab capture, but Shuvgeist could not show the approval control in tab ${tabId}. Focus a normal web tab and retry. ${
+				error instanceof Error ? error.message : String(error)
+			}`,
+		);
+	}
+	return approval;
+}
 
 function getPageDriverRegistry(windowId: number): ChromePageDriverRegistry {
 	let registry = pageDriverRegistriesByWindowId.get(windowId);
@@ -915,10 +1034,21 @@ async function getRecordingTools(): Promise<RecordingTools> {
 	}
 	let tools = recordingToolsByWindowId.get(windowId);
 	if (!tools) {
+		const pageDriverRegistry = getPageDriverRegistry(windowId);
+		const tabCaptureRecorder = new ChromeTabCaptureRecorder({
+			windowId,
+			pageDriverRegistry,
+			ensureOffscreenDocument,
+			sendOffscreenMessage: (message: TabCaptureOffscreenMessage) =>
+				sendMessageSafe<TabCaptureOffscreenResponse>(message),
+			emitRecordChunk: (data) => getBridgeSessionForWindow(windowId)?.client.sendEvent("record_chunk", { ...data }),
+			getMediaStreamId: requestTabCaptureStreamId,
+		});
 		tools = new RecordingTools({
 			windowId,
-			pageDriverRegistry: getPageDriverRegistry(windowId),
+			pageDriverRegistry,
 			emitRecordFrame: (data) => getBridgeSessionForWindow(windowId)?.client.sendEvent("record_frame", { ...data }),
+			tabCaptureRecorder,
 			telemetry: extensionTelemetry,
 		});
 		recordingToolsByWindowId.set(windowId, tools);
@@ -1279,6 +1409,18 @@ interface BridgeWindowSession {
 }
 
 const bridgeWindowSessions = new Map<number, BridgeWindowSession>();
+sharedHandoffCoordinator.subscribe((event) => {
+	bridgeWindowSessions.get(event.windowId)?.client.sendEvent("handoff_lifecycle", {
+		handoffId: event.handoffId,
+		taskId: event.taskId,
+		sessionId: event.sessionId,
+		kind: event.kind,
+		target: { kind: "chrome-tab", tabId: event.tabId, frameId: event.frameId },
+		navigationGeneration: event.navigationGeneration,
+		state: event.state,
+		at: event.at,
+	});
+});
 const bridgeSettingsStorage = createChromeStorageBridgeSettingsAdapter();
 let currentSettings: BridgeSettings | null = null;
 let bootstrapSettingsPromise: Promise<BridgeSettings> | null = null;
@@ -1488,6 +1630,18 @@ async function executeAgentRuntimePageOperation(input: AgentRuntimePageDelegateI
 			);
 		case "page-snapshot":
 			return executor.dispatch("page_snapshot", input.payload, input.signal, input.trace);
+		case "human-handoff":
+			return executor.dispatch(
+				"handoff_start",
+				{
+					...input.payload,
+					taskId: input.executionRequestId,
+					sessionId: input.sessionId,
+					...(input.target.frameId !== undefined ? { frameId: input.target.frameId } : {}),
+				},
+				input.signal,
+				input.trace,
+			);
 		case "select-element":
 			return executor.dispatch("select_element", input.payload, input.signal, input.trace);
 		case "screenshot":
@@ -1657,6 +1811,7 @@ async function disposeBridgeWindowResources(windowId: number): Promise<void> {
 	bridgeWindowSessions.delete(windowId);
 	recordingToolsByWindowId.delete(windowId);
 	pageDriverRegistriesByWindowId.delete(windowId);
+	sharedHandoffCoordinator.cancelWindow(windowId);
 
 	session?.client.disconnect();
 
@@ -1955,6 +2110,11 @@ chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
 	});
 });
 
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+	if (changeInfo.status !== "complete") return;
+	for (const tools of recordingToolsByWindowId.values()) tools.handleTabNavigated(tabId);
+});
+
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 	if (tabId !== ttsOverlayTabId || changeInfo.status !== "complete") return;
 	if (!ttsState.overlayVisible || isProtectedTabUrl(tab.url)) return;
@@ -2025,6 +2185,14 @@ chrome.action.onClicked.addListener((tab: chrome.tabs.Tab) => {
 // from background-initiated chrome.userScripts.execute() invocations)
 if (chrome.runtime.onUserScriptMessage) {
 	chrome.runtime.onUserScriptMessage.addListener((message, sender, sendResponse) => {
+		if (runtimeRecord(message) && message.type === "shuvgeist-handoff-lifecycle") {
+			const response = sharedHandoffCoordinator.acceptPageEvent(message, {
+				tabId: sender.tab?.id,
+				frameId: sender.frameId,
+			});
+			sendResponse(response);
+			return false;
+		}
 		if (runtimeRecord(message) && message.type === "agent-runtime-abort-intent") {
 			void handleAgentRuntimeAbortIntent(message, sender)
 				.then((response) => sendResponse(response))
@@ -2074,6 +2242,30 @@ chrome.runtime.onMessage.addListener(
 			_sender.url === offscreenUrl &&
 			_sender.origin === new URL(offscreenUrl).origin;
 		if (isOffscreenSender) {
+			if (isTabCaptureOffscreenEvent(message)) {
+				const tools = recordingToolsByWindowId.get(message.windowId);
+				let handled = tools?.handleTabCaptureEvent(message as TabCaptureOffscreenEvent) === true;
+				if (!handled) {
+					handled = [...recordingToolsByWindowId.values()].some((candidate) =>
+						candidate.handleTabCaptureEvent(message as TabCaptureOffscreenEvent),
+					);
+				}
+				if (!handled) {
+					const session = getBridgeSessionForWindow(message.windowId);
+					if (session?.client.connectionState === "connected") {
+						session.client.sendEvent("record_chunk", { ...tabCaptureEventToWire(message) });
+						handled = true;
+						if (message.type === "tab-capture-complete") {
+							void chrome.action.setBadgeText({ tabId: message.tabId, text: "" }).catch(() => undefined);
+							void chrome.scripting
+								.executeScript({ target: { tabId: message.tabId }, func: removeTabCaptureIndicator })
+								.catch(() => undefined);
+						}
+					}
+				}
+				sendResponse({ ok: handled });
+				return false;
+			}
 			if (message.type === "agent-runtime-get-developer-settings" && hasOnlyRecordKeys(message, ["type"])) {
 				void loadDeveloperSettings()
 					.then(({ debuggerMode }) =>
@@ -2096,6 +2288,83 @@ chrome.runtime.onMessage.addListener(
 					);
 				return true;
 			}
+		}
+
+		if (message.type === "tab-capture-user-stop") {
+			const senderTabId = _sender.tab?.id;
+			const recordingId = message.recordingId;
+			if (typeof senderTabId !== "number" || typeof recordingId !== "string") {
+				sendResponse({ ok: false, error: "Recording stop did not originate from a captured browser tab." });
+				return false;
+			}
+			const tools = [...recordingToolsByWindowId.values()].find(
+				(candidate) => candidate.hasRecording(recordingId) && candidate.hasRecordingForTab(senderTabId),
+			);
+			if (!tools) {
+				void sendMessageSafe<TabCaptureOffscreenResponse>({
+					type: "tab-capture-stop",
+					recordingId,
+					reason: "user",
+				})
+					.then((response) =>
+						sendResponse(
+							response?.ok
+								? { ok: true }
+								: {
+										ok: false,
+										error: response?.error || "The requested tab-capture recording is no longer active.",
+									},
+						),
+					)
+					.catch((error: unknown) =>
+						sendResponse({ ok: false, error: error instanceof Error ? error.message : String(error) }),
+					);
+				return true;
+			}
+			void tools
+				.stop({ tabId: senderTabId })
+				.then((summary) => sendResponse({ ok: true, summary }))
+				.catch((error: unknown) =>
+					sendResponse({ ok: false, error: error instanceof Error ? error.message : String(error) }),
+				);
+			return true;
+		}
+
+		if (message.type === "tab-capture-approval") {
+			const token = message.token;
+			const approved = message.approved;
+			const senderTabId = _sender.tab?.id;
+			if (typeof token !== "string") {
+				sendResponse({ ok: false, error: "Tab-capture approval is invalid or expired." });
+				return false;
+			}
+			const pending = tabCaptureApprovals.get(token);
+			if (!pending || senderTabId !== pending.tabId || typeof approved !== "boolean") {
+				sendResponse({ ok: false, error: "Tab-capture approval is invalid or expired." });
+				return false;
+			}
+			clearTimeout(pending.timeout);
+			tabCaptureApprovals.delete(token);
+			if (!approved) {
+				pending.reject(new Error("Tab-capture approval was cancelled by the user."));
+				sendResponse({ ok: true, approved: false });
+				return false;
+			}
+			void chrome.tabCapture
+				.getMediaStreamId({ targetTabId: pending.tabId })
+				.then((streamId) => {
+					if (!streamId) throw new Error("Chrome returned an empty media stream id.");
+					pending.resolve(streamId);
+					sendResponse({ ok: true, approved: true });
+				})
+				.catch((error: unknown) => {
+					const messageText = `Chrome denied tab capture after approval. Confirm the tabCapture permission and retry. ${
+						error instanceof Error ? error.message : String(error)
+					}`;
+					pending.reject(new Error(messageText));
+					sendResponse({ ok: false, error: messageText });
+				});
+			return true;
 		}
 
 		if (message.type === SIDEPANEL_WINDOW_PREPARE_MESSAGE_TYPE) {
@@ -2389,7 +2658,9 @@ function closeSidepanel(windowId: number, callCloseOnSidePanelAPI = true, releas
  * Send a message via chrome.runtime.sendMessage with error handling.
  * Returns null if no receivers are available (sidepanel closed).
  */
-function sendMessageSafe<T>(message: BridgeToOffscreenMessage | TtsOffscreenMessage): Promise<T | null> {
+function sendMessageSafe<T>(
+	message: BridgeToOffscreenMessage | TtsOffscreenMessage | TabCaptureOffscreenMessage,
+): Promise<T | null> {
 	return new Promise((resolve) => {
 		chrome.runtime.sendMessage(message, (response?: T) => {
 			if (chrome.runtime.lastError) {

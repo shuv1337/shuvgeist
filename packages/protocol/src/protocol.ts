@@ -9,6 +9,7 @@
 // Protocol versioning
 // ---------------------------------------------------------------------------
 
+import type { Static } from "@sinclair/typebox";
 import {
 	CatalogBridgeMethods,
 	CatalogExtensionBridgeCapabilities,
@@ -22,10 +23,12 @@ import type {
 	BridgeCommandParamsMap,
 	BridgeCommandResult,
 	BridgeCommandResultMap,
+	operationAftermathSchema,
 	NavigateCloseTabFilter as SchemaNavigateCloseTabFilter,
 	ResolvedPageTarget as SchemaResolvedPageTarget,
 	TargetedBridgeParams as SchemaTargetedBridgeParams,
 } from "./command-schemas.js";
+import type { BuildIdentity } from "./version.js";
 
 export {
 	formatBridgeCommandValidationErrors,
@@ -86,6 +89,7 @@ export interface ExtensionRegistration {
 	protocolVersion: number;
 	minProtocolVersion: number;
 	appVersion: string;
+	build?: BuildIdentity;
 	windowId: number;
 	sessionId?: string;
 	capabilities: BridgeCapability[];
@@ -98,6 +102,7 @@ export interface CliRegistration {
 	protocolVersion: number;
 	minProtocolVersion: number;
 	appVersion: string;
+	build?: BuildIdentity;
 	name?: string;
 }
 
@@ -158,6 +163,7 @@ export interface BridgeResponse {
 	id: number;
 	result?: unknown;
 	error?: BridgeError;
+	aftermath?: OperationAftermath;
 }
 
 /** A method-correlated response for typed producers and adapter registries. */
@@ -178,6 +184,7 @@ export type BridgeEventType =
 	| "session_message"
 	| "session_tool"
 	| "session_run_state"
+	| "handoff_lifecycle"
 	| "record_frame"
 	| "record_chunk";
 
@@ -221,13 +228,22 @@ export type ReplParams = BridgeCommandParams<"repl">;
 export type ScreenshotParams = BridgeCommandParams<"screenshot">;
 export type EvalParams = BridgeCommandParams<"eval">;
 export type CookiesParams = BridgeCommandParams<"cookies">;
+export type AuthenticatedJsonRequestParams = BridgeCommandParams<"authenticated_json_request">;
+export type AuthenticatedJsonRequestResult = BridgeCommandResult<"authenticated_json_request">;
 export type CookieImportParams = BridgeCommandParams<"cookie_import">;
 export type CookieImportApplyParams = BridgeCommandParams<"cookie_import_apply">;
 export type SelectElementParams = BridgeCommandParams<"select_element">;
+export type HandoffStartParams = BridgeCommandParams<"handoff_start">;
+export type HandoffStartResult = BridgeCommandResult<"handoff_start">;
+export type JournalListParams = BridgeCommandParams<"journal_list">;
+export type JournalListResult = BridgeCommandResult<"journal_list">;
+export type OperationAftermath = Static<typeof operationAftermathSchema>;
+export type OperationOutcome = OperationAftermath["outcome"];
 export type WorkflowRunParams = BridgeCommandParams<"workflow_run">;
 export type WorkflowValidateParams = BridgeCommandParams<"workflow_validate">;
 export type PageSnapshotBridgeParams = BridgeCommandParams<"page_snapshot">;
 export type SnapshotStoreParams = BridgeCommandParams<"snapshot_store">;
+export type SnapshotDiffParams = BridgeCommandParams<"snapshot_diff">;
 export type SnapshotReadParams = BridgeCommandParams<"snapshot_read">;
 export type PageAssertParams = BridgeCommandParams<"page_assert">;
 export type PageAssertKind = PageAssertParams["kind"];
@@ -267,6 +283,7 @@ export type PageSnapshotBridgeResult = BridgeCommandResult<"page_snapshot">;
 export type BridgeSnapshotEntry = PageSnapshotBridgeResult["entries"][number];
 export type SnapshotStoreResult = BridgeCommandResult<"snapshot_store">;
 export type PageSnapshotRecordSummary = SnapshotStoreResult["record"];
+export type SnapshotDiffResult = BridgeCommandResult<"snapshot_diff">;
 export type SnapshotReadResult = BridgeCommandResult<"snapshot_read">;
 export type SnapshotLocatorMatchResult = BridgeCommandResult<"locate_by_role">[number];
 export type FrameDescriptorResult = BridgeCommandResult<"frame_list">[number];
@@ -323,7 +340,7 @@ export interface RecordFrameEventData {
 	summary?: RecordStopResult;
 }
 
-/** Legacy MediaRecorder chunk event kept during the 1.1.x to 1.2.x transition. */
+/** WebM chunks emitted by the explicit Chrome tab-capture recording mode. */
 export interface RecordChunkEventData {
 	recordingId: string;
 	target: ResolvedPageTarget;
@@ -347,6 +364,7 @@ export interface BridgeServerStatus {
 	protocolVersion: number;
 	minProtocolVersion: number;
 	serverVersion: string;
+	serverBuild?: BuildIdentity;
 	extension:
 		| {
 				connected: true;
@@ -357,6 +375,7 @@ export interface BridgeServerStatus {
 				protocolVersion?: number;
 				minProtocolVersion?: number;
 				appVersion?: string;
+				build?: BuildIdentity;
 		  }
 		| { connected: false };
 	clients: {
@@ -445,6 +464,7 @@ export interface BridgeServerConfig {
 	port: number;
 	token: string;
 	serverVersion?: string;
+	serverBuild?: BuildIdentity;
 	otel?: {
 		enabled?: boolean;
 		ingestUrl?: string;

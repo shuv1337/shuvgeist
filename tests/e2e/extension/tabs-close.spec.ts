@@ -103,7 +103,16 @@ async function runCli(bridgePort: number, args: string[]): Promise<CliRunResult>
 }
 
 function parseCliJson<T>(result: CliRunResult): T {
-	return JSON.parse(result.stdout) as T;
+	const parsed: unknown = JSON.parse(result.stdout);
+	if (
+		typeof parsed === "object" &&
+		parsed !== null &&
+		"result" in parsed &&
+		"aftermath" in parsed
+	) {
+		return parsed.result as T;
+	}
+	return parsed as T;
 }
 
 test("tabs close by id and filter leave sibling tabs alive", async () => {

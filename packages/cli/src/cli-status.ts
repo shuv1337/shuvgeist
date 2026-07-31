@@ -1,8 +1,10 @@
 import { stripVTControlCharacters } from "node:util";
 import type { BridgeServerStatus } from "@shuvgeist/protocol/protocol";
+import type { BuildIdentity } from "@shuvgeist/protocol/version";
 
 export interface BridgeStatusTextOptions {
 	cliVersion: string;
+	cliBuild?: BuildIdentity;
 	statusUrl: string;
 }
 
@@ -35,8 +37,10 @@ export function isBridgeStatusReady(status: BridgeServerStatus, acceptElectron: 
 export function formatBridgeStatusText(status: BridgeServerStatus, options: BridgeStatusTextOptions): string[] {
 	const lines = [
 		`CLI version: ${options.cliVersion}`,
+		...(options.cliBuild ? [`CLI build: ${options.cliBuild.id} (${options.cliBuild.kind})`] : []),
 		`Bridge: ${options.statusUrl}`,
 		`Bridge version: ${status.serverVersion ?? "unknown"}`,
+		`Bridge build: ${status.serverBuild ? `${status.serverBuild.id} (${status.serverBuild.kind})` : "unknown"}`,
 		`Protocol: ${status.minProtocolVersion ?? "?"}-${status.protocolVersion ?? "?"}`,
 		"Browser extension:",
 		`  Connected: ${status.extension.connected ? "yes" : "no"}`,
@@ -51,6 +55,9 @@ export function formatBridgeStatusText(status: BridgeServerStatus, options: Brid
 		lines.push(`  Window ID: ${windowId}`);
 		lines.push(`  Session ID: ${status.extension.sessionId ?? "unknown"}`);
 		lines.push(`  Version: ${status.extension.appVersion ?? "unknown"}`);
+		lines.push(
+			`  Build: ${status.extension.build ? `${status.extension.build.id} (${status.extension.build.kind})` : "unknown"}`,
+		);
 		lines.push(`  Protocol: ${status.extension.protocolVersion ?? "unknown"}`);
 		lines.push(`  Capabilities: ${(status.extension.capabilities || []).join(", ") || "none"}`);
 		lines.push(`  Address: ${status.extension.remoteAddress ?? "unknown"}`);

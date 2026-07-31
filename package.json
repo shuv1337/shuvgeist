@@ -13,6 +13,7 @@
 		"clean": "rm -rf dist-chrome dist-cli dist-cli-package",
 		"build:chrome": "npm run build --workspace @shuvgeist/extension",
 		"build:cli": "npm run build --workspace shuvgeist",
+		"package:extension": "npm run build && node ./packages/extension/scripts/package-extension.mjs",
 		"package:cli": "npm run package --workspace shuvgeist",
 		"build": "npm run build:chrome",
 		"dev": "npm run dev --workspace @shuvgeist/extension",

@@ -19,6 +19,15 @@ import { createOffscreenProviderRuntime } from "./agent/provider-runtime.js";
 import { navigationContextChanged, runtimeNavigationMessage } from "./agent/runtime-navigation.js";
 import type { BridgeToOffscreenMessage } from "./bridge/internal-messages.js";
 import { SYSTEM_PROMPT } from "./prompts/prompts.js";
+import {
+	handleOffscreenTabCaptureMessage,
+	releaseOffscreenTabCapturesForTests,
+} from "./recording/offscreen-tab-capture.js";
+import {
+	isTabCaptureOffscreenMessage,
+	type TabCaptureOffscreenMessage,
+	type TabCaptureOffscreenResponse,
+} from "./recording/tab-capture-messages.js";
 import { ShuvgeistAppStorage } from "./storage/app-storage.js";
 import { loadProxySettings } from "./storage/persistent-settings.js";
 import { createReplTool } from "./tools/repl/repl.js";
@@ -583,7 +592,7 @@ function isBackgroundRuntimeSender(sender: chrome.runtime.MessageSender): boolea
 
 chrome.runtime.onMessage.addListener(
 	(
-		message: BridgeToOffscreenMessage | TtsOffscreenMessage,
+		message: BridgeToOffscreenMessage | TtsOffscreenMessage | TabCaptureOffscreenMessage,
 		_sender: chrome.runtime.MessageSender,
 		sendResponse: (response: unknown) => void,
 	) => {
@@ -614,6 +623,18 @@ chrome.runtime.onMessage.addListener(
 			return false;
 		}
 
+		if (isTabCaptureOffscreenMessage(message)) {
+			void handleOffscreenTabCaptureMessage(message)
+				.then((response) => sendResponse(response))
+				.catch((error: unknown) =>
+					sendResponse({
+						ok: false,
+						error: error instanceof Error ? error.message : String(error),
+					} satisfies TabCaptureOffscreenResponse),
+				);
+			return true;
+		}
+
 		if (isTtsOffscreenMessage(message)) {
 			handleOffscreenTtsMessage(message)
 				.then((response) => sendResponse(response))
@@ -631,3 +652,5 @@ chrome.runtime.onMessage.addListener(
 );
 
 console.log("[Offscreen] Document loaded and ready for REPL execution");
+
+export { releaseOffscreenTabCapturesForTests };

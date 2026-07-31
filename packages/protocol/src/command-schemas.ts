@@ -156,6 +156,27 @@ const evalParamsSchema = Type.Object(
 	{ additionalProperties: false },
 );
 
+const authenticatedJsonMethodSchema = Type.Union([
+	Type.Literal("GET"),
+	Type.Literal("POST"),
+	Type.Literal("PUT"),
+	Type.Literal("PATCH"),
+	Type.Literal("DELETE"),
+]);
+const authenticatedJsonParamsSchema = Type.Object(
+	{
+		...targetedBridgeParamProperties,
+		path: Type.String({ minLength: 1, maxLength: 4096 }),
+		method: Type.Optional(authenticatedJsonMethodSchema),
+		body: Type.Optional(jsonValueSchema),
+		timeoutMs: Type.Optional(Type.Integer({ minimum: 100, maximum: 60_000 })),
+		maxResponseBytes: Type.Optional(Type.Integer({ minimum: 1, maximum: 1_048_576 })),
+		reviewMutation: Type.Optional(Type.Boolean()),
+		schema: Type.Optional(jsonObjectSchema),
+	},
+	{ additionalProperties: false },
+);
+
 const cookiesParamsSchema = Type.Object({ url: Type.Optional(Type.String()) }, { additionalProperties: false });
 
 const cookieSchema = Type.Object(
@@ -191,6 +212,27 @@ const selectElementParamsSchema = Type.Object(
 	{ additionalProperties: false },
 );
 
+const handoffStartParamsSchema = Type.Object(
+	{
+		...targetedBridgeParamProperties,
+		taskId: Type.String({ minLength: 1, maxLength: 200 }),
+		sessionId: Type.String({ minLength: 1, maxLength: 200 }),
+		kind: Type.Optional(Type.Union([Type.Literal("manual"), Type.Literal("browser-native")])),
+		message: Type.Optional(Type.String({ maxLength: 500 })),
+		timeoutMs: Type.Optional(Type.Integer({ minimum: 1_000, maximum: 600_000 })),
+		trigger: Type.Optional(
+			Type.Object(
+				{
+					refId: Type.String({ minLength: 1 }),
+					mode: Type.Optional(Type.Union([Type.Literal("dom"), Type.Literal("cdp-trusted")])),
+				},
+				{ additionalProperties: false },
+			),
+		),
+	},
+	{ additionalProperties: false },
+);
+
 const workflowRunParamsSchema = Type.Object(
 	{
 		workflow: workflowSchema,
@@ -208,12 +250,18 @@ const workflowValidateParamsSchema = Type.Object(
 	{ additionalProperties: false },
 );
 
-const pageSnapshotParamsSchema = Type.Object(
+const pageSnapshotParamProperties = {
+	...targetedBridgeParamProperties,
+	maxEntries: Type.Optional(Type.Integer({ minimum: 1 })),
+	includeHidden: Type.Optional(Type.Boolean()),
+	query: Type.Optional(Type.String()),
+};
+const pageSnapshotParamsSchema = Type.Object(pageSnapshotParamProperties, { additionalProperties: false });
+
+const snapshotDiffParamsSchema = Type.Object(
 	{
-		...targetedBridgeParamProperties,
-		maxEntries: Type.Optional(Type.Integer({ minimum: 1 })),
-		includeHidden: Type.Optional(Type.Boolean()),
-		query: Type.Optional(Type.String()),
+		...pageSnapshotParamProperties,
+		baselineId: Type.String({ minLength: 1 }),
 	},
 	{ additionalProperties: false },
 );
@@ -225,6 +273,57 @@ const snapshotReadParamsSchema = Type.Object(
 		tabId: Type.Optional(Type.Integer({ minimum: 0 })),
 		frameId: Type.Optional(Type.Integer({ minimum: 0 })),
 		limit: Type.Optional(Type.Integer({ minimum: 1 })),
+	},
+	{ additionalProperties: false },
+);
+
+const operationOutcomeSchema = Type.Union([
+	Type.Literal("succeeded"),
+	Type.Literal("failed"),
+	Type.Literal("timed_out"),
+	Type.Literal("cancelled"),
+]);
+
+export const operationAftermathSchema = Type.Object(
+	{
+		id: Type.String({ minLength: 1 }),
+		sessionKey: Type.String({ pattern: "^[a-f0-9]{20}$" }),
+		method: Type.String({ minLength: 1 }),
+		startedAt: Type.String(),
+		endedAt: Type.String(),
+		durationMs: Type.Integer({ minimum: 0 }),
+		outcome: operationOutcomeSchema,
+		target: Type.Optional(resolvedPageTargetSchema),
+		navigationGeneration: Type.Optional(Type.Integer({ minimum: 0 })),
+		urlMovement: Type.Optional(
+			Type.Object(
+				{
+					fromOrigin: Type.Optional(Type.String()),
+					toOrigin: Type.Optional(Type.String()),
+				},
+				{ additionalProperties: false },
+			),
+		),
+		consoleErrorCount: Type.Integer({ minimum: 0 }),
+		pageErrorCount: Type.Integer({ minimum: 0 }),
+		warnings: Type.Array(Type.String()),
+		handoffCount: Type.Integer({ minimum: 0 }),
+		artifactIds: Type.Array(Type.String()),
+	},
+	{ additionalProperties: false },
+);
+
+const journalListParamsSchema = Type.Object(
+	{
+		last: Type.Optional(Type.Integer({ minimum: 1, maximum: 500 })),
+		sessionKey: Type.Optional(Type.String({ pattern: "^[a-f0-9]{20}$" })),
+	},
+	{ additionalProperties: false },
+);
+
+const journalListResultSchema = Type.Object(
+	{
+		entries: Type.Array(operationAftermathSchema),
 	},
 	{ additionalProperties: false },
 );
@@ -343,6 +442,7 @@ const networkStartParamsSchema = Type.Object(
 		tabId: Type.Optional(Type.Integer({ minimum: 0 })),
 		maxEntries: Type.Optional(Type.Integer({ minimum: 1, maximum: 100_000 })),
 		maxBodyBytes: Type.Optional(Type.Integer({ minimum: 0, maximum: 67_108_864 })),
+		sensitiveFields: Type.Optional(Type.Array(Type.String({ minLength: 1 }), { maxItems: 100 })),
 	},
 	{ additionalProperties: false },
 );
@@ -363,6 +463,7 @@ const networkCurlParamsSchema = Type.Object(
 		tabId: Type.Optional(Type.Integer({ minimum: 0 })),
 		requestId: Type.String({ minLength: 1 }),
 		includeSensitive: Type.Optional(Type.Boolean()),
+		reviewMutation: Type.Optional(Type.Boolean()),
 	},
 	{ additionalProperties: false },
 );
@@ -402,6 +503,8 @@ const perfTraceStartParamsSchema = Type.Object(
 const recordStartParamsSchema = Type.Object(
 	{
 		...targetedBridgeParamProperties,
+		mode: Type.Optional(Type.Union([Type.Literal("cdp"), Type.Literal("tab-capture")])),
+		audio: Type.Optional(Type.Boolean()),
 		maxDurationMs: Type.Optional(Type.Integer({ minimum: 1, maximum: 120_000 })),
 		videoBitsPerSecond: Type.Optional(Type.Integer({ minimum: 1 })),
 		mimeType: Type.Optional(Type.String()),
@@ -677,6 +780,22 @@ const selectElementResultSchema = Type.Object({
 	parentChain: Type.Array(Type.String()),
 });
 
+const handoffStartResultSchema = Type.Object(
+	{
+		...resolvedPageScopeResultProperties,
+		handoffId: Type.String({ minLength: 1 }),
+		taskId: Type.String({ minLength: 1 }),
+		sessionId: Type.String({ minLength: 1 }),
+		kind: Type.Union([Type.Literal("manual"), Type.Literal("browser-native")]),
+		state: Type.Union([Type.Literal("completed"), Type.Literal("cancelled"), Type.Literal("timed_out")]),
+		startedAt: Type.String(),
+		acknowledgedAt: Type.Optional(Type.String()),
+		endedAt: Type.String(),
+		triggered: Type.Boolean(),
+	},
+	{ additionalProperties: false },
+);
+
 const workflowRunResultSchema = Type.Object({
 	ok: Type.Boolean(),
 	aborted: Type.Boolean(),
@@ -785,11 +904,97 @@ const snapshotRecordSummarySchema = Type.Object({
 	entryCount: Type.Integer({ minimum: 0 }),
 	totalCandidates: Type.Integer({ minimum: 0 }),
 	truncated: Type.Boolean(),
+	capture: Type.Optional(
+		Type.Object(
+			{
+				maxEntries: Type.Integer({ minimum: 1, maximum: 500 }),
+				includeHidden: Type.Boolean(),
+				query: Type.Optional(Type.String()),
+			},
+			{ additionalProperties: false },
+		),
+	),
 });
 const snapshotStoreResultSchema = Type.Object({ record: snapshotRecordSummarySchema });
 const snapshotReadResultSchema = Type.Object({
 	records: Type.Array(Type.Intersect([snapshotRecordSummarySchema, Type.Object({ raw: pageSnapshotResultSchema })])),
 });
+const snapshotEntryStateSchema = Type.Object(
+	{
+		stableElementId: Type.Optional(Type.String()),
+		tagName: Type.String(),
+		role: Type.Optional(Type.String()),
+		name: Type.Optional(Type.String()),
+		text: Type.Optional(Type.String()),
+		label: Type.Optional(Type.String()),
+		attributes: stringMapSchema,
+		ordinalPath: Type.Array(Type.Integer({ minimum: 0 })),
+		boundingBox: boundingBoxSchema,
+		interactive: Type.Boolean(),
+		headingLevel: Type.Optional(Type.Integer({ minimum: 1, maximum: 6 })),
+		landmark: Type.Optional(Type.String()),
+	},
+	{ additionalProperties: false },
+);
+const snapshotDiffFailureReasonSchema = Type.Union([
+	Type.Literal("baseline_not_found"),
+	Type.Literal("target_mismatch"),
+	Type.Literal("frame_mismatch"),
+	Type.Literal("navigation_generation_mismatch"),
+	Type.Literal("capture_signature_missing"),
+	Type.Literal("query_mismatch"),
+	Type.Literal("budget_mismatch"),
+	Type.Literal("truncated_snapshot"),
+	Type.Literal("ambiguous_identity"),
+]);
+const snapshotDiffResultSchema = Type.Union([
+	Type.Object(
+		{
+			ok: Type.Literal(false),
+			baselineId: Type.String(),
+			reason: snapshotDiffFailureReasonSchema,
+			message: Type.String(),
+		},
+		{ additionalProperties: false },
+	),
+	Type.Object(
+		{
+			ok: Type.Literal(true),
+			baseline: snapshotRecordSummarySchema,
+			current: snapshotRecordSummarySchema,
+			diff: Type.Object(
+				{
+					unchangedCount: Type.Integer({ minimum: 0 }),
+					added: Type.Array(
+						Type.Object(
+							{ identity: Type.String(), refId: Type.String(), current: snapshotEntrySchema },
+							{ additionalProperties: false },
+						),
+					),
+					changed: Type.Array(
+						Type.Object(
+							{
+								identity: Type.String(),
+								refId: Type.String(),
+								previous: snapshotEntryStateSchema,
+								current: snapshotEntrySchema,
+							},
+							{ additionalProperties: false },
+						),
+					),
+					removed: Type.Array(
+						Type.Object(
+							{ identity: Type.String(), previous: snapshotEntryStateSchema },
+							{ additionalProperties: false },
+						),
+					),
+				},
+				{ additionalProperties: false },
+			),
+		},
+		{ additionalProperties: false },
+	),
+]);
 const snapshotLocatorMatchSchema = Type.Object({
 	refId: Type.String(),
 	score: Type.Number(),
@@ -916,9 +1121,59 @@ const networkRequestResultSchema = Type.Object({
 	responseBodyTruncated: Type.Optional(Type.Boolean()),
 	requestBodySize: Type.Optional(Type.Integer({ minimum: 0 })),
 	responseBodySize: Type.Optional(Type.Integer({ minimum: 0 })),
+	requestBodyOmitted: Type.Optional(Type.Boolean()),
+	responseBodyOmitted: Type.Optional(Type.Boolean()),
+	redactedHeaders: Type.Optional(Type.Array(Type.String())),
+	redactedFields: Type.Optional(Type.Array(Type.String())),
+	secretReferences: Type.Optional(Type.Array(Type.String())),
 	hasRequestBody: Type.Boolean(),
 	hasResponseBody: Type.Boolean(),
 });
+const authenticatedJsonFailureCodeSchema = Type.Union([
+	Type.Literal("invalid_page_origin"),
+	Type.Literal("invalid_relative_path"),
+	Type.Literal("cross_origin"),
+	Type.Literal("mutation_review_required"),
+	Type.Literal("redirect_rejected"),
+	Type.Literal("request_aborted"),
+	Type.Literal("request_timed_out"),
+	Type.Literal("response_too_large"),
+	Type.Literal("non_json_response"),
+	Type.Literal("invalid_json_response"),
+	Type.Literal("http_error"),
+	Type.Literal("schema_validation_failed"),
+]);
+const authenticatedJsonResultSchema = Type.Union([
+	Type.Object(
+		{
+			...resolvedPageScopeResultProperties,
+			ok: Type.Literal(true),
+			status: Type.Integer({ minimum: 200, maximum: 299 }),
+			origin: Type.String(),
+			path: Type.String(),
+			method: authenticatedJsonMethodSchema,
+			mutation: Type.Boolean(),
+			responseBytes: Type.Integer({ minimum: 0 }),
+			data: wireValueSchema,
+			sensitive: Type.Literal(true),
+			noStore: Type.Literal(true),
+		},
+		{ additionalProperties: false },
+	),
+	Type.Object(
+		{
+			...resolvedPageScopeResultProperties,
+			ok: Type.Literal(false),
+			code: authenticatedJsonFailureCodeSchema,
+			message: Type.String({ maxLength: 1000 }),
+			status: Type.Optional(Type.Integer({ minimum: 0, maximum: 599 })),
+			issues: Type.Optional(Type.Array(Type.String({ maxLength: 500 }), { maxItems: 10 })),
+			sensitive: Type.Literal(true),
+			noStore: Type.Literal(true),
+		},
+		{ additionalProperties: false },
+	),
+]);
 const networkStatsResultSchema = Type.Object({
 	...resolvedPageScopeResultProperties,
 	active: Type.Boolean(),
@@ -933,6 +1188,10 @@ const networkBodyResultSchema = Type.Object({
 	responseBody: Type.Optional(Type.String()),
 	requestBodyTruncated: Type.Boolean(),
 	responseBodyTruncated: Type.Boolean(),
+	requestBodyOmitted: Type.Boolean(),
+	responseBodyOmitted: Type.Boolean(),
+	redactedFields: Type.Array(Type.String()),
+	secretReferences: Type.Array(Type.String()),
 });
 const networkCurlResultSchema = Type.Object({
 	...resolvedPageScopeResultProperties,
@@ -998,6 +1257,10 @@ const recordOutcomeSchema = Type.Union([
 const recordStartResultSchema = Type.Object({
 	...resolvedPageScopeResultProperties,
 	ok: Type.Literal(true),
+	mode: Type.Optional(Type.Union([Type.Literal("cdp"), Type.Literal("tab-capture")])),
+	audio: Type.Optional(Type.Boolean()),
+	indicator: Type.Optional(Type.Literal("visible")),
+	artifactState: Type.Optional(Type.Literal("streaming")),
 	recordingId: Type.String(),
 	startedAt: Type.String(),
 	mimeType: Type.String(),
@@ -1007,6 +1270,9 @@ const recordStartResultSchema = Type.Object({
 const recordStopResultSchema = Type.Object({
 	...resolvedPageScopeResultProperties,
 	ok: Type.Literal(true),
+	mode: Type.Optional(Type.Union([Type.Literal("cdp"), Type.Literal("tab-capture")])),
+	audio: Type.Optional(Type.Boolean()),
+	artifactState: Type.Optional(Type.Union([Type.Literal("complete"), Type.Literal("partial")])),
 	recordingId: Type.String(),
 	startedAt: Type.String(),
 	endedAt: Type.String(),
@@ -1016,6 +1282,9 @@ const recordStopResultSchema = Type.Object({
 	sizeBytes: Type.Optional(Type.Integer({ minimum: 0 })),
 	sourceBytes: Type.Integer({ minimum: 0 }),
 	encodedSizeBytes: Type.Optional(Type.Integer({ minimum: 0 })),
+	encodedFrameCount: Type.Optional(Type.Integer({ minimum: 0 })),
+	coalescedFrameCount: Type.Optional(Type.Integer({ minimum: 0 })),
+	droppedFrameCount: Type.Optional(Type.Integer({ minimum: 0 })),
 	chunkCount: Type.Optional(Type.Integer({ minimum: 0 })),
 	frameCount: Type.Integer({ minimum: 0 }),
 	outcome: recordOutcomeSchema,
@@ -1026,6 +1295,10 @@ const recordStatusResultSchema = Type.Union([
 	Type.Object({
 		...resolvedPageScopeResultProperties,
 		active: Type.Literal(true),
+		mode: Type.Optional(Type.Union([Type.Literal("cdp"), Type.Literal("tab-capture")])),
+		audio: Type.Optional(Type.Boolean()),
+		indicator: Type.Optional(Type.Literal("visible")),
+		artifactState: Type.Optional(Type.Literal("streaming")),
 		recordingId: Type.String(),
 		startedAt: Type.String(),
 		mimeType: Type.String(),
@@ -1461,6 +1734,35 @@ export const BridgeCommandDefinitions = [
 		result: evalResultSchema,
 	},
 	{
+		method: "authenticated_json_request",
+		capabilities: ["authenticated_json_request"],
+		route: "extension",
+		targets: ["chrome-tab", "electron-window"],
+		cli: bridgeCli(
+			defineCliBinding({
+				family: "request-json",
+				select: [],
+				usage: "Usage: shuvgeist request-json <relative-path> [--method GET|POST|PUT|PATCH|DELETE] [--body JSON] [--schema JSON] [--review-mutation]",
+				flags: [
+					...cliTargetFlags,
+					cliFlag("method", { param: "method" }),
+					cliFlag("body", { param: "body", parse: "json" }),
+					cliFlag("schema", { param: "schema", parse: "json" }),
+					cliFlag("timeout", { param: "timeoutMs", parse: "duration" }),
+					cliFlag("maxResponseBytes", { param: "maxResponseBytes", parse: "integer" }),
+					cliFlag("reviewMutation", { param: "reviewMutation", parse: "boolean" }),
+				],
+				positionals: [cliPositional("path", { source: "index", index: 0, param: "path", required: true })],
+				codec: "generic",
+			}),
+		),
+		defaultTimeout: "slow",
+		sensitive: true,
+		write: true,
+		params: authenticatedJsonParamsSchema,
+		result: authenticatedJsonResultSchema,
+	},
+	{
 		method: "cookies",
 		capabilities: ["cookies"],
 		route: "extension",
@@ -1525,6 +1827,34 @@ export const BridgeCommandDefinitions = [
 		result: selectElementResultSchema,
 	},
 	{
+		method: "handoff_start",
+		capabilities: ["handoff_start"],
+		route: "extension",
+		targets: ["chrome-tab"],
+		cli: bridgeCli(
+			defineCliBinding({
+				family: "handoff",
+				select: [],
+				usage: "Usage: shuvgeist handoff <task-id> <session-id> [--target target] [--kind manual|browser-native] [--message text] [--timeout duration]",
+				flags: [
+					...cliTargetFlags,
+					cliFlag("kind", { param: "kind" }),
+					cliFlag("message", { param: "message" }),
+					cliFlag("timeout", { param: "timeoutMs", parse: "duration" }),
+				],
+				positionals: [
+					cliPositional("taskId", { source: "index", index: 0, param: "taskId", required: true }),
+					cliPositional("sessionId", { source: "index", index: 1, param: "sessionId", required: true }),
+				],
+				codec: "generic",
+			}),
+		),
+		defaultTimeout: "none",
+		write: true,
+		params: handoffStartParamsSchema,
+		result: handoffStartResultSchema,
+	},
+	{
 		method: "workflow_run",
 		capabilities: ["workflow_run"],
 		route: "extension",
@@ -1587,6 +1917,7 @@ export const BridgeCommandDefinitions = [
 					...cliTargetFlags,
 					cliFlag("maxEntries", { param: "maxEntries", parse: "integer" }),
 					cliFlag("includeHidden", { param: "includeHidden", parse: "boolean" }),
+					cliFlag("query", { param: "query" }),
 				],
 				positionals: [],
 				codec: "generic",
@@ -1601,10 +1932,55 @@ export const BridgeCommandDefinitions = [
 		capabilities: ["snapshot_store"],
 		route: "server-local",
 		targets: [],
-		cli: noCli("server-internal"),
+		cli: bridgeCli(
+			defineCliBinding({
+				family: "snapshot",
+				select: ["store"],
+				usage: "Usage: shuvgeist snapshot store [--max-entries N] [--include-hidden] [--query text]",
+				flags: [
+					...cliTargetFlags,
+					cliFlag("maxEntries", { param: "maxEntries", parse: "integer" }),
+					cliFlag("includeHidden", { param: "includeHidden", parse: "boolean" }),
+					cliFlag("query", { param: "query" }),
+				],
+				positionals: [],
+				codec: "generic",
+			}),
+		),
 		defaultTimeout: "slow",
 		params: pageSnapshotParamsSchema,
 		result: snapshotStoreResultSchema,
+	},
+	{
+		method: "snapshot_diff",
+		capabilities: ["snapshot_diff"],
+		route: "server-local",
+		targets: [],
+		cli: bridgeCli(
+			defineCliBinding({
+				family: "snapshot",
+				select: ["diff"],
+				usage: "Usage: shuvgeist snapshot diff <baseline-record-id> [--max-entries N] [--include-hidden] [--query text]",
+				flags: [
+					...cliTargetFlags,
+					cliFlag("maxEntries", { param: "maxEntries", parse: "integer" }),
+					cliFlag("includeHidden", { param: "includeHidden", parse: "boolean" }),
+					cliFlag("query", { param: "query" }),
+				],
+				positionals: [
+					cliPositional("baselineId", {
+						source: "index",
+						index: 0,
+						param: "baselineId",
+						required: true,
+					}),
+				],
+				codec: "generic",
+			}),
+		),
+		defaultTimeout: "slow",
+		params: snapshotDiffParamsSchema,
+		result: snapshotDiffResultSchema,
 	},
 	{
 		method: "snapshot_read",
@@ -1615,6 +1991,25 @@ export const BridgeCommandDefinitions = [
 		defaultTimeout: "request",
 		params: snapshotReadParamsSchema,
 		result: snapshotReadResultSchema,
+	},
+	{
+		method: "journal_list",
+		capabilities: ["journal_list"],
+		route: "server-local",
+		targets: [],
+		cli: bridgeCli(
+			defineCliBinding({
+				family: "journal",
+				select: [],
+				usage: "Usage: shuvgeist journal [--last N]",
+				flags: [cliFlag("last", { param: "last", parse: "integer" })],
+				positionals: [],
+				codec: "generic",
+			}),
+		),
+		defaultTimeout: "request",
+		params: journalListParamsSchema,
+		result: journalListResultSchema,
 	},
 	{
 		method: "page_assert",
@@ -2024,8 +2419,12 @@ export const BridgeCommandDefinitions = [
 			defineCliBinding({
 				family: "network",
 				select: ["curl"],
-				usage: "Usage: shuvgeist network curl <requestId> [--include-sensitive]",
-				flags: [...cliTabTargetFlags, cliFlag("includeSensitive", { param: "includeSensitive", parse: "boolean" })],
+				usage: "Usage: shuvgeist network curl <requestId> [--review-mutation]",
+				flags: [
+					...cliTabTargetFlags,
+					cliFlag("includeSensitive", { param: "includeSensitive", parse: "boolean" }),
+					cliFlag("reviewMutation", { param: "reviewMutation", parse: "boolean" }),
+				],
 				positionals: [
 					cliPositional("requestId", { source: "index", index: 0, param: "requestId", required: true }),
 				],
@@ -2161,6 +2560,8 @@ export const BridgeCommandDefinitions = [
 					cliFlag("maxWidth", { input: "maxWidth" }),
 					cliFlag("maxHeight", { input: "maxHeight" }),
 					cliFlag("mimeType", { input: "mimeType" }),
+					cliFlag("recordingMode", { input: "recordingMode" }),
+					cliFlag("audio", { input: "audio" }),
 				],
 				positionals: [],
 				codec: "record-start",

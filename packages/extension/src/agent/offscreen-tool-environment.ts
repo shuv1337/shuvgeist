@@ -80,6 +80,17 @@ const pageSnapshotParameters = Type.Object({
 	includeHidden: Type.Optional(Type.Boolean()),
 	query: Type.Optional(Type.String()),
 });
+const humanHandoffParameters = Type.Object({
+	kind: Type.Optional(Type.Union([Type.Literal("manual"), Type.Literal("browser-native")])),
+	message: Type.Optional(Type.String({ maxLength: 500 })),
+	timeoutMs: Type.Optional(Type.Number({ minimum: 1_000, maximum: 600_000 })),
+	trigger: Type.Optional(
+		Type.Object({
+			refId: Type.String({ minLength: 1 }),
+			mode: Type.Optional(Type.Union([Type.Literal("dom"), Type.Literal("cdp-trusted")])),
+		}),
+	),
+});
 type ArtifactToolParameters = Static<typeof artifactsParameters>;
 type ReplParameters = Static<typeof replParameters>;
 
@@ -105,6 +116,7 @@ export interface OffscreenArtifactMutation {
 export type OffscreenPrivilegedOperation =
 	| "navigate"
 	| "page-snapshot"
+	| "human-handoff"
 	| "select-element"
 	| "screenshot"
 	| "extract-image-source"
@@ -1219,6 +1231,13 @@ function createPrivilegedTools(
 			description: "Ask the user to select a page element in the exact target.",
 			operation: "select-element",
 			parameters: selectElementParameters,
+		}),
+		createPrivilegedTool(executor, {
+			name: "human_handoff",
+			label: "Human Handoff",
+			description: "Pause on the exact page target for a user to complete a manual or browser-native interaction.",
+			operation: "human-handoff",
+			parameters: humanHandoffParameters,
 		}),
 		createOffscreenExtractImageTool(context, executor) as unknown as AgentTool,
 	];

@@ -95,6 +95,7 @@ export type ResolveConfigResult = { ok: true; url: string; token: string } | { o
 
 export type CliCommandPlan =
 	| { kind: "status" }
+	| { kind: "doctor" }
 	| { kind: "serve" }
 	| {
 			kind: "one-shot";
@@ -288,6 +289,37 @@ export function withEncodedRecordingSize<T extends object>(
 		throw new Error("Encoded recording size must be a non-negative safe integer");
 	}
 	return { ...summary, encodedSizeBytes, sizeBytes: encodedSizeBytes };
+}
+
+export interface EncodedRecordingStats {
+	encodedSizeBytes: number;
+	encodedFrameCount: number;
+	coalescedFrameCount: number;
+	droppedFrameCount: number;
+}
+
+/** Add CLI-side encoder output stats without conflating them with raw captured-frame counts. */
+export function withEncodedRecordingStats<T extends object>(
+	summary: T,
+	stats: EncodedRecordingStats,
+): T & EncodedRecordingStats & { sizeBytes: number } {
+	const withSize = withEncodedRecordingSize(summary, stats.encodedSizeBytes);
+	for (const [name, value] of Object.entries({
+		encodedFrameCount: stats.encodedFrameCount,
+		coalescedFrameCount: stats.coalescedFrameCount,
+		droppedFrameCount: stats.droppedFrameCount,
+	})) {
+		if (!Number.isSafeInteger(value) || value < 0) {
+			throw new Error(`${name} must be a non-negative safe integer`);
+		}
+	}
+	return {
+		...withSize,
+		encodedSizeBytes: stats.encodedSizeBytes,
+		encodedFrameCount: stats.encodedFrameCount,
+		coalescedFrameCount: stats.coalescedFrameCount,
+		droppedFrameCount: stats.droppedFrameCount,
+	};
 }
 
 export function isNetworkOrConfigError(err: unknown): boolean {
@@ -687,6 +719,15 @@ function createRecordStartParams(context: CliCodecContext): CliCodecResult {
 		};
 	}
 	const params = { ...materialized.value.params };
+	const mode = context.flags.recordingMode ?? "cdp";
+	if (mode !== "cdp" && mode !== "tab-capture") {
+		return { ok: false, message: "--mode must be cdp or tab-capture" };
+	}
+	if (context.flags.audio && mode !== "tab-capture") {
+		return { ok: false, message: "--audio requires --mode tab-capture" };
+	}
+	if (context.flags.recordingMode) params.mode = mode;
+	if (context.flags.audio) params.audio = true;
 	const maxDurationMs = parseTimeout(context.flags.maxDuration, BridgeDefaults.RECORD_DEFAULT_MAX_DURATION_MS);
 	if (typeof maxDurationMs !== "number" || maxDurationMs <= 0) {
 		return { ok: false, message: "--max-duration must be greater than 0" };
@@ -905,6 +946,7 @@ function createBridgeCommandPlan(command: string, context: CliCommandPlannerCont
 
 const LocalCliCodecRegistry = {
 	"local-status": () => ({ kind: "status" as const }),
+	"local-doctor": () => ({ kind: "doctor" as const }),
 	"local-serve": () => ({ kind: "serve" as const }),
 	"local-launch": ({ positionals, flags }: CliCommandPlannerContext) => ({
 		kind: "launch" as const,

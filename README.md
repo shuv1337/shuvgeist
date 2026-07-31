@@ -79,7 +79,7 @@ Current CLI surface:
 - deterministic workflows: `workflow run`, `workflow validate`
 - semantic page inspection: `snapshot`, `locate`, `ref`, `frame`
 - debugger-backed diagnostics: `network`, `device`, `perf`
-- video repro capture: `record start`, `record stop`, `record status` using CDP screencast plus CLI-side ffmpeg encoding
+- video repro capture: `record start`, `record stop`, `record status` using CDP screencast by default, with explicit Chrome tab-capture WebM and optional audio
 - Electron desktop targets: `electron list`, `electron allow`, `electron attach`, `electron launch`, `electron windows`, and `--target electron:...`
 - session control: `session`, `inject`, `new-session`, `set-model`, `artifacts`
 
@@ -194,6 +194,7 @@ The source workspace is intentionally not directly packable: `npm pack --workspa
 Basic examples:
 
 ```bash
+shuvgeist doctor
 shuvgeist status
 shuvgeist navigate "https://example.com"
 shuvgeist tabs --json
@@ -203,11 +204,24 @@ shuvgeist tabs close --title-match shuvplan --yes --json
 shuvgeist windows --json
 shuvgeist screenshot --out page.png
 shuvgeist record start --out /tmp/example.webm --max-duration 5s
+shuvgeist record start --mode tab-capture --audio --out /tmp/example-with-audio.webm --max-duration 5s
 shuvgeist repl 'return await browserjs(() => document.title)'
 shuvgeist assert text "Example Domain" --timeout 10s
 shuvgeist snapshot --json
+baseline_id="$(shuvgeist snapshot store --json | jq -r '.record.id')"
+shuvgeist snapshot diff "$baseline_id" --json
 shuvgeist locate text "Sign in" --json
+shuvgeist handoff task-42 session-7 --kind manual --message "Complete sign-in, then resume"
+shuvgeist journal --last 25
 ```
+
+Human handoffs are bound to the exact task, session, Chrome tab, frame, and navigation generation. The page overlay must acknowledge the pause before automation can trigger an optional browser-native action, and only the same overlay can resume it. Closing the bridge, cancelling the request, timing out, navigating, or reloading the extension revokes the handoff before the caller regains control; late or duplicate page events are rejected. See [docs/human-handoff.md](docs/human-handoff.md).
+
+Each bridge response also carries a compact `aftermath` summary. The server persists the same bounded record in a per-session journal under `~/.shuvgeist/journals/`; `shuvgeist journal` reads it without requiring an extension connection. JSON CLI output uses `{ "result": ..., "aftermath": ... }` for journaled commands. See [docs/operation-journal.md](docs/operation-journal.md) for retention and privacy rules.
+
+Network capture replaces credentials with stable secret references before results enter normal output paths, omits ambiguous bodies, and gates mutating curl exports behind `--review-mutation`. Electron stores lossless values separately in a mode-0600 local profile; Chrome keeps them only in extension memory. See [docs/network-secret-references.md](docs/network-secret-references.md).
+
+For tightly bounded use of a page's live authenticated session, `shuvgeist request-json <relative-path>` performs a same-origin, no-redirect, no-store JSON request with timeout, byte, mutation-review, and optional schema gates. See [docs/authenticated-json-requests.md](docs/authenticated-json-requests.md).
 
 ### Deterministic e2e smoke
 
@@ -325,18 +339,19 @@ Security notes:
 - Electron commands operate over local CDP and can read renderer DOM, screenshots, page state, and recording frames.
 - `shuvgeist cookies` remains a Chrome/Edge extension command and is not routed to Electron targets. The parsed Electron `cookies` capability key is retained for configuration compatibility but does not enable Electron cookie access.
 - Renderer input requires the separate per-app `cdp_input` capability and is re-authorized against the live session/window before dispatch.
-- `record start` still requires `ffmpeg` on PATH because the CLI encodes received CDP frames into WebM.
+- Default CDP and Electron recording require `ffmpeg` on PATH because the CLI encodes received frames into WebM. Explicit Chrome `--mode tab-capture` writes MediaRecorder WebM chunks directly and does not use ffmpeg.
 - Recording JSON distinguishes raw captured-frame bytes (`sourceBytes`) from the final WebM file size (`encodedSizeBytes`); deprecated `sizeBytes`, when present, is the encoded size.
 
 Troubleshooting:
 
+- Run `shuvgeist doctor --json` first for a read-only diagnosis of the CLI, bridge, extension artifact, authentication, protocol compatibility, exact build identity, and recording dependency. It does not auto-start the bridge or modify local configuration. A `BRIDGE_BUILD_MISMATCH` or `EXTENSION_BUILD_MISMATCH` means that process came from different source or lockfile content; rebuild and restart the reported component. The versioned JSON schema and failure-code contract are documented in [docs/doctor.md](docs/doctor.md).
 - Unknown app: run `shuvgeist electron list --json` and use one of the listed IDs or aliases.
 - App is not allowlisted: run `shuvgeist electron allow <app-id-or-alias>`.
 - No CDP port found: restart the app with `--remote-debugging-port=<port>` and pass `--port <port>`.
 - Wrong window: run `shuvgeist electron windows --json`, label the intended window, then target the label.
 - Extension disconnected errors on Electron commands usually mean the command was not given an Electron `--target`; Chrome is the default target.
 
-`shuvgeist status` reports browser-extension connectivity and server-verified Electron liveness separately. Cached sessions whose CDP endpoint or renderer page has disappeared are reported as stale; a disconnected extension does not block a live Electron session.
+`shuvgeist status` reports package, protocol, exact build identity, browser-extension connectivity, and server-verified Electron liveness separately. Cached sessions whose CDP endpoint or renderer page has disappeared are reported as stale; a disconnected extension does not block a live Electron session.
 
 The CLI auto-starts the local bridge when needed. Bridge config is resolved from:
 

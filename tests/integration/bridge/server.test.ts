@@ -8,6 +8,7 @@ import { KNOWN_ELECTRON_APPS } from "@shuvgeist/server/electron/app-registry";
 import type { ElectronProcessRow } from "@shuvgeist/server/electron/process-discovery";
 import { ElectronSessionManager } from "@shuvgeist/server/electron/session-manager";
 import { createNodeConfigOwner } from "@shuvgeist/server/node-config";
+import { OperationJournal } from "@shuvgeist/server/operation-journal";
 import { BridgeServer } from "@shuvgeist/server/server";
 import {
 	BRIDGE_PROTOCOL_MIN_VERSION,
@@ -494,7 +495,12 @@ describe("BridgeServer", () => {
 		port = await getAvailablePort();
 		baseUrl = `ws://127.0.0.1:${port}/ws`;
 		server = new BridgeServer(
-			{ host: "127.0.0.1", port, token: "secret-token" },
+			{
+				host: "127.0.0.1",
+				port,
+				token: "secret-token",
+				serverBuild: { id: "development-server-fixture", kind: "development" },
+			},
 			{ electronSessionManager },
 		);
 		await server.start();
@@ -562,6 +568,144 @@ describe("BridgeServer", () => {
 		expect(options.headers.get("access-control-allow-origin")).toBeNull();
 	});
 
+	it("returns privacy-bounded aftermath and exposes the same record through the journal", async () => {
+		const extension = await openRegisteredClient(baseUrl, "secret-token", "extension", {
+			windowId: 19,
+			sessionId: "extension-session-19",
+			capabilities: ["navigate"],
+		});
+		const cli = await openRegisteredClient(baseUrl, "secret-token", "cli", { name: "journal-cli" });
+		const responsePromise = sendRequestAndReadResponse(cli.ws, {
+			id: 901,
+			method: "navigate",
+			params: { url: "https://example.com/private/path?token=request-secret" },
+		});
+		const relayed = await readMessage<{ id: number }>(extension.ws);
+		extension.ws.send(
+			JSON.stringify({
+				id: relayed.id,
+				result: {
+					finalUrl: "https://example.com/account/private?credential=response-secret",
+					tabId: 44,
+				},
+			}),
+		);
+		const response = await responsePromise;
+		expect(response).toMatchObject({
+			id: 901,
+			aftermath: {
+				method: "navigate",
+				outcome: "succeeded",
+				urlMovement: { toOrigin: "https://example.com" },
+			},
+		});
+		expect(JSON.stringify(response.aftermath)).not.toContain("request-secret");
+		expect(JSON.stringify(response.aftermath)).not.toContain("response-secret");
+		expect(JSON.stringify(response.aftermath)).not.toContain("/account/private");
+
+		const journal = await sendRequestAndReadResponse(cli.ws, {
+			id: 902,
+			method: "journal_list",
+			params: { last: 10 },
+		});
+		expect(journal).toMatchObject({
+			id: 902,
+			result: { entries: [response.aftermath] },
+		});
+		expect(journal).not.toHaveProperty("aftermath");
+
+		extension.ws.close();
+		cli.ws.close();
+	});
+
+	it("records a cancelled pending operation when its CLI disconnects", async () => {
+		const extension = await openRegisteredClient(baseUrl, "secret-token", "extension", {
+			windowId: 20,
+			sessionId: "extension-session-20",
+			capabilities: ["repl"],
+		});
+		const cli = await openRegisteredClient(baseUrl, "secret-token", "cli", { name: "cancelled-journal-cli" });
+		cli.ws.send(JSON.stringify({ id: 910, method: "repl", params: { title: "cancel", code: "return 1" } }));
+		const relayed = await readMessage<{ id: number }>(extension.ws);
+		cli.ws.close();
+		await expect(readMessage(extension.ws)).resolves.toEqual({ type: "abort", id: relayed.id });
+
+		const reader = await openRegisteredClient(baseUrl, "secret-token", "cli", { name: "journal-reader" });
+		const journal = await sendRequestAndReadResponse(reader.ws, {
+			id: 911,
+			method: "journal_list",
+			params: { last: 10 },
+		});
+		expect(journal).toMatchObject({
+			result: {
+				entries: [
+					expect.objectContaining({
+						method: "repl",
+						outcome: "cancelled",
+					}),
+				],
+			},
+		});
+
+		extension.ws.close();
+		reader.ws.close();
+	});
+
+	it("distinguishes a CLI request timeout from ordinary cancellation", async () => {
+		const extension = await openRegisteredClient(baseUrl, "secret-token", "extension", {
+			windowId: 21,
+			sessionId: "extension-session-21",
+			capabilities: ["repl"],
+		});
+		const cli = await openRegisteredClient(baseUrl, "secret-token", "cli", { name: "timeout-journal-cli" });
+		cli.ws.send(JSON.stringify({ id: 912, method: "repl", params: { title: "timeout", code: "return 1" } }));
+		const relayed = await readMessage<{ id: number }>(extension.ws);
+		cli.ws.close(4000, "request timeout");
+		await expect(readMessage(extension.ws)).resolves.toEqual({ type: "abort", id: relayed.id });
+
+		const reader = await openRegisteredClient(baseUrl, "secret-token", "cli", { name: "timeout-journal-reader" });
+		const journal = await sendRequestAndReadResponse(reader.ws, {
+			id: 913,
+			method: "journal_list",
+			params: { last: 10 },
+		});
+		expect(journal).toMatchObject({
+			result: {
+				entries: [
+					expect.objectContaining({
+						method: "repl",
+						outcome: "timed_out",
+					}),
+				],
+			},
+		});
+
+		extension.ws.close();
+		reader.ws.close();
+	});
+
+	it("does not fail an operation when its journal cannot be written", async () => {
+		await server.stop();
+		const blocked = join(snapshotStoreDir, "blocked-journal");
+		writeFileSync(blocked, "not a directory");
+		port = await getAvailablePort();
+		baseUrl = `ws://127.0.0.1:${port}/ws`;
+		server = new BridgeServer(
+			{ host: "127.0.0.1", port, token: "secret-token" },
+			{ operationJournal: new OperationJournal({ directory: blocked }) },
+		);
+		await server.start();
+		const cli = await openRegisteredClient(baseUrl, "secret-token", "cli", { name: "journal-failure-cli" });
+
+		await expect(sendRequestAndReadResponse(cli.ws, { id: 920, method: "status", params: {} })).resolves.toMatchObject({
+			id: 920,
+			error: { code: ErrorCodes.NO_EXTENSION_TARGET },
+			aftermath: { method: "status", outcome: "failed" },
+		});
+
+		cli.ws.close();
+	});
+
 	it("rejects bootstrap for non-loopback callers", async () => {
 		const fakeReq = {
 			socket: { remoteAddress: "10.0.0.8" },
@@ -588,6 +732,7 @@ describe("BridgeServer", () => {
 			windowId: 7,
 			sessionId: "session-7",
 			capabilities: ["status", "navigate"],
+			build: { id: "development-extension-fixture", kind: "development" },
 		});
 		expect(extension.registerResult.ok).toBe(true);
 
@@ -595,7 +740,13 @@ describe("BridgeServer", () => {
 		expect(cli.registerResult.ok).toBe(true);
 
 		const status = await fetch(`http://127.0.0.1:${port}/status`).then((response) => response.json());
-		expect(status.extension).toMatchObject({ connected: true, windowId: 7, sessionId: "session-7" });
+		expect(status.serverBuild).toEqual({ id: "development-server-fixture", kind: "development" });
+		expect(status.extension).toMatchObject({
+			connected: true,
+			windowId: 7,
+			sessionId: "session-7",
+			build: { id: "development-extension-fixture", kind: "development" },
+		});
 		expect(status.clients).toMatchObject({ cli: 1, extension: 1, total: 2 });
 
 		extension.ws.close();
@@ -647,7 +798,7 @@ describe("BridgeServer", () => {
 		const relayed = await readMessage<{ id: number; method: string }>(extension.ws);
 		expect(relayed).toMatchObject({ method: "repl" });
 		extension.ws.send(JSON.stringify({ id: relayed.id, result: { output: "8", files: [] } }));
-		await expect(responsePromise).resolves.toEqual({ id: 801, result: { output: "8", files: [] } });
+		await expect(responsePromise).resolves.toMatchObject({ id: 801, result: { output: "8", files: [] } });
 
 		const capabilityRemoval = readMessage(cli.ws);
 		extension.ws.send(
@@ -670,7 +821,7 @@ describe("BridgeServer", () => {
 				method: "repl",
 				params: { title: "Removed capability", code: "return 8" },
 			}),
-		).resolves.toEqual({
+		).resolves.toMatchObject({
 			id: 802,
 			error: {
 				code: ErrorCodes.CAPABILITY_DISABLED,
@@ -802,7 +953,7 @@ describe("BridgeServer", () => {
 		const relayed = await readMessage<{ id: number; method: string }>(reconnect.ws);
 		expect(relayed).toMatchObject({ id: 1, method: "status" });
 		reconnect.ws.send(JSON.stringify({ id: relayed.id, result: { ok: true, ready: true } }));
-		await expect(responsePromise).resolves.toEqual({ id: 99, result: { ok: true, ready: true } });
+		await expect(responsePromise).resolves.toMatchObject({ id: 99, result: { ok: true, ready: true } });
 
 		extension.ws.close();
 		reconnect.ws.close();
@@ -849,7 +1000,7 @@ describe("BridgeServer", () => {
 		const firstRelayed = await readMessage<{ id: number; target?: unknown }>(first.ws);
 		expect(firstRelayed).toMatchObject({ target: { kind: "chrome-tab", tabRef: "window:71" } });
 		first.ws.send(JSON.stringify({ id: firstRelayed.id, result: { ok: true, ready: true, window: 71 } }));
-		await expect(firstResponse).resolves.toEqual({
+		await expect(firstResponse).resolves.toMatchObject({
 			id: 7101,
 			result: { ok: true, ready: true, window: 71 },
 		});
@@ -858,7 +1009,7 @@ describe("BridgeServer", () => {
 		const defaultRelayed = await readMessage<{ id: number; target?: unknown }>(second.ws);
 		expect(defaultRelayed).toMatchObject({ target: { kind: "chrome-tab" } });
 		second.ws.send(JSON.stringify({ id: defaultRelayed.id, result: { ok: true, ready: true, window: 72 } }));
-		await expect(defaultResponse).resolves.toEqual({
+		await expect(defaultResponse).resolves.toMatchObject({
 			id: 7201,
 			result: { ok: true, ready: true, window: 72 },
 		});
@@ -900,7 +1051,7 @@ describe("BridgeServer", () => {
 			}),
 		);
 		const lockResponses = (await lockResponseMessages).sort((left, right) => left.id - right.id);
-		expect(lockResponses).toEqual([
+		expect(lockResponses).toMatchObject([
 			{ id: 7102, result: { ok: true, sessionId: "s71", messageIndex: 0, window: 71 } },
 			{ id: 7202, result: { ok: true, sessionId: "s72", messageIndex: 0, window: 72 } },
 		]);
@@ -917,7 +1068,7 @@ describe("BridgeServer", () => {
 		});
 		const cli = await openRegisteredClient(baseUrl, "secret-token", "cli", { name: "cap-cli" });
 
-		await expect(sendRequestAndReadResponse(cli.ws, { id: 1, method: "bogus", params: {} })).resolves.toEqual({
+		await expect(sendRequestAndReadResponse(cli.ws, { id: 1, method: "bogus", params: {} })).resolves.toMatchObject({
 			id: 1,
 			error: { code: ErrorCodes.INVALID_METHOD, message: "Unknown method: bogus" },
 		});
@@ -930,14 +1081,14 @@ describe("BridgeServer", () => {
 				message: expect.stringContaining("Invalid parameters for 'status'"),
 			},
 		});
-		await expect(sendRequestAndReadResponse(cli.ws, { id: 2, method: "navigate", params: { url: "https://example.com" } })).resolves.toEqual({
+		await expect(sendRequestAndReadResponse(cli.ws, { id: 2, method: "navigate", params: { url: "https://example.com" } })).resolves.toMatchObject({
 			id: 2,
 			error: {
 				code: ErrorCodes.CAPABILITY_DISABLED,
 				message: "Method 'navigate' is disabled on the active extension target",
 			},
 		});
-		await expect(sendRequestAndReadResponse(cli.ws, { id: 3, method: "cookies", params: {} })).resolves.toEqual({
+		await expect(sendRequestAndReadResponse(cli.ws, { id: 3, method: "cookies", params: {} })).resolves.toMatchObject({
 			id: 3,
 			error: {
 				code: ErrorCodes.CAPABILITY_DISABLED,
@@ -1019,7 +1170,7 @@ describe("BridgeServer", () => {
 				params: {},
 				target: { kind: "electron-window", appRef: "vscode", windowRef: "w1" },
 			}),
-		).resolves.toEqual({
+		).resolves.toMatchObject({
 			id: 1,
 			error: {
 				code: ErrorCodes.NO_ELECTRON_SESSION,
@@ -1040,7 +1191,7 @@ describe("BridgeServer", () => {
 		const relayed = await readMessage<{ id: number; method: string; target?: unknown }>(extension.ws);
 		expect(relayed).toMatchObject({ id: 1, method: "screenshot", target: { kind: "chrome-tab" } });
 		extension.ws.send(JSON.stringify({ id: relayed.id, result: validScreenshotResult }));
-		await expect(responsePromise).resolves.toEqual({ id: 8, result: validScreenshotResult });
+		await expect(responsePromise).resolves.toMatchObject({ id: 8, result: validScreenshotResult });
 
 		extension.ws.close();
 		cli.ws.close();
@@ -1064,7 +1215,7 @@ describe("BridgeServer", () => {
 		});
 		const snapshotResult = validPageSnapshotResult(42, 7);
 		extension.ws.send(JSON.stringify({ id: relayed.id, result: snapshotResult }));
-		await expect(responsePromise).resolves.toEqual({
+		await expect(responsePromise).resolves.toMatchObject({
 			id: 77,
 			result: snapshotResult,
 		});
@@ -1113,7 +1264,7 @@ describe("BridgeServer", () => {
 					generatedAt: 12345,
 					totalCandidates: 9,
 					truncated: false,
-					entries: [validSnapshotEntry(42, 7)],
+					entries: [{ ...validSnapshotEntry(42, 7), stableElementId: "stable-save" }],
 				},
 			}),
 		);
@@ -1139,6 +1290,61 @@ describe("BridgeServer", () => {
 		expect(JSON.stringify(stored)).not.toContain("entries");
 
 		const recordId = (stored.result as { record: { id: string } }).record.id;
+		const diffResponse = sendRequestAndReadResponse(cli.ws, {
+			id: 91,
+			method: "snapshot_diff",
+			params: { baselineId: recordId, tabId: 42, frameId: 7, maxEntries: 25, query: "save" },
+		});
+		const diffRelayed = await readMessage<{ id: number; method: string; params?: unknown }>(extension.ws);
+		expect(diffRelayed).toMatchObject({
+			method: "page_snapshot",
+			params: { tabId: 42, frameId: 7, maxEntries: 25, query: "save" },
+		});
+		extension.ws.send(
+			JSON.stringify({
+				id: diffRelayed.id,
+				result: {
+					target: { kind: "chrome-tab", tabId: 42, frameId: 7 },
+					navigationGeneration: 0,
+					tabId: 42,
+					frameId: 7,
+					query: "save",
+					url: "https://example.test/settings",
+					title: "Settings",
+					generatedAt: 12346,
+					totalCandidates: 1,
+					truncated: false,
+					entries: [
+						{
+							...validSnapshotEntry(42, 7, "current:ref1"),
+							stableElementId: "stable-save",
+							name: "Save changes",
+						},
+					],
+				},
+			}),
+		);
+		await expect(diffResponse).resolves.toMatchObject({
+			id: 91,
+			result: {
+				ok: true,
+				baseline: { id: recordId, capture: { maxEntries: 25, includeHidden: false, query: "save" } },
+				current: { id: "chrome:42:frame:7:generation:0:snapshot:12346" },
+				diff: {
+					unchangedCount: 0,
+					added: [],
+					changed: [
+						{
+							identity: "stable:stable-save",
+							refId: "current:ref1",
+							previous: { name: "Save" },
+							current: { snapshotId: "current:ref1", name: "Save changes" },
+						},
+					],
+					removed: [],
+				},
+			},
+		});
 		await expect(
 			sendRequestAndReadResponse(cli.ws, { id: 89, method: "snapshot_read", params: { id: recordId } }),
 		).resolves.toMatchObject({
@@ -1329,6 +1535,110 @@ describe("BridgeServer", () => {
 						tabId: 64,
 						entries: [{ snapshotId: "e1" }],
 					},
+					aftermath: {
+						method: "page_snapshot",
+						outcome: "succeeded",
+						target: { kind: "chrome-tab", tabId: 64, frameId: 0 },
+						navigationGeneration: 0,
+					},
+				},
+			},
+		});
+		const storeCall = fetch(`http://127.0.0.1:${port}/mcp`, {
+			method: "POST",
+			headers: { authorization: "Bearer secret-token", "content-type": "application/json" },
+			body: JSON.stringify({
+				jsonrpc: "2.0",
+				id: 6,
+				method: "tools/call",
+				params: {
+					name: "shuvgeist_observe",
+					arguments: {
+						store: true,
+						query: "save",
+						maxEntries: 10,
+						target: { kind: "chrome-tab", tabRef: "window:64" },
+					},
+				},
+			}),
+		});
+		const storeRelayed = await readMessage<{ id: number; method: string }>(extension.ws);
+		expect(storeRelayed.method).toBe("page_snapshot");
+		extension.ws.send(
+			JSON.stringify({
+				id: storeRelayed.id,
+				result: {
+					...validPageSnapshotResult(64, 0, "stored:ref1"),
+					query: "save",
+					generatedAt: 2,
+					entries: [
+						{ ...validSnapshotEntry(64, 0, "stored:ref1"), stableElementId: "stable-save" },
+					],
+				},
+			}),
+		);
+		const storeJson = await (await storeCall).json();
+		const baselineId = storeJson.result.structuredContent.result.record.id as string;
+		expect(storeJson).toMatchObject({
+			id: 6,
+			result: {
+				structuredContent: {
+					result: {
+						record: {
+							capture: { maxEntries: 10, includeHidden: false, query: "save" },
+						},
+					},
+				},
+			},
+		});
+
+		const diffCall = fetch(`http://127.0.0.1:${port}/mcp`, {
+			method: "POST",
+			headers: { authorization: "Bearer secret-token", "content-type": "application/json" },
+			body: JSON.stringify({
+				jsonrpc: "2.0",
+				id: 7,
+				method: "tools/call",
+				params: {
+					name: "shuvgeist_observe",
+					arguments: {
+						baselineId,
+						query: "save",
+						maxEntries: 10,
+						target: { kind: "chrome-tab", tabRef: "window:64" },
+					},
+				},
+			}),
+		});
+		const diffRelayed = await readMessage<{ id: number; method: string }>(extension.ws);
+		expect(diffRelayed.method).toBe("page_snapshot");
+		extension.ws.send(
+			JSON.stringify({
+				id: diffRelayed.id,
+				result: {
+					...validPageSnapshotResult(64, 0, "current:ref1"),
+					query: "save",
+					generatedAt: 3,
+					entries: [
+						{
+							...validSnapshotEntry(64, 0, "current:ref1"),
+							stableElementId: "stable-save",
+							name: "Save changes",
+						},
+					],
+				},
+			}),
+		);
+		await expect((await diffCall).json()).resolves.toMatchObject({
+			id: 7,
+			result: {
+				structuredContent: {
+					result: {
+						ok: true,
+						diff: {
+							changed: [{ identity: "stable:stable-save", refId: "current:ref1" }],
+						},
+					},
 				},
 			},
 		});
@@ -1397,10 +1707,20 @@ describe("BridgeServer", () => {
 		await expect(tasksResponse.json()).resolves.toMatchObject({
 			id: 5,
 			result: {
-				tasks: [
+				tasks: expect.arrayContaining([
 					expect.objectContaining({ kind: "shuvgeist_observe", status: "succeeded" }),
+					expect.objectContaining({
+						kind: "shuvgeist_observe",
+						status: "succeeded",
+						metadata: expect.objectContaining({ bridgeMethod: "snapshot_store" }),
+					}),
+					expect.objectContaining({
+						kind: "shuvgeist_observe",
+						status: "succeeded",
+						metadata: expect.objectContaining({ bridgeMethod: "snapshot_diff" }),
+					}),
 					expect.objectContaining({ kind: "shuvgeist_act", status: "succeeded" }),
-				],
+				]),
 			},
 		});
 		extension.ws.close();
@@ -1425,7 +1745,7 @@ describe("BridgeServer", () => {
 					params: { code: "2 + 2" },
 					target: { kind: "electron-window", sessionId: "e1" },
 				}),
-			).resolves.toEqual({ id: 2, result: { output: "4", result: 4 } });
+			).resolves.toMatchObject({ id: 2, result: { output: "4", result: 4 } });
 
 			await expect(
 				sendRequestAndReadResponse(cli.ws, {
@@ -1791,7 +2111,7 @@ describe("BridgeServer", () => {
 					params: { code: "2 + 2" },
 					target: { kind: "electron-window", sessionId: "e1", windowRef: "secondary" },
 				}),
-			).resolves.toEqual({ id: 5, result: { output: "4", result: 4 } });
+			).resolves.toMatchObject({ id: 5, result: { output: "4", result: 4 } });
 
 			cdp.setTargets([
 				{
@@ -2376,7 +2696,7 @@ describe("BridgeServer", () => {
 				method: "session_set_model",
 				params: { model: "anthropic/claude-sonnet-4-6" },
 			}),
-		).resolves.toEqual({
+		).resolves.toMatchObject({
 			id: 11,
 			error: {
 				code: ErrorCodes.WRITE_LOCKED,
@@ -2387,7 +2707,7 @@ describe("BridgeServer", () => {
 		extension.ws.send(
 			JSON.stringify({ id: forwarded.id, result: { ok: true, sessionId: "session-a", messageIndex: 0 } }),
 		);
-		await expect(firstResponsePromise).resolves.toEqual({
+		await expect(firstResponsePromise).resolves.toMatchObject({
 			id: 10,
 			result: { ok: true, sessionId: "session-a", messageIndex: 0 },
 		});
@@ -2418,7 +2738,7 @@ describe("BridgeServer", () => {
 		if ((secondResponse as { type?: string }).type === "event") {
 			secondResponse = await readMessage(cliB.ws);
 		}
-		expect(secondResponse).toEqual({ id: 12, result: setModelResult });
+		expect(secondResponse).toMatchObject({ id: 12, result: setModelResult });
 
 		extension.ws.close();
 		cliA.ws.close();

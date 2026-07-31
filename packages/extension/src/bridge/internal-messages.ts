@@ -16,6 +16,7 @@ import type {
 	RuntimeTraceContext,
 	RuntimeValue,
 } from "../agent/runtime-protocol.js";
+import type { TabCaptureOffscreenMessage } from "../recording/tab-capture-messages.js";
 import type { BridgeConnectionState } from "./extension-client.js";
 
 // ---------------------------------------------------------------------------
@@ -105,6 +106,7 @@ export type AgentRuntimeConnectionRegistry = Record<string, AgentRuntimeConnecti
 
 export type BridgeToOffscreenMessage =
 	| { type: "bridge-keepalive-ping" }
+	| TabCaptureOffscreenMessage
 	| { type: "agent-runtime-init"; state?: OffscreenRuntimeHostState }
 	| { type: "agent-runtime-connect"; descriptor: AgentRuntimeConnectionDescriptor }
 	| { type: "agent-runtime-request"; request: RuntimeRequestEnvelope }
@@ -164,6 +166,7 @@ export interface AgentRuntimePageOperationMessage {
 		| "native-input"
 		| "navigation-context"
 		| "page-snapshot"
+		| "human-handoff"
 		| "select-element"
 		| "screenshot"
 		| "extract-image-source"

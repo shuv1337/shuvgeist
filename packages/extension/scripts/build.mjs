@@ -2,6 +2,7 @@ import { copyFileSync, existsSync, mkdirSync, readdirSync, rmSync, watch } from 
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build, context } from "esbuild";
+import { computeBuildIdentity } from "../../../scripts/build-identity.mjs";
 import { createInjectedArtifactsPlugin } from "../../../scripts/injected-artifacts.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -11,6 +12,7 @@ const repoRoot = join(extensionRoot, "../..");
 const isWatch = process.argv.includes("--watch");
 const staticDir = join(repoRoot, "static");
 const includeInjectedArtifactTestSurface = process.env.SHUVGEIST_BUILD_TEST_SURFACES === "1";
+const buildIdentity = computeBuildIdentity(repoRoot, process.env.SHUVGEIST_BUILD_KIND ?? "development");
 
 // Chrome only
 const targetBrowser = "chrome";
@@ -35,7 +37,7 @@ const sharedBuildOptions = {
 	absWorkingDir: repoRoot,
 	target: ["chrome120"],
 	platform: "browser",
-	sourcemap: isWatch ? "inline" : true,
+	sourcemap: isWatch ? "inline" : false,
 	loader: {
 		".ts": "ts",
 		".tsx": "tsx",
@@ -44,6 +46,8 @@ const sharedBuildOptions = {
 		"process.env.NODE_ENV": JSON.stringify(process.env.NODE_ENV ?? (isWatch ? "development" : "production")),
 		"process.env.TARGET_BROWSER": JSON.stringify(targetBrowser),
 		global: "globalThis",
+		__SHUVGEIST_BUILD_ID__: JSON.stringify(buildIdentity.id),
+		__SHUVGEIST_BUILD_KIND__: JSON.stringify(buildIdentity.kind),
 	},
 	inject: [join(extensionRoot, "scripts/process-shim.js"), join(extensionRoot, "scripts/dom-shim.js")],
 	// Force all mini-lit and lit imports to resolve to shuvgeist's node_modules
@@ -95,6 +99,8 @@ const copyStatic = () => {
 		const filename = relative.replace("static/", "");
 		// Skip manifest files - we already copied the correct one above
 		if (filename.startsWith("manifest.")) continue;
+		// The extension-origin test fixture is emitted only for explicit E2E builds.
+		if (filename === "test.html" && !includeInjectedArtifactTestSurface) continue;
 
 		const source = join(repoRoot, relative);
 		const destination = join(outDir, filename);

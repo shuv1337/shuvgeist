@@ -12,6 +12,7 @@ import {
 	parseTimeout,
 	resolveBridgeUrl,
 	resolveConfig,
+	withEncodedRecordingStats,
 	withEncodedRecordingSize,
 } from "shuvgeist/cli-core";
 import {
@@ -101,8 +102,31 @@ describe("cli-core", () => {
 			expect.arrayContaining(["target", "tabId", "frameId", "out", "noViewportJson"]),
 		);
 		expect(flagsFor("record_start")).not.toContain("noViewportJson");
+		expect(flagsFor("record_start")).toEqual(expect.arrayContaining(["recordingMode", "audio"]));
 		expect(flagsFor("ref_click")).toEqual(expect.arrayContaining(["native", "trusted"]));
 		expect(flagsFor("ref_fill")).toEqual(expect.arrayContaining(["native", "trusted"]));
+	});
+
+	it("plans explicit tab-capture recording and keeps audio opt-in", () => {
+		expect(
+			createCommandPlan(
+				"record",
+				["start"],
+				{ out: "/tmp/tab.webm", recordingMode: "tab-capture", audio: true, maxDuration: "5s" },
+				() => "",
+			),
+		).toMatchObject({
+			kind: "record",
+			action: "start",
+			params: {
+				mode: "tab-capture",
+				audio: true,
+				maxDurationMs: 5_000,
+			},
+		});
+		expect(
+			createCommandPlan("record", ["start"], { out: "/tmp/tab.webm", audio: true }, () => ""),
+		).toMatchObject({ kind: "usage-error", message: "--audio requires --mode tab-capture" });
 	});
 
 	it("records every intentional pre-parser exception", () => {
@@ -220,6 +244,39 @@ describe("cli-core", () => {
 			sizeBytes: 1024,
 		});
 		expect(() => withEncodedRecordingSize({ sourceBytes: 1 }, -1)).toThrow("non-negative safe integer");
+	});
+
+	it("adds validated encoder frame accounting without replacing source frame counts", () => {
+		expect(
+			withEncodedRecordingStats(
+				{ sourceBytes: 4096, frameCount: 12 },
+				{
+					encodedSizeBytes: 1024,
+					encodedFrameCount: 8,
+					coalescedFrameCount: 3,
+					droppedFrameCount: 1,
+				},
+			),
+		).toEqual({
+			sourceBytes: 4096,
+			frameCount: 12,
+			sizeBytes: 1024,
+			encodedSizeBytes: 1024,
+			encodedFrameCount: 8,
+			coalescedFrameCount: 3,
+			droppedFrameCount: 1,
+		});
+		expect(() =>
+			withEncodedRecordingStats(
+				{},
+				{
+					encodedSizeBytes: 1,
+					encodedFrameCount: -1,
+					coalescedFrameCount: 0,
+					droppedFrameCount: 0,
+				},
+			),
+		).toThrow("encodedFrameCount must be a non-negative safe integer");
 	});
 
 	it("maps commands to the actual bridge protocol", () => {

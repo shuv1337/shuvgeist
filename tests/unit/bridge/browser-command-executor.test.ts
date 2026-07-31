@@ -3,6 +3,7 @@ import type {
 	ResolvedChromePageDriver,
 } from "@shuvgeist/extension/bridge/chrome-page-driver-registry";
 import type { PageDriver, PageRefActionRequest } from "@shuvgeist/driver/page-driver";
+import { HandoffCoordinator } from "@shuvgeist/extension/bridge/handoff-coordinator";
 import { ShownSkillsState } from "@shuvgeist/extension/utils/shown-skills";
 
 const navigateExecute = vi.fn();
@@ -173,6 +174,19 @@ function createPageDriverHarness(tabId = 42, frameId = 0) {
 		value: request.expression === "document.title" ? "Example" : undefined,
 		type: "string",
 	}));
+	const authenticatedJson = vi.fn(async () => ({
+		scope,
+		result: {
+			success: true as const,
+			status: 200,
+			origin: "https://example.com",
+			path: "/api/me",
+			method: "GET" as const,
+			mutation: false,
+			responseBytes: 12,
+			data: { name: "Ada" },
+		},
+	}));
 	const networkStats = () => ({
 		scope,
 		active: false,
@@ -187,6 +201,7 @@ function createPageDriverHarness(tabId = 42, frameId = 0) {
 		snapshot,
 		actOnRef,
 		evaluate,
+		authenticatedJson,
 		dispose: vi.fn(async () => undefined),
 		network: {
 			start: vi.fn(async () => ({ ...networkStats(), active: true })),
@@ -217,13 +232,20 @@ function createPageDriverHarness(tabId = 42, frameId = 0) {
 		release: vi.fn(async () => undefined),
 		dispose: vi.fn(async () => undefined),
 	} satisfies ChromePageDriverRegistryLike;
-	return { registry, driver, snapshot, actOnRef, evaluate, entry, scope };
+	return { registry, driver, snapshot, actOnRef, evaluate, authenticatedJson, entry, scope };
 }
 
 describe("BrowserCommandExecutor", () => {
+	afterEach(() => vi.useRealTimers());
+
 	it("gates record capabilities behind sensitive access", () => {
 		expect(getBridgeCapabilities(false)).not.toEqual(expect.arrayContaining(["record_start", "record_stop", "record_status"]));
 		expect(getBridgeCapabilities(true)).toEqual(expect.arrayContaining(["record_start", "record_stop", "record_status"]));
+	});
+
+	it("advertises authenticated JSON only with sensitive access", () => {
+		expect(getBridgeCapabilities(false)).not.toContain("authenticated_json_request");
+		expect(getBridgeCapabilities(true)).toContain("authenticated_json_request");
 	});
 	beforeEach(() => {
 		navigateExecute.mockReset();
@@ -407,12 +429,107 @@ describe("BrowserCommandExecutor", () => {
 		);
 	});
 
+	it("waits for handoff acknowledgement before a browser-native trigger and exact completion", async () => {
+		const { registry, actOnRef } = createPageDriverHarness();
+		const coordinator = new HandoffCoordinator();
+		const remove = vi.fn(async () => undefined);
+		let shownBinding!: Parameters<HandoffCoordinator["start"]>[0] & { handoffId: string };
+		const ready = vi.fn(async () => {
+			coordinator.acceptPageEvent(
+				{
+					type: "shuvgeist-handoff-lifecycle",
+					handoffId: shownBinding.handoffId,
+					taskId: shownBinding.taskId,
+					sessionId: shownBinding.sessionId,
+					tabId: shownBinding.tabId,
+					frameId: shownBinding.frameId,
+					navigationGeneration: shownBinding.navigationGeneration,
+					state: "completed",
+				},
+				{ tabId: shownBinding.tabId, frameId: shownBinding.frameId },
+			);
+		});
+		const showHandoffOverlay = vi.fn(async ({ binding }) => {
+			shownBinding = binding;
+			queueMicrotask(() => {
+				coordinator.acceptPageEvent(
+					{
+						type: "shuvgeist-handoff-lifecycle",
+						handoffId: binding.handoffId,
+						taskId: binding.taskId,
+						sessionId: binding.sessionId,
+						tabId: binding.tabId,
+						frameId: binding.frameId,
+						navigationGeneration: binding.navigationGeneration,
+						state: "acknowledged",
+					},
+					{ tabId: binding.tabId, frameId: binding.frameId },
+				);
+			});
+			return { ready, remove };
+		});
+		const executor = new BrowserCommandExecutor({
+			windowId: 7,
+			sensitiveAccessEnabled: false,
+			pageDriverRegistry: registry,
+			handoffCoordinator: coordinator,
+			showHandoffOverlay,
+		});
+		await executor.pageSnapshot({ tabId: 42 });
+
+		await expect(
+			executor.dispatch("handoff_start", {
+				taskId: "task-1",
+				sessionId: "session-1",
+				kind: "browser-native",
+				trigger: { refId: "login-input", mode: "cdp-trusted" },
+				tabId: 42,
+			}),
+		).resolves.toMatchObject({
+			state: "completed",
+			triggered: true,
+			navigationGeneration: 3,
+			target: { kind: "chrome-tab", tabId: 42, frameId: 0 },
+		});
+		expect(actOnRef).toHaveBeenCalledWith(
+			expect.objectContaining({
+				refId: "login-input",
+				action: { kind: "click", mode: "cdp-trusted" },
+			}),
+		);
+		expect(remove).toHaveBeenCalledOnce();
+		expect(ready).toHaveBeenCalledOnce();
+	});
+
+	it("returns a timed-out handoff only after revoking it and removing the overlay", async () => {
+		vi.useFakeTimers();
+		const { registry } = createPageDriverHarness();
+		const remove = vi.fn(async () => undefined);
+		const executor = new BrowserCommandExecutor({
+			windowId: 7,
+			sensitiveAccessEnabled: false,
+			pageDriverRegistry: registry,
+			handoffCoordinator: new HandoffCoordinator(),
+			showHandoffOverlay: vi.fn(async () => ({ ready: vi.fn(), remove })),
+		});
+		const resultPromise = executor.dispatch("handoff_start", {
+			taskId: "task-timeout",
+			sessionId: "session-1",
+			tabId: 42,
+			timeoutMs: 1_000,
+		});
+		await vi.advanceTimersByTimeAsync(1_000);
+		await expect(resultPromise).resolves.toMatchObject({ state: "timed_out", triggered: false });
+		expect(remove).toHaveBeenCalledOnce();
+	});
+
 	it("gates sensitive commands and routes Chrome eval through PageDriver", async () => {
 		const disabled = new BrowserCommandExecutor({ windowId: 1, sensitiveAccessEnabled: false });
 		await expect(disabled.evalCode({ code: "document.title" })).rejects.toMatchObject({ code: -32008 });
 		await expect(disabled.cookies({})).rejects.toMatchObject({ code: -32008 });
+		await expect(disabled.authenticatedJson({ path: "/api/me" })).rejects.toMatchObject({ code: -32008 });
 
-		const { registry, evaluate } = createPageDriverHarness();
+		const { registry, evaluate, authenticatedJson } = createPageDriverHarness();
 		debuggerExecute.mockResolvedValueOnce({ details: { value: [{ name: "auth_token", value: "secret" }] } });
 		const enabled = new BrowserCommandExecutor({
 			windowId: 1,
@@ -428,6 +545,15 @@ describe("BrowserCommandExecutor", () => {
 			returnByValue: true,
 			signal: undefined,
 		});
+		await expect(enabled.authenticatedJson({ path: "/api/me", tabId: 42 })).resolves.toMatchObject({
+			ok: true,
+			data: { name: "Ada" },
+			sensitive: true,
+			noStore: true,
+		});
+		expect(authenticatedJson).toHaveBeenCalledWith(
+			expect.objectContaining({ path: "/api/me", tabId: 42, signal: undefined }),
+		);
 		await expect(enabled.evalCode({ code: "document.title", tabId: 42, frameId: 7 })).rejects.toThrow(
 			"Frame-targeted eval requires frame context support",
 		);

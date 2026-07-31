@@ -2,6 +2,8 @@
 import { type ChildProcessWithoutNullStreams, spawn, spawnSync } from "node:child_process";
 import { stat } from "node:fs/promises";
 
+import { jpegDimensions, mjpegMatroskaFrame, mjpegMatroskaHeader } from "./mjpeg-matroska.js";
+
 export interface FfmpegEncoderStartOptions {
 	outPath: string;
 	fps: number;
@@ -12,9 +14,19 @@ export interface FfmpegEncoderStartOptions {
 export interface FfmpegEncoderFinishResult {
 	encodedSizeBytes: number;
 	frameCount: number;
+	sourceFrameCount: number;
+	encodedFrameCount: number;
+	coalescedFrameCount: number;
+	droppedFrameCount: number;
 }
 
 const DEFAULT_VIDEO_BITRATE = 2_500_000;
+
+export type FfmpegProcessFactory = (args: string[]) => ChildProcessWithoutNullStreams;
+
+function spawnFfmpeg(args: string[]): ChildProcessWithoutNullStreams {
+	return spawn("ffmpeg", args, { stdio: ["pipe", "pipe", "pipe"] });
+}
 
 export function assertFfmpegAvailable(): void {
 	const result = spawnSync("ffmpeg", ["-version"], { timeout: 3000, encoding: "utf-8" });
@@ -41,14 +53,23 @@ export class FfmpegWebmEncoder {
 	private outPath = "";
 	private fps = 12;
 	private intervalMs = 1000 / 12;
-	private nextFrameAtMs = 0;
-	private lastFrame?: Buffer;
-	private writtenFrameCount = 0;
+	private firstCapturedAtMs?: number;
+	private pendingFrame?: { data: Buffer; frameNumber: number };
+	private sourceFrameCount = 0;
+	private encodedFrameCount = 0;
+	private coalescedFrameCount = 0;
+	private droppedFrameCount = 0;
+	private headerWritten = false;
 	private started = false;
 	private finished = false;
 
+	constructor(private readonly processFactory: FfmpegProcessFactory = spawnFfmpeg) {}
+
 	start(options: FfmpegEncoderStartOptions): void {
 		if (this.started) throw new Error("ffmpeg encoder already started");
+		if (!Number.isFinite(options.fps) || options.fps <= 0) {
+			throw new Error("ffmpeg encoder fps must be a positive finite number");
+		}
 		this.outPath = options.outPath;
 		this.fps = options.fps;
 		this.intervalMs = 1000 / options.fps;
@@ -58,14 +79,20 @@ export class FfmpegWebmEncoder {
 			"error",
 			"-y",
 			"-f",
-			"image2pipe",
-			"-framerate",
-			String(options.fps),
-			"-vcodec",
-			"mjpeg",
+			"matroska",
+			"-fpsprobesize",
+			"0",
+			"-probesize",
+			"32",
+			"-analyzeduration",
+			"0",
 			"-i",
 			"pipe:0",
 			"-an",
+			"-r",
+			String(options.fps),
+			"-fps_mode",
+			"cfr",
 			"-c:v",
 			codecForMimeType(options.mimeType),
 			"-b:v",
@@ -74,7 +101,7 @@ export class FfmpegWebmEncoder {
 			"yuv420p",
 			options.outPath,
 		];
-		const child = spawn("ffmpeg", args, { stdio: ["pipe", "pipe", "pipe"] });
+		const child = this.processFactory(args);
 		child.stdout.resume();
 		child.stderr.setEncoding("utf-8");
 		child.stderr.on("data", (chunk: string) => {
@@ -86,37 +113,61 @@ export class FfmpegWebmEncoder {
 
 	async pushFrame(frame: Buffer, capturedAtMs: number): Promise<void> {
 		if (!this.process || this.finished) throw new Error("ffmpeg encoder is not active");
-		if (!this.lastFrame) {
-			this.lastFrame = Buffer.from(frame);
-			this.nextFrameAtMs = capturedAtMs + this.intervalMs;
-			await this.writeFrame(frame);
+		if (!Number.isFinite(capturedAtMs)) throw new Error("Recording frame timestamp must be finite");
+		this.sourceFrameCount += 1;
+		if (this.firstCapturedAtMs === undefined) {
+			this.firstCapturedAtMs = capturedAtMs;
+			this.pendingFrame = { data: Buffer.from(frame), frameNumber: 0 };
 			return;
 		}
-		while (this.nextFrameAtMs + this.intervalMs <= capturedAtMs) {
-			await this.writeFrame(this.lastFrame);
-			this.nextFrameAtMs += this.intervalMs;
+
+		const frameNumber = Math.floor((capturedAtMs - this.firstCapturedAtMs) / this.intervalMs);
+		if (frameNumber < 0 || (this.pendingFrame && frameNumber < this.pendingFrame.frameNumber)) {
+			this.droppedFrameCount += 1;
+			return;
 		}
-		this.lastFrame = Buffer.from(frame);
-		await this.writeFrame(frame);
-		this.nextFrameAtMs = Math.max(this.nextFrameAtMs + this.intervalMs, capturedAtMs + this.intervalMs);
+		if (!this.pendingFrame) {
+			this.pendingFrame = { data: Buffer.from(frame), frameNumber };
+			return;
+		}
+		if (frameNumber === this.pendingFrame.frameNumber) {
+			this.pendingFrame = { data: Buffer.from(frame), frameNumber };
+			this.coalescedFrameCount += 1;
+			return;
+		}
+
+		await this.writePendingFrame(frameNumber);
+		this.pendingFrame = { data: Buffer.from(frame), frameNumber };
 	}
 
 	async finish(endedAtMs: number): Promise<FfmpegEncoderFinishResult> {
 		if (!this.process || this.finished) throw new Error("ffmpeg encoder is not active");
 		this.finished = true;
-		if (!this.lastFrame) {
+		if (!this.pendingFrame || this.firstCapturedAtMs === undefined) {
 			this.process.stdin.destroy();
 			this.process.kill("SIGTERM");
 			throw new Error("Recording produced no frames");
 		}
-		while (this.nextFrameAtMs <= endedAtMs) {
-			await this.writeFrame(this.lastFrame);
-			this.nextFrameAtMs += this.intervalMs;
+		try {
+			const elapsedMs = Math.max(0, endedAtMs - this.firstCapturedAtMs);
+			const endFrameNumber = Math.max(this.pendingFrame.frameNumber + 1, Math.round(elapsedMs / this.intervalMs));
+			await this.writePendingFrame(endFrameNumber);
+			this.process.stdin.end();
+			await this.waitForExit();
+			const stats = await stat(this.outPath);
+			return {
+				encodedSizeBytes: stats.size,
+				frameCount: endFrameNumber,
+				sourceFrameCount: this.sourceFrameCount,
+				encodedFrameCount: this.encodedFrameCount,
+				coalescedFrameCount: this.coalescedFrameCount,
+				droppedFrameCount: this.droppedFrameCount,
+			};
+		} catch (error) {
+			this.process.stdin.destroy();
+			this.process.kill("SIGTERM");
+			throw error;
 		}
-		this.process.stdin.end();
-		await this.waitForExit();
-		const stats = await stat(this.outPath);
-		return { encodedSizeBytes: stats.size, frameCount: this.writtenFrameCount };
 	}
 
 	abort(): void {
@@ -126,10 +177,28 @@ export class FfmpegWebmEncoder {
 		this.process.kill("SIGTERM");
 	}
 
-	private async writeFrame(frame: Buffer): Promise<void> {
+	private async writePendingFrame(endFrameNumber: number): Promise<void> {
+		if (!this.pendingFrame) throw new Error("ffmpeg encoder has no pending frame");
+		if (endFrameNumber <= this.pendingFrame.frameNumber) {
+			throw new Error("ffmpeg encoder frame duration must be positive");
+		}
+		if (!this.headerWritten) {
+			const dimensions = jpegDimensions(this.pendingFrame.data);
+			await this.writeChunk(mjpegMatroskaHeader(dimensions.width, dimensions.height));
+			this.headerWritten = true;
+		}
+		const timestampMs = Math.max(0, Math.round(this.pendingFrame.frameNumber * this.intervalMs));
+		const durationMs = Math.max(1, Math.round((endFrameNumber - this.pendingFrame.frameNumber) * this.intervalMs));
+		const envelope = mjpegMatroskaFrame(timestampMs, durationMs, this.pendingFrame.data.length);
+		await this.writeChunk(envelope.header);
+		await this.writeChunk(this.pendingFrame.data);
+		await this.writeChunk(envelope.trailer);
+		this.encodedFrameCount += 1;
+	}
+
+	private async writeChunk(chunk: Buffer): Promise<void> {
 		if (!this.process) throw new Error("ffmpeg encoder is not active");
-		this.writtenFrameCount += 1;
-		if (this.process.stdin.write(frame)) return;
+		if (this.process.stdin.write(chunk)) return;
 		await new Promise<void>((resolve, reject) => {
 			const onDrain = () => {
 				cleanup();

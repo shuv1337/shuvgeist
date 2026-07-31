@@ -9,6 +9,7 @@
 import type { SnapshotInjectionEntry } from "@shuvgeist/driver/injected-contracts";
 import type { PageSnapshotResult as DriverPageSnapshotResult } from "@shuvgeist/driver/page-driver";
 import {
+	pageDriverAuthenticatedJsonToWire,
 	pageDriverLocatorMatchesToWire,
 	pageDriverNetworkBodyToWire,
 	pageDriverNetworkCurlToWire,
@@ -30,6 +31,7 @@ import {
 	validateBridgeCommandResult,
 } from "@shuvgeist/protocol/command-schemas";
 import type {
+	AuthenticatedJsonRequestParams,
 	BridgeMethod,
 	BridgeReplResult,
 	BridgeScreenshotResult,
@@ -41,6 +43,7 @@ import type {
 	DeviceResetParams,
 	EvalParams,
 	FrameListParams,
+	HandoffStartParams,
 	LocateByLabelParams,
 	LocateByRoleParams,
 	LocateByTextParams,
@@ -86,6 +89,7 @@ import { AskUserWhichElementTool } from "../tools/ask-user-which-element.js";
 import { DebuggerTool } from "../tools/debugger.js";
 import { normalizeDeviceEmulationRequest } from "../tools/device-presets.js";
 import { ExtractImageTool } from "../tools/extract-image.js";
+import { type HandoffOverlayHandle, showHandoffOverlay } from "../tools/handoff-overlay.js";
 import { resolveTabTarget } from "../tools/helpers/browser-target.js";
 import { getSharedDebuggerManager } from "../tools/helpers/debugger-manager.js";
 import { buildFrameTree, listFrames } from "../tools/helpers/frame-resolver.js";
@@ -111,6 +115,7 @@ import {
 	type ChromePageDriverRegistryLike,
 	type ResolvedChromePageDriver,
 } from "./chrome-page-driver-registry.js";
+import { type HandoffCoordinator, sharedHandoffCoordinator } from "./handoff-coordinator.js";
 import { buildSessionHistoryResult, type SessionBridgeAdapter } from "./session-bridge.js";
 
 /**
@@ -155,6 +160,8 @@ export interface BrowserCommandExecutorOptions {
 	screenshotRouter?: ScreenshotRouter;
 	recordingRouter?: RecordingRouter;
 	telemetry?: BridgeTelemetry;
+	handoffCoordinator?: HandoffCoordinator;
+	showHandoffOverlay?: typeof showHandoffOverlay;
 }
 
 type ExtensionBridgeMethod = BridgeCommandMethodForRoute<"extension">;
@@ -179,6 +186,8 @@ export class BrowserCommandExecutor {
 	private readonly screenshotRouter?: ScreenshotRouter;
 	private readonly recordingRouter?: RecordingRouter;
 	private readonly telemetry?: BridgeTelemetry;
+	private readonly handoffCoordinator: HandoffCoordinator;
+	private readonly showHandoffOverlay: typeof showHandoffOverlay;
 	private readonly debuggerManager = getSharedDebuggerManager();
 	private readonly pageDrivers: ChromePageDriverRegistryLike;
 	private readonly ownsPageDriverRegistry: boolean;
@@ -190,9 +199,11 @@ export class BrowserCommandExecutor {
 		repl: ({ signal, traceContext }, params) => this.repl(params, signal, traceContext),
 		screenshot: ({ signal, traceContext }, params) => this.screenshot(params, signal, traceContext),
 		eval: ({ signal, traceContext }, params) => this.evalCode(params, signal, traceContext),
+		authenticated_json_request: ({ signal }, params) => this.authenticatedJson(params, signal),
 		cookies: ({ signal, traceContext }, params) => this.cookies(params, signal, traceContext),
 		cookie_import_apply: (_context, params) => this.applyCookieImport(params),
 		select_element: ({ signal }, params) => this.selectElement(params, signal),
+		handoff_start: ({ signal }, params) => this.handoffStart(params, signal),
 		workflow_run: ({ signal }, params) => this.workflowRun(params, signal),
 		workflow_validate: (_context, params) => this.workflowValidate(params),
 		page_snapshot: ({ signal }, params) => this.pageSnapshot(params, signal),
@@ -236,6 +247,8 @@ export class BrowserCommandExecutor {
 		this.screenshotRouter = options.screenshotRouter;
 		this.recordingRouter = options.recordingRouter;
 		this.telemetry = options.telemetry;
+		this.handoffCoordinator = options.handoffCoordinator ?? sharedHandoffCoordinator;
+		this.showHandoffOverlay = options.showHandoffOverlay ?? showHandoffOverlay;
 		this.pageDrivers =
 			options.pageDriverRegistry ??
 			new ChromePageDriverRegistry({
@@ -415,6 +428,24 @@ export class BrowserCommandExecutor {
 			signal,
 		});
 		return { value: result.value };
+	}
+
+	async authenticatedJson(
+		params: AuthenticatedJsonRequestParams,
+		signal?: AbortSignal,
+	): Promise<BridgeCommandResult<"authenticated_json_request">> {
+		if (!this.sensitiveAccessEnabled) {
+			const error = new Error(
+				"Authenticated JSON requests are disabled unless sensitive browser data access is enabled",
+			);
+			(error as Error & { code?: number }).code = ErrorCodes.CAPABILITY_DISABLED;
+			throw error;
+		}
+		const frameId = params.frameId ?? 0;
+		if (frameId !== 0) throw new Error("Authenticated JSON requests currently require the top-level page frame");
+		const resolved = await this.resolvePageDriver(params.tabId, frameId);
+		const result = await resolved.driver.authenticatedJson({ ...params, signal });
+		return pageDriverAuthenticatedJsonToWire(result, chromeResultTarget(resolved.tabId));
 	}
 
 	async cookies(
@@ -640,6 +671,81 @@ export class BrowserCommandExecutor {
 		});
 	}
 
+	async handoffStart(params: HandoffStartParams, signal?: AbortSignal): Promise<BridgeCommandResult<"handoff_start">> {
+		const frameId = params.frameId ?? 0;
+		const resolved = await this.resolvePageDriver(params.tabId, frameId);
+		const navigationGeneration = resolved.driver.scope.navigationGeneration;
+		const executionAbort = new AbortController();
+		const abortExecution = () => executionAbort.abort();
+		signal?.addEventListener("abort", abortExecution, { once: true });
+		const active = this.handoffCoordinator.start(
+			{
+				taskId: params.taskId,
+				sessionId: params.sessionId,
+				kind: params.kind ?? "manual",
+				windowId: this.windowId,
+				tabId: resolved.tabId,
+				frameId,
+				navigationGeneration,
+			},
+			params.timeoutMs ?? 120_000,
+			signal,
+			() => resolved.driver.scope.navigationGeneration === navigationGeneration,
+			() => executionAbort.abort(),
+		);
+		void active.acknowledged.catch(() => undefined);
+		let overlay: HandoffOverlayHandle | undefined;
+		let triggered = false;
+		const resultFor = (terminal: Awaited<typeof active.terminal>): BridgeCommandResult<"handoff_start"> => ({
+			target: chromeResultTarget(resolved.tabId, frameId),
+			navigationGeneration,
+			tabId: resolved.tabId,
+			frameId,
+			handoffId: active.binding.handoffId,
+			taskId: params.taskId,
+			sessionId: params.sessionId,
+			kind: active.binding.kind,
+			state: terminal.state,
+			startedAt: active.binding.startedAt,
+			...(terminal.acknowledgedAt ? { acknowledgedAt: terminal.acknowledgedAt } : {}),
+			endedAt: terminal.endedAt,
+			triggered,
+		});
+		try {
+			overlay = await this.showHandoffOverlay({
+				binding: active.binding,
+				...(params.message ? { message: params.message } : {}),
+			});
+			try {
+				await active.acknowledged;
+			} catch {
+				return resultFor(await active.terminal);
+			}
+			if (params.trigger) {
+				await this.refClick(
+					{
+						refId: params.trigger.refId,
+						tabId: resolved.tabId,
+						frameId,
+						...(params.trigger.mode === "cdp-trusted" ? { trusted: true } : {}),
+					},
+					executionAbort.signal,
+				);
+				triggered = true;
+			}
+			await overlay.ready();
+			return resultFor(await active.terminal);
+		} catch (error) {
+			if (executionAbort.signal.aborted) return resultFor(await active.terminal);
+			this.handoffCoordinator.cancel(active.binding.handoffId);
+			await active.terminal;
+			throw error;
+		} finally {
+			signal?.removeEventListener("abort", abortExecution);
+			await overlay?.remove().catch(() => undefined);
+		}
+	}
+
 	async refFill(params: RefFillParams, signal?: AbortSignal): Promise<BridgeCommandResult<"ref_fill">> {
 		const resolved = await this.resolvePageDriverForRef(params.refId, params.tabId, params.frameId);
 		const result = await resolved.driver.actOnRef({
@@ -681,6 +787,7 @@ export class BrowserCommandExecutor {
 			await resolved.driver.network.start({
 				maxEntries: params.maxEntries,
 				maxBodyBytes: params.maxBodyBytes,
+				sensitiveFields: params.sensitiveFields,
 				signal,
 			}),
 			chromeResultTarget(resolved.tabId),
@@ -736,7 +843,7 @@ export class BrowserCommandExecutor {
 		const resolved = await this.resolvePageDriver(params.tabId);
 		return pageDriverNetworkCurlToWire(
 			resolved.driver.network.toCurl(params.requestId, {
-				redactSensitiveHeaders: params.includeSensitive !== true,
+				reviewMutation: params.reviewMutation === true,
 			}),
 			chromeResultTarget(resolved.tabId),
 		);

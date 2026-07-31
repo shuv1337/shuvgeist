@@ -75,7 +75,34 @@ describe("cli-core coverage cases", () => {
 	it("covers remaining command plan branches", () => {
 		const readFileText = vi.fn((path: string) => `code from ${path}`);
 		expect(createCommandPlan("status", [], {}, readFileText)).toEqual({ kind: "status" });
+		expect(createCommandPlan("doctor", [], {}, readFileText)).toEqual({ kind: "doctor" });
 		expect(createCommandPlan("serve", [], {}, readFileText)).toEqual({ kind: "serve" });
+		expect(
+			createCommandPlan(
+				"snapshot",
+				["store"],
+				{ maxEntries: "25", includeHidden: true, query: "billing" },
+				readFileText,
+			),
+		).toEqual({
+			kind: "one-shot",
+			method: "snapshot_store",
+			params: { maxEntries: 25, includeHidden: true, query: "billing" },
+			defaultTimeoutMs: 120_000,
+		});
+		expect(
+			createCommandPlan(
+				"snapshot",
+				["diff", "baseline-record"],
+				{ maxEntries: "25", query: "billing" },
+				readFileText,
+			),
+		).toEqual({
+			kind: "one-shot",
+			method: "snapshot_diff",
+			params: { baselineId: "baseline-record", maxEntries: 25, query: "billing" },
+			defaultTimeoutMs: 120_000,
+		});
 		expect(createCommandPlan("screenshot", [], { maxWidth: "640" }, readFileText)).toEqual({
 			kind: "screenshot",
 			params: { maxWidth: 640 },
@@ -133,6 +160,64 @@ describe("cli-core coverage cases", () => {
 		expect(createCommandPlan("select", [], {}, readFileText)).toEqual({
 			kind: "usage-error",
 			message: "Usage: shuvgeist select <message>",
+		});
+		expect(
+			createCommandPlan(
+				"handoff",
+				["task-1", "session-1"],
+				{ kind: "manual", message: "Complete sign-in", timeout: "2m", tabId: "42" },
+				readFileText,
+			),
+		).toEqual({
+			kind: "one-shot",
+			method: "handoff_start",
+			params: {
+				taskId: "task-1",
+				sessionId: "session-1",
+				kind: "manual",
+				message: "Complete sign-in",
+				timeoutMs: 120_000,
+				tabId: 42,
+			},
+			defaultTimeoutMs: undefined,
+			target: { kind: "chrome-tab", tabId: 42 },
+		});
+		expect(createCommandPlan("journal", [], { last: "25" }, readFileText)).toEqual({
+			kind: "one-shot",
+			method: "journal_list",
+			params: { last: 25 },
+			defaultTimeoutMs: 60_000,
+		});
+		expect(
+			createCommandPlan(
+				"request-json",
+				["/api/items"],
+				{
+					method: "POST",
+					body: '{"name":"Ada"}',
+					schema: '{"type":"object"}',
+					timeout: "5s",
+					maxResponseBytes: "4096",
+					reviewMutation: true,
+					tabId: "42",
+				},
+				readFileText,
+			),
+		).toEqual({
+			kind: "one-shot",
+			method: "authenticated_json_request",
+			params: {
+				path: "/api/items",
+				method: "POST",
+				body: { name: "Ada" },
+				schema: { type: "object" },
+				timeoutMs: 5_000,
+				maxResponseBytes: 4_096,
+				reviewMutation: true,
+				tabId: 42,
+			},
+			defaultTimeoutMs: 120_000,
+			target: { kind: "chrome-tab", tabId: 42 },
 		});
 		expect(createCommandPlan("mystery", [], {}, readFileText)).toEqual({
 			kind: "usage-error",

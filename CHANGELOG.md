@@ -8,6 +8,14 @@
 
 ### Added
 
+- A separate Node compatibility spike now models isolated Playwright CDP views, OOPIF replay, worker filtering, duplicate reconciliation, generations, authorization, timeouts, and teardown, with a documented no-go decision for production integration.
+- Named automation session ownership now has an ADR and isolated executable prototype proving transactional reserve/commit/rollback, exclusive target adoption, lease expiry, and fail-closed restart restoration before production integration.
+- Explicit Chrome tab-capture recording can stream MediaRecorder WebM directly to the CLI with opt-in tab audio, visible in-tab and badge controls, deterministic lifecycle summaries, and no ffmpeg dependency.
+- Origin-bound authenticated JSON requests use the selected Chrome or explicitly authorized Electron page session with relative-path, redirect, timeout, byte, mutation-review, schema, and no-store gates.
+- Exact-target human handoffs pause the extension agent, CLI, or MCP caller behind an in-page acknowledgement and resume overlay, with generation-bound completion and fail-closed timeout/cancellation.
+- Bridge operations now return privacy-bounded aftermath summaries and append them to rotating, corruption-tolerant per-session local journals readable with `shuvgeist journal`.
+- Target-safe semantic snapshot diffs compare stored, compatible normalized snapshots and return deterministic added, changed, removed, and unchanged entries while minting refs only for current entries.
+- Exact source/build fingerprints now identify the CLI, bridge, and connected extension, and the read-only `shuvgeist doctor` command reports package, protocol, artifact, authentication, ffmpeg, and stale-instance diagnostics with stable JSON codes.
 - Tab lifecycle: close tabs by Chrome tab ID or title/url filter via navigate tool and `shuvgeist tabs close`, with dry-run and `--yes` safety for filters.
 - Tab list enrichment: `windowId`, `index`, `pinned`, `status`, plus optional windows summary on `listTabs`.
 - Browser window list/close via `shuvgeist windows` / `shuvgeist windows close` (maps to navigate `listWindows` / `closeWindow`).
@@ -28,6 +36,9 @@
 
 ### Changed
 
+- Network capture now replaces credentials with stable secret references, omits ambiguous bodies, stores Electron secret values in a separate mode-0600 profile, and requires explicit review before exporting mutating curl commands.
+- Extension releases now use an exact reviewed file and permission allowlist to produce reproducible ZIP bytes with a published SHA-256 digest.
+- Replaced CLI-side duplicate JPEG writes during recording with timestamped MJPEG/Matroska input and explicit frame accounting.
 - Bridge commands now derive wire schemas, correlated TypeScript contracts, CLI planning, capability advertising, and typed handler registries from one definition source, with runtime validation at transport boundaries. (#44)
 - Chrome debugger, Electron renderer, and direct-CDP automation now compose one target-neutral PageDriver for snapshots, refs, network capture, and screencast recording, with resolved target identities and distinct source-versus-encoded recording byte counts. (#45)
 - Agent sessions, REPL sandboxes, tools, artifacts, and planner memory now live in the persistent offscreen runtime; the sidepanel is a window-scoped remote presentation client that can close and reconnect without ending the session. (#46)

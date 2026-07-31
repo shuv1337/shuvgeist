@@ -185,6 +185,10 @@ describe("Node config owner", () => {
 			[{ electron: { defaultFlags: { app: "--flag" } } }, "electron.defaultFlags.app"],
 			[{ electron: { capabilities: { app: { eval: "yes" } } } }, "electron.capabilities.app.eval"],
 			[{ electron: { capabilities: { app: { cdp_input: "yes" } } } }, "electron.capabilities.app.cdp_input"],
+			[
+				{ electron: { capabilities: { app: { authenticated_json_request: "yes" } } } },
+				"electron.capabilities.app.authenticated_json_request",
+			],
 			[{ otel: { enabled: "yes" } }, "otel.enabled"],
 			[{ otel: { ingestUrl: "ws://localhost:3474" } }, "otel.ingestUrl"],
 		];

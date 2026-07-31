@@ -13,7 +13,14 @@ import { BridgeDefaults } from "@shuvgeist/protocol/protocol";
 export type ConfigValueSource = "flags" | "environment" | "file" | "defaults";
 export type BridgeUrlLocality = "loopback" | "remote";
 
-export type ElectronCapability = "eval" | "cookies" | "main_inspect" | "ipc_tap" | "main_network_tap" | "cdp_input";
+export type ElectronCapability =
+	| "eval"
+	| "cookies"
+	| "main_inspect"
+	| "ipc_tap"
+	| "main_network_tap"
+	| "cdp_input"
+	| "authenticated_json_request";
 
 export interface ElectronCapabilitiesConfig {
 	[key: string]: unknown;
@@ -23,6 +30,7 @@ export interface ElectronCapabilitiesConfig {
 	ipc_tap?: boolean;
 	main_network_tap?: boolean;
 	cdp_input?: boolean;
+	authenticated_json_request?: boolean;
 }
 
 export interface ElectronNodeConfig {
@@ -313,6 +321,7 @@ const ELECTRON_CAPABILITIES: readonly ElectronCapability[] = [
 	"ipc_tap",
 	"main_network_tap",
 	"cdp_input",
+	"authenticated_json_request",
 ];
 
 const DEFAULT_FILE_SYSTEM: NodeConfigFileSystem = {

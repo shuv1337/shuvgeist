@@ -12,6 +12,7 @@
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { networkInterfaces } from "node:os";
+import { dirname, join } from "node:path";
 import {
 	type BridgeCommandMethodForRoute,
 	type BridgeCommandParams,
@@ -40,10 +41,13 @@ import {
 	ErrorCodes,
 	formatBridgeProtocolMismatch,
 	isBridgeProtocolCompatible,
+	type OperationOutcome,
 	type PageSnapshotBridgeParams,
 	type PageSnapshotBridgeResult,
 	type PageSnapshotRecordSummary,
 	type RegistrationMessage,
+	type SnapshotDiffParams,
+	type SnapshotDiffResult,
 } from "@shuvgeist/protocol/protocol";
 import { parseBridgeSkillSnapshot } from "@shuvgeist/protocol/skill-snapshot";
 import {
@@ -59,6 +63,7 @@ import {
 	parseTraceparent,
 	type TelemetryAttributes,
 } from "@shuvgeist/protocol/telemetry";
+import type { BuildIdentity } from "@shuvgeist/protocol/version";
 import { WebSocket, WebSocketServer } from "ws";
 import { CookieAccessPort } from "./cookie-access-port.js";
 import { listElectronRegistryEntries, resolveElectronApp } from "./electron/app-registry.js";
@@ -76,7 +81,14 @@ import {
 import { executeElectronTargetCommand, isElectronTargetBridgeMethod } from "./electron/target-handler-registry.js";
 import { McpHttpHandler } from "./mcp/http-server.js";
 import { createNodeConfigOwner, type NodeConfigOwner } from "./node-config.js";
-import { type PageSnapshotRecord, PageSnapshotStore, pageSnapshotStorePath } from "./page-snapshot-store.js";
+import { buildOperationAftermath, OperationJournal } from "./operation-journal.js";
+import { comparePageSnapshotRecords } from "./page-snapshot-diff.js";
+import {
+	normalizePageSnapshotCaptureSignature,
+	type PageSnapshotRecord,
+	PageSnapshotStore,
+	pageSnapshotStorePath,
+} from "./page-snapshot-store.js";
 import { BridgeRequestHandler, type BridgeRequestTargetHandle } from "./request-handler.js";
 import { SessionRegistry, type TargetSessionHandle } from "./session-registry.js";
 import { TaskRegistry } from "./task-registry.js";
@@ -98,6 +110,7 @@ interface ClientInfo {
 	protocolVersion?: number;
 	minProtocolVersion?: number;
 	appVersion?: string;
+	build?: BuildIdentity;
 	/** CLI-specific metadata. */
 	name?: string;
 }
@@ -131,6 +144,8 @@ interface PendingRequest {
 	span?: BridgeTelemetrySpan;
 	transformResult?: (result: unknown) => unknown;
 	respond?: (response: BridgeResponse) => void;
+	sessionIdentity: string;
+	requestTarget?: BridgeTarget;
 }
 
 interface ActiveRecordingLease {
@@ -232,6 +247,7 @@ export interface BridgeServerDependencies {
 	electronSessionManager?: ElectronSessionManager;
 	nodeConfig?: NodeConfigOwner;
 	pageSnapshotStore?: PageSnapshotStore;
+	operationJournal?: OperationJournal;
 }
 
 export class BridgeServer {
@@ -247,6 +263,7 @@ export class BridgeServer {
 	private readonly nodeConfig: NodeConfigOwner;
 	private readonly electronSessions: ElectronSessionManager;
 	private readonly pageSnapshotStore: PageSnapshotStore;
+	private readonly operationJournal: OperationJournal;
 	private readonly cookieAccessPort = new CookieAccessPort();
 	private readonly mcpHandler = new McpHttpHandler({
 		taskRegistry: this.taskRegistry,
@@ -262,10 +279,17 @@ export class BridgeServer {
 			await this.handleSnapshotStoreRequest(client, request, span);
 			return SERVER_LOCAL_RESPONSE_HANDLED;
 		},
+		snapshot_diff: async ({ client, request, span }): Promise<typeof SERVER_LOCAL_RESPONSE_HANDLED> => {
+			await this.handleSnapshotDiffRequest(client, request, span);
+			return SERVER_LOCAL_RESPONSE_HANDLED;
+		},
 		snapshot_read: (_context, params) => ({
 			records: this.pageSnapshotStore
 				.read(params)
 				.map((record) => ({ ...this.snapshotRecordSummary(record), raw: record.raw })),
+		}),
+		journal_list: async (_context, params) => ({
+			entries: await this.operationJournal.read(params),
 		}),
 		electron_list: () => {
 			const config = normalizeElectronConfig(this.nodeConfig.readBridgeConfig());
@@ -333,6 +357,9 @@ export class BridgeServer {
 	constructor(config: BridgeServerConfig, dependencies: BridgeServerDependencies = {}) {
 		this.config = config;
 		this.nodeConfig = dependencies.nodeConfig ?? createNodeConfigOwner();
+		this.operationJournal =
+			dependencies.operationJournal ??
+			new OperationJournal({ directory: join(dirname(this.nodeConfig.paths.bridge), "journals") });
 		this.electronSessions =
 			dependencies.electronSessionManager ?? new ElectronSessionManager({ configOwner: this.nodeConfig });
 		const snapshotPath = pageSnapshotStorePath(this.nodeConfig);
@@ -440,9 +467,9 @@ export class BridgeServer {
 				this.handleMessage(client, msg);
 			});
 
-			ws.on("close", () => {
+			ws.on("close", (code, reason) => {
 				clearTimeout(registerTimer);
-				this.handleDisconnect(client);
+				this.handleDisconnect(client, code, reason.toString("utf8"));
 			});
 
 			ws.on("error", (err: Error) => {
@@ -511,6 +538,7 @@ export class BridgeServer {
 			});
 			this.httpServer = undefined;
 		}
+		await this.operationJournal.flush();
 	}
 
 	// -----------------------------------------------------------------------
@@ -623,6 +651,7 @@ export class BridgeServer {
 			client.protocolVersion = msg.protocolVersion;
 			client.minProtocolVersion = clientMinProtocolVersion;
 			client.appVersion = msg.appVersion;
+			client.build = msg.build;
 			this.sessionRegistry.register({
 				kind: "chrome-tab",
 				connection: client,
@@ -654,6 +683,7 @@ export class BridgeServer {
 			client.protocolVersion = msg.protocolVersion;
 			client.minProtocolVersion = clientMinProtocolVersion;
 			client.appVersion = msg.appVersion;
+			client.build = msg.build;
 
 			bridgeLog("info", "cli registered", {
 				...fields,
@@ -669,6 +699,7 @@ export class BridgeServer {
 	// -----------------------------------------------------------------------
 
 	private handleCliRequest(client: ClientInfo, req: BridgeRequest): void {
+		const startedAt = Date.now();
 		const fields: LogFields = {
 			connectionId: client.connectionId,
 			role: "server",
@@ -718,10 +749,18 @@ export class BridgeServer {
 			}
 			span?.end("error");
 			void this.telemetry?.flush();
-			this.sendJson(client.ws, {
-				id: req.id,
-				error: plan.error,
-			});
+			this.sendJson(
+				client.ws,
+				this.withOperationAftermath(
+					req,
+					{
+						id: req.id,
+						error: plan.error,
+					},
+					startedAt,
+					this.operationSessionIdentity(client, req.target),
+				),
+			);
 			return;
 		}
 
@@ -751,8 +790,10 @@ export class BridgeServer {
 			cliConnectionId: client.connectionId,
 			cliWs: client.ws,
 			method: req.method,
-			startedAt: Date.now(),
+			startedAt,
 			targetHandleKey: targetHandle.key,
+			sessionIdentity: this.operationSessionIdentity(client, plan.target, targetHandle),
+			requestTarget: plan.target,
 			span,
 		});
 
@@ -782,6 +823,50 @@ export class BridgeServer {
 				targetHandle.writeLock.acquire(cliConnectionId, expectedSessionId),
 			targetHandle,
 		};
+	}
+
+	private operationSessionIdentity(
+		client: ClientInfo | undefined,
+		target: BridgeTarget | undefined,
+		handle?: TargetSessionHandle<ClientInfo>,
+	): string {
+		if (target?.kind === "electron-window" && target.sessionId) return `electron:${target.sessionId}`;
+		if (handle?.sessionId) return `${handle.kind}:${handle.sessionId}`;
+		if (handle) return handle.key;
+		if (target?.kind === "chrome-tab" && target.tabRef) {
+			return `chrome-ref:${target.tabRef}`;
+		}
+		if (target?.kind === "chrome-tab" && typeof target.tabId === "number") {
+			return `chrome-tab:${target.tabId}`;
+		}
+		return `connection:${client?.connectionId ?? "mcp"}`;
+	}
+
+	private withOperationAftermath(
+		req: Pick<BridgeRequest, "method" | "target">,
+		response: BridgeResponse,
+		startedAt: number,
+		sessionIdentity: string,
+		target?: BridgeTarget,
+		outcome?: OperationOutcome,
+	): BridgeResponse {
+		if (req.method === "journal_list") return response;
+		const aftermath = buildOperationAftermath({
+			method: req.method,
+			sessionIdentity,
+			startedAtMs: startedAt,
+			response,
+			requestTarget: target ?? req.target,
+			outcome,
+		});
+		void this.operationJournal.append(aftermath).catch(() => {
+			bridgeLog("warn", "operation journal write failed", {
+				role: "server",
+				method: req.method,
+				outcome: "error",
+			});
+		});
+		return { ...response, aftermath };
 	}
 
 	private validatedCommandParams<M extends BridgeSchemaMethod>(method: M, value: unknown): BridgeCommandParams<M> {
@@ -827,7 +912,11 @@ export class BridgeServer {
 		fields: LogFields,
 	): Promise<void> {
 		const startedAt = Date.now();
+		const sessionIdentity = this.operationSessionIdentity(client, target);
 		const completedRecordingIds = new Set<string>();
+		const controller = new AbortController();
+		const abortOnDisconnect = () => controller.abort();
+		client.ws.once("close", abortOnDisconnect);
 		span?.setAttributes(electronTargetTelemetryAttributes(target));
 		try {
 			if (!isElectronTargetBridgeMethod(req.method)) {
@@ -841,6 +930,7 @@ export class BridgeServer {
 				{
 					sessions: this.electronSessions,
 					target,
+					signal: controller.signal,
 					emitRecordFrame: (data) => {
 						if (data.final && typeof data.recordingId === "string") {
 							completedRecordingIds.add(data.recordingId);
@@ -889,7 +979,10 @@ export class BridgeServer {
 			span?.setAttribute("bridge.outcome", "success");
 			span?.end("ok");
 			void this.telemetry?.flush();
-			this.sendJson(client.ws, { id: req.id, result });
+			this.sendJson(
+				client.ws,
+				this.withOperationAftermath(req, { id: req.id, result }, startedAt, sessionIdentity, target),
+			);
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			const durationMs = Date.now() - startedAt;
@@ -915,10 +1008,18 @@ export class BridgeServer {
 					: isMissingSession
 						? ErrorCodes.NO_ELECTRON_SESSION
 						: ErrorCodes.EXECUTION_ERROR;
-			this.sendJson(client.ws, {
-				id: req.id,
-				error: { code, message },
-			});
+			this.sendJson(
+				client.ws,
+				this.withOperationAftermath(
+					req,
+					{ id: req.id, error: { code, message } },
+					startedAt,
+					sessionIdentity,
+					target,
+				),
+			);
+		} finally {
+			client.ws.removeListener("close", abortOnDisconnect);
 		}
 	}
 
@@ -928,6 +1029,8 @@ export class BridgeServer {
 		span?: BridgeTelemetrySpan,
 	): Promise<void> {
 		const startedAt = Date.now();
+		const target = requestTarget(req);
+		const sessionIdentity = this.operationSessionIdentity(client, target, this.sessionRegistry.resolve(target));
 		if (req.method.startsWith("electron_")) {
 			span?.setAttributes(electronServerLocalTelemetryAttributes(req));
 		}
@@ -972,7 +1075,16 @@ export class BridgeServer {
 			span?.setAttribute("bridge.outcome", "success");
 			span?.end("ok");
 			void this.telemetry?.flush();
-			this.sendJson(client.ws, { id: req.id, result: validatedResult });
+			this.sendJson(
+				client.ws,
+				this.withOperationAftermath(
+					req,
+					{ id: req.id, result: validatedResult },
+					startedAt,
+					sessionIdentity,
+					target,
+				),
+			);
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			if (req.method.startsWith("electron_")) {
@@ -992,13 +1104,22 @@ export class BridgeServer {
 			span?.setAttribute("bridge.outcome", "error");
 			span?.end("error");
 			void this.telemetry?.flush();
-			this.sendJson(client.ws, {
-				id: req.id,
-				error: {
-					code: error instanceof BridgeCommandBoundaryError ? error.code : ErrorCodes.EXECUTION_ERROR,
-					message,
-				},
-			});
+			this.sendJson(
+				client.ws,
+				this.withOperationAftermath(
+					req,
+					{
+						id: req.id,
+						error: {
+							code: error instanceof BridgeCommandBoundaryError ? error.code : ErrorCodes.EXECUTION_ERROR,
+							message,
+						},
+					},
+					startedAt,
+					sessionIdentity,
+					target,
+				),
+			);
 		}
 	}
 
@@ -1007,26 +1128,39 @@ export class BridgeServer {
 		req: BridgeRequest,
 		span?: BridgeTelemetrySpan,
 	): Promise<void> {
+		const startedAt = Date.now();
 		const target = requestTarget(req);
+		const respond = (response: BridgeResponse, handle?: TargetSessionHandle<ClientInfo>) =>
+			this.sendJson(
+				client.ws,
+				this.withOperationAftermath(
+					req,
+					response,
+					startedAt,
+					this.operationSessionIdentity(client, target, handle),
+					target,
+				),
+			);
 		const params = this.snapshotStoreParams(req.params);
+		const capture = normalizePageSnapshotCaptureSignature(params);
 		if (isElectronTarget(target)) {
 			try {
 				const snapshot = await this.electronSessions.snapshot(target, params);
-				const record = this.pageSnapshotStore.write(target, snapshot);
+				const record = this.pageSnapshotStore.write(target, snapshot, new Date().toISOString(), capture);
 				const result = this.validatedCommandResult("snapshot_store", {
 					record: this.snapshotRecordSummary(record),
 				});
 				span?.setAttribute("bridge.outcome", "success");
 				span?.end("ok");
 				void this.telemetry?.flush();
-				this.sendJson(client.ws, { id: req.id, result });
+				respond({ id: req.id, result });
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
 				span?.recordError(new Error(message));
 				span?.setAttribute("bridge.outcome", "error");
 				span?.end("error");
 				void this.telemetry?.flush();
-				this.sendJson(client.ws, {
+				respond({
 					id: req.id,
 					error: {
 						code: error instanceof BridgeCommandBoundaryError ? error.code : ErrorCodes.EXECUTION_ERROR,
@@ -1038,7 +1172,7 @@ export class BridgeServer {
 		}
 
 		if (!isChromeTarget(target)) {
-			this.sendJson(client.ws, {
+			respond({
 				id: req.id,
 				error: {
 					code: ErrorCodes.INVALID_TARGET,
@@ -1050,14 +1184,14 @@ export class BridgeServer {
 
 		const handle = this.sessionRegistry.resolve(target);
 		if (!handle?.connection || handle.connection.ws.readyState !== WebSocket.OPEN) {
-			this.sendJson(client.ws, {
+			respond({
 				id: req.id,
 				error: { code: ErrorCodes.NO_EXTENSION_TARGET, message: "No active extension target connected" },
 			});
 			return;
 		}
 		if (handle.capabilities && !handle.capabilities.includes("page_snapshot")) {
-			this.sendJson(client.ws, {
+			respond({
 				id: req.id,
 				error: {
 					code: ErrorCodes.CAPABILITY_DISABLED,
@@ -1074,12 +1208,14 @@ export class BridgeServer {
 			cliConnectionId: client.connectionId,
 			cliWs: client.ws,
 			method: "snapshot_store",
-			startedAt: Date.now(),
+			startedAt,
 			targetHandleKey: handle.key,
+			sessionIdentity: this.operationSessionIdentity(client, target, handle),
+			requestTarget: target,
 			span,
 			transformResult: (result) => {
 				const snapshot = this.parsePageSnapshotResult(result);
-				const record = this.pageSnapshotStore.write(target, snapshot);
+				const record = this.pageSnapshotStore.write(target, snapshot, new Date().toISOString(), capture);
 				return { record: this.snapshotRecordSummary(record) };
 			},
 		});
@@ -1092,11 +1228,152 @@ export class BridgeServer {
 		});
 	}
 
+	private async handleSnapshotDiffRequest(
+		client: ClientInfo,
+		req: BridgeRequest,
+		span?: BridgeTelemetrySpan,
+	): Promise<void> {
+		const startedAt = Date.now();
+		const target = requestTarget(req);
+		const respondResult = (result: SnapshotDiffResult, handle?: TargetSessionHandle<ClientInfo>) => {
+			const validated = this.validatedCommandResult("snapshot_diff", result);
+			span?.setAttribute("bridge.outcome", validated.ok ? "success" : "incompatible");
+			span?.end(validated.ok ? "ok" : "error");
+			void this.telemetry?.flush();
+			this.sendJson(
+				client.ws,
+				this.withOperationAftermath(
+					req,
+					{ id: req.id, result: validated },
+					startedAt,
+					this.operationSessionIdentity(client, target, handle),
+					target,
+				),
+			);
+		};
+		const respondError = (error: unknown, handle?: TargetSessionHandle<ClientInfo>) => {
+			const message = error instanceof Error ? error.message : String(error);
+			span?.recordError(new Error(message));
+			span?.setAttribute("bridge.outcome", "error");
+			span?.end("error");
+			void this.telemetry?.flush();
+			this.sendJson(
+				client.ws,
+				this.withOperationAftermath(
+					req,
+					{
+						id: req.id,
+						error: {
+							code: error instanceof BridgeCommandBoundaryError ? error.code : ErrorCodes.EXECUTION_ERROR,
+							message,
+						},
+					},
+					startedAt,
+					this.operationSessionIdentity(client, target, handle),
+					target,
+				),
+			);
+		};
+		const params = this.validatedCommandParams("snapshot_diff", req.params);
+		const baseline = this.pageSnapshotStore.read({ id: params.baselineId })[0];
+		if (!baseline) {
+			respondResult({
+				ok: false,
+				baselineId: params.baselineId,
+				reason: "baseline_not_found",
+				message: `Snapshot baseline '${params.baselineId}' was not found.`,
+			});
+			return;
+		}
+		const snapshotParams = this.snapshotStoreParams(params);
+		const capture = normalizePageSnapshotCaptureSignature(snapshotParams);
+		if (isElectronTarget(target)) {
+			try {
+				const snapshot = await this.electronSessions.snapshot(target, snapshotParams);
+				const current = this.pageSnapshotStore.write(target, snapshot, new Date().toISOString(), capture);
+				respondResult(this.snapshotDiffResult(params.baselineId, baseline, current));
+			} catch (error) {
+				respondError(error);
+			}
+			return;
+		}
+
+		if (!isChromeTarget(target)) {
+			respondError(
+				new BridgeCommandBoundaryError(
+					ErrorCodes.INVALID_TARGET,
+					"Cannot diff snapshot for target '" + targetTeachingLabel(target) + "'",
+				),
+			);
+			return;
+		}
+		const handle = this.sessionRegistry.resolve(target);
+		if (!handle?.connection || handle.connection.ws.readyState !== WebSocket.OPEN) {
+			respondError(
+				new BridgeCommandBoundaryError(ErrorCodes.NO_EXTENSION_TARGET, "No active extension target connected"),
+			);
+			return;
+		}
+		if (handle.capabilities && !handle.capabilities.includes("page_snapshot")) {
+			respondError(
+				new BridgeCommandBoundaryError(
+					ErrorCodes.CAPABILITY_DISABLED,
+					"Method 'page_snapshot' is disabled on the active extension target",
+				),
+			);
+			return;
+		}
+
+		const relayRequestId = this.nextRelayRequestId++;
+		this.pendingRequests.set(relayRequestId, {
+			relayRequestId,
+			clientRequestId: req.id,
+			cliConnectionId: client.connectionId,
+			cliWs: client.ws,
+			method: "snapshot_diff",
+			startedAt,
+			targetHandleKey: handle.key,
+			sessionIdentity: this.operationSessionIdentity(client, target, handle),
+			requestTarget: target,
+			span,
+			transformResult: (result) => {
+				const snapshot = this.parsePageSnapshotResult(result);
+				const current = this.pageSnapshotStore.write(target, snapshot, new Date().toISOString(), capture);
+				return this.snapshotDiffResult(params.baselineId, baseline, current);
+			},
+		});
+		this.sendJson(handle.connection.ws, {
+			id: relayRequestId,
+			method: "page_snapshot",
+			params: snapshotParams,
+			target,
+			...(span ? span.toTraceHeaders() : {}),
+		});
+	}
+
+	private snapshotDiffResult(
+		baselineId: string,
+		baseline: PageSnapshotRecord,
+		current: PageSnapshotRecord,
+	): SnapshotDiffResult {
+		const comparison = comparePageSnapshotRecords(baseline, current);
+		return comparison.ok
+			? {
+					ok: true,
+					baseline: this.snapshotRecordSummary(baseline),
+					current: this.snapshotRecordSummary(current),
+					diff: comparison.diff,
+				}
+			: { ok: false, baselineId, reason: comparison.reason, message: comparison.message };
+	}
+
 	private async handleCookieImportRequest(
 		client: ClientInfo,
 		req: BridgeRequest,
 		span?: BridgeTelemetrySpan,
 	): Promise<void> {
+		const startedAt = Date.now();
+		const target = requestTarget(req);
 		try {
 			const sourcePath = typeof req.params?.sourcePath === "string" ? req.params.sourcePath : undefined;
 			const siteUrl = typeof req.params?.siteUrl === "string" ? req.params.siteUrl : undefined;
@@ -1106,7 +1383,6 @@ export class BridgeServer {
 				siteUrl,
 				consent: req.params?.consent === true,
 			});
-			const target = requestTarget(req);
 			if (!isChromeTarget(target))
 				throw new Error("cookie_import currently targets Chrome extension sessions only.");
 			const handle = this.sessionRegistry.resolve(target);
@@ -1123,8 +1399,10 @@ export class BridgeServer {
 				cliConnectionId: client.connectionId,
 				cliWs: client.ws,
 				method: "cookie_import",
-				startedAt: Date.now(),
+				startedAt,
 				targetHandleKey: handle.key,
+				sessionIdentity: this.operationSessionIdentity(client, target, handle),
+				requestTarget: target,
 				span,
 				transformResult: (result) => ({
 					...(typeof result === "object" && result !== null ? result : {}),
@@ -1145,7 +1423,16 @@ export class BridgeServer {
 			span?.setAttribute("bridge.outcome", "error");
 			span?.end("error");
 			void this.telemetry?.flush();
-			this.sendJson(client.ws, { id: req.id, error: { code: ErrorCodes.EXECUTION_ERROR, message } });
+			this.sendJson(
+				client.ws,
+				this.withOperationAftermath(
+					req,
+					{ id: req.id, error: { code: ErrorCodes.EXECUTION_ERROR, message } },
+					startedAt,
+					this.operationSessionIdentity(client, target, this.sessionRegistry.resolve(target)),
+					target,
+				),
+			);
 		}
 	}
 
@@ -1185,6 +1472,7 @@ export class BridgeServer {
 			entryCount: record.raw.entries.length,
 			totalCandidates: record.raw.totalCandidates,
 			truncated: record.raw.truncated,
+			capture: record.capture,
 		};
 	}
 
@@ -1195,6 +1483,7 @@ export class BridgeServer {
 		traceparent?: string;
 		tracestate?: string;
 	}): Promise<BridgeResponse> {
+		const startedAt = Date.now();
 		const bridgeRequest: BridgeRequest = {
 			id: this.nextRelayRequestId++,
 			method: request.method as BridgeRequest["method"],
@@ -1203,20 +1492,39 @@ export class BridgeServer {
 			traceparent: request.traceparent,
 			tracestate: request.tracestate,
 		};
+		if (bridgeRequest.method === "snapshot_store" || bridgeRequest.method === "snapshot_diff") {
+			return this.executeMcpSnapshotRequest(
+				bridgeRequest as BridgeRequest & { method: "snapshot_store" | "snapshot_diff" },
+			);
+		}
 		const plan = this.requestHandler.plan(bridgeRequest, {
 			cliConnectionId: "mcp",
 			resolveTarget: (target) => this.resolveRequestTargetHandle(target),
 		});
 		if (plan.type === "error") {
-			return Promise.resolve({ id: bridgeRequest.id, error: plan.error });
+			return Promise.resolve(
+				this.withOperationAftermath(
+					bridgeRequest,
+					{ id: bridgeRequest.id, error: plan.error },
+					startedAt,
+					this.operationSessionIdentity(undefined, requestTarget(bridgeRequest)),
+				),
+			);
 		}
 		if (plan.type === "server-local" || plan.type === "electron-target") {
 			return Promise.resolve({
-				id: bridgeRequest.id,
-				error: {
-					code: ErrorCodes.INVALID_TARGET,
-					message: "MCP bridge execution currently supports extension-routed browser targets",
-				},
+				...this.withOperationAftermath(
+					bridgeRequest,
+					{
+						id: bridgeRequest.id,
+						error: {
+							code: ErrorCodes.INVALID_TARGET,
+							message: "MCP bridge execution currently supports extension-routed browser targets",
+						},
+					},
+					startedAt,
+					this.operationSessionIdentity(undefined, requestTarget(bridgeRequest)),
+				),
 			});
 		}
 
@@ -1228,14 +1536,123 @@ export class BridgeServer {
 				clientRequestId: bridgeRequest.id,
 				cliConnectionId: "mcp",
 				method: bridgeRequest.method,
-				startedAt: Date.now(),
+				startedAt,
 				targetHandleKey: targetHandle.key,
+				sessionIdentity: this.operationSessionIdentity(undefined, plan.target, targetHandle),
+				requestTarget: plan.target,
 				respond: resolve,
 			});
 			this.sendJson(targetHandle.connection.ws, {
 				...bridgeRequest,
 				id: relayRequestId,
 				target: plan.target,
+			});
+		});
+	}
+
+	private executeMcpSnapshotRequest(
+		request: BridgeRequest & { method: "snapshot_store" | "snapshot_diff" },
+	): Promise<BridgeResponse> {
+		const startedAt = Date.now();
+		const target = requestTarget(request);
+		const complete = (response: BridgeResponse, handle?: TargetSessionHandle<ClientInfo>) =>
+			this.withOperationAftermath(
+				request,
+				response,
+				startedAt,
+				this.operationSessionIdentity(undefined, target, handle),
+				target,
+			);
+		const paramsValidation = validateBridgeCommandParams(request.method, request.params);
+		if (!paramsValidation.ok) {
+			return Promise.resolve(
+				complete({
+					id: request.id,
+					error: {
+						code: ErrorCodes.INVALID_PARAMS,
+						message: `Invalid parameters for '${request.method}': ${formatBridgeCommandValidationErrors(paramsValidation.errors)}`,
+					},
+				}),
+			);
+		}
+		const params = paramsValidation.value;
+		const baselineId = request.method === "snapshot_diff" ? (params as SnapshotDiffParams).baselineId : undefined;
+		const baseline =
+			request.method === "snapshot_diff" ? this.pageSnapshotStore.read({ id: baselineId })[0] : undefined;
+		if (request.method === "snapshot_diff" && !baseline) {
+			return Promise.resolve(
+				complete({
+					id: request.id,
+					result: this.validatedCommandResult("snapshot_diff", {
+						ok: false,
+						baselineId,
+						reason: "baseline_not_found",
+						message: `Snapshot baseline '${baselineId}' was not found.`,
+					}),
+				}),
+			);
+		}
+		if (!isChromeTarget(target)) {
+			return Promise.resolve(
+				complete({
+					id: request.id,
+					error: {
+						code: ErrorCodes.INVALID_TARGET,
+						message: "MCP snapshot store and diff currently require a Chrome extension target.",
+					},
+				}),
+			);
+		}
+		const handle = this.sessionRegistry.resolve(target);
+		if (!handle?.connection || handle.connection.ws.readyState !== WebSocket.OPEN) {
+			return Promise.resolve(
+				complete({
+					id: request.id,
+					error: { code: ErrorCodes.NO_EXTENSION_TARGET, message: "No active extension target connected" },
+				}),
+			);
+		}
+		if (handle.capabilities && !handle.capabilities.includes("page_snapshot")) {
+			return Promise.resolve(
+				complete(
+					{
+						id: request.id,
+						error: {
+							code: ErrorCodes.CAPABILITY_DISABLED,
+							message: "Method 'page_snapshot' is disabled on the active extension target",
+						},
+					},
+					handle,
+				),
+			);
+		}
+		const snapshotParams = this.snapshotStoreParams(params);
+		const capture = normalizePageSnapshotCaptureSignature(snapshotParams);
+		const relayRequestId = this.nextRelayRequestId++;
+		return new Promise<BridgeResponse>((resolve) => {
+			this.pendingRequests.set(relayRequestId, {
+				relayRequestId,
+				clientRequestId: request.id,
+				cliConnectionId: "mcp",
+				method: request.method,
+				startedAt,
+				targetHandleKey: handle.key,
+				sessionIdentity: this.operationSessionIdentity(undefined, target, handle),
+				requestTarget: target,
+				respond: resolve,
+				transformResult: (result) => {
+					const snapshot = this.parsePageSnapshotResult(result);
+					const current = this.pageSnapshotStore.write(target, snapshot, new Date().toISOString(), capture);
+					return request.method === "snapshot_store"
+						? { record: this.snapshotRecordSummary(current) }
+						: this.snapshotDiffResult(baselineId as string, baseline as PageSnapshotRecord, current);
+				},
+			});
+			this.sendJson(handle.connection.ws, {
+				id: relayRequestId,
+				method: "page_snapshot",
+				params: snapshotParams,
+				target,
 			});
 		});
 	}
@@ -1293,12 +1710,16 @@ export class BridgeServer {
 		}
 		void this.telemetry?.flush();
 
-		pending.respond?.({ ...res, id: pending.clientRequestId });
+		const completedResponse = this.withOperationAftermath(
+			{ method: pending.method, target: pending.requestTarget },
+			{ ...res, id: pending.clientRequestId },
+			pending.startedAt,
+			pending.sessionIdentity,
+			pending.requestTarget,
+		);
+		pending.respond?.(completedResponse);
 		if (pending.cliWs?.readyState === WebSocket.OPEN) {
-			this.sendJson(pending.cliWs, {
-				...res,
-				id: pending.clientRequestId,
-			});
+			this.sendJson(pending.cliWs, completedResponse);
 		}
 	}
 
@@ -1443,7 +1864,7 @@ export class BridgeServer {
 	// Disconnect handling
 	// -----------------------------------------------------------------------
 
-	private handleDisconnect(client: ClientInfo): void {
+	private handleDisconnect(client: ClientInfo, closeCode?: number, closeReason?: string): void {
 		const fields: LogFields = {
 			connectionId: client.connectionId,
 			remoteAddress: client.remoteAddress,
@@ -1466,21 +1887,22 @@ export class BridgeServer {
 				pending.span?.recordError(new Error("Extension disconnected while request was pending"));
 				pending.span?.setAttribute("bridge.outcome", "error");
 				pending.span?.end("error");
-				pending.respond?.({
-					id: pending.clientRequestId,
-					error: {
-						code: ErrorCodes.NO_EXTENSION_TARGET,
-						message: "Extension disconnected while request was pending",
-					},
-				});
-				if (pending.cliWs?.readyState === WebSocket.OPEN) {
-					this.sendJson(pending.cliWs, {
+				const response = this.withOperationAftermath(
+					{ method: pending.method, target: pending.requestTarget },
+					{
 						id: pending.clientRequestId,
 						error: {
 							code: ErrorCodes.NO_EXTENSION_TARGET,
 							message: "Extension disconnected while request was pending",
 						},
-					});
+					},
+					pending.startedAt,
+					pending.sessionIdentity,
+					pending.requestTarget,
+				);
+				pending.respond?.(response);
+				if (pending.cliWs?.readyState === WebSocket.OPEN) {
+					this.sendJson(pending.cliWs, response);
 				}
 			}
 			void this.telemetry?.flush();
@@ -1491,6 +1913,7 @@ export class BridgeServer {
 				event: "extension_disconnected",
 			});
 		} else if (client.role === "cli") {
+			const timedOut = closeCode === 4000 && closeReason === "request timeout";
 			const releasedLocks = this.sessionRegistry.releaseLocksForCli(client.connectionId);
 			for (const releasedLock of releasedLocks) {
 				bridgeLog("info", "releasing session writer lease due to cli disconnect", {
@@ -1521,8 +1944,24 @@ export class BridgeServer {
 						requestId: pending.clientRequestId,
 						relayRequestId,
 						method: pending.method,
-						outcome: "aborted",
+						outcome: timedOut ? "timeout" : "aborted",
 					});
+					this.withOperationAftermath(
+						{ method: pending.method, target: pending.requestTarget },
+						{
+							id: pending.clientRequestId,
+							error: {
+								code: timedOut ? ErrorCodes.TIMEOUT : ErrorCodes.ABORTED,
+								message: timedOut
+									? "CLI request timed out while the operation was pending"
+									: "CLI disconnected while request was pending",
+							},
+						},
+						pending.startedAt,
+						pending.sessionIdentity,
+						pending.requestTarget,
+						timedOut ? "timed_out" : "cancelled",
+					);
 				}
 			}
 			void this.telemetry?.flush();
@@ -1626,6 +2065,7 @@ export class BridgeServer {
 				protocolVersion: BRIDGE_PROTOCOL_VERSION,
 				minProtocolVersion: BRIDGE_PROTOCOL_MIN_VERSION,
 				serverVersion: this.config.serverVersion ?? "dev",
+				serverBuild: this.config.serverBuild,
 				extension: ext
 					? {
 							connected: true,
@@ -1636,6 +2076,7 @@ export class BridgeServer {
 							protocolVersion: ext.protocolVersion,
 							minProtocolVersion: ext.connection.minProtocolVersion,
 							appVersion: ext.appVersion,
+							build: ext.connection.build,
 						}
 					: { connected: false },
 				clients: {

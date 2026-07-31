@@ -21,7 +21,7 @@
  *   3 — auth/configuration/network error
  */
 
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { parseArgs } from "node:util";
@@ -39,6 +39,8 @@ import {
 	formatBridgeCommandValidationErrors,
 	formatBridgeProtocolMismatch,
 	isBridgeProtocolCompatible,
+	type JournalListResult,
+	type OperationAftermath,
 	type RecordChunkEventData,
 	type RecordFrameEventData,
 	type RecordStartResult,
@@ -54,6 +56,7 @@ import { BridgeTelemetry } from "@shuvgeist/protocol/telemetry";
 import { formatWorkflowValidationErrors, validateWorkflowDefinition } from "@shuvgeist/protocol/workflow-schema";
 import { BridgeServer } from "@shuvgeist/server/server";
 import { WebSocket } from "ws";
+import { resolveCliBuildIdentity, resolveDevelopmentRoot } from "./build-identity.js";
 import {
 	bridgeStatusUrl,
 	createCommandPlan,
@@ -62,18 +65,25 @@ import {
 	isNetworkOrConfigError,
 	parseCliArguments,
 	parseTimeout,
-	withEncodedRecordingSize,
+	withEncodedRecordingStats,
 } from "./cli-core.js";
 import { type CliNodeRuntime, createCliNodeRuntime } from "./cli-node-runtime.js";
 import { formatBridgeStatusText, isBridgeStatusReady } from "./cli-status.js";
+import { collectDoctorReport, formatDoctorReportText } from "./doctor.js";
 import { closeBrowser, type LaunchOptions, launchBrowser, setupForegroundHandlers } from "./launcher.js";
 import { assertFfmpegAvailable, FfmpegWebmEncoder } from "./recording/ffmpeg-encoder.js";
 import { ensureSkillInstalled, installSkill, resolveSkillTargetDir } from "./skill-install.js";
 
 declare const __SHUVGEIST_VERSION__: string;
 const VERSION = typeof __SHUVGEIST_VERSION__ !== "undefined" ? __SHUVGEIST_VERSION__ : "dev";
+let cliBuild: ReturnType<typeof resolveCliBuildIdentity> | undefined;
 const DEFAULT_NODE_CONFIG_DIRECTORY = join(homedir(), ".shuvgeist");
 let nodeRuntime: CliNodeRuntime | undefined;
+
+function requireCliBuildIdentity(): ReturnType<typeof resolveCliBuildIdentity> {
+	cliBuild ??= resolveCliBuildIdentity();
+	return cliBuild;
+}
 
 function requireNodeRuntime(): CliNodeRuntime {
 	if (!nodeRuntime) throw new Error("CLI Node runtime was used before initialization");
@@ -123,7 +133,7 @@ function sendRequest(
 			timeout = setTimeout(() => {
 				if (!settled) {
 					settled = true;
-					ws.close();
+					ws.close(4000, "request timeout");
 					span?.recordError(new Error(`Connection timeout after ${timeoutMs}ms`));
 					span?.setAttribute("bridge.outcome", "timeout");
 					span?.end("error");
@@ -143,6 +153,7 @@ function sendRequest(
 					protocolVersion: BRIDGE_PROTOCOL_VERSION,
 					minProtocolVersion: BRIDGE_PROTOCOL_MIN_VERSION,
 					appVersion: VERSION,
+					build: requireCliBuildIdentity(),
 					name: "shuvgeist-cli",
 				}),
 			);
@@ -232,18 +243,60 @@ function printError(message: string, jsonMode: boolean): void {
 
 function printResult(response: BridgeResponse, jsonMode: boolean): void {
 	if (response.error) {
-		if (jsonMode) console.log(JSON.stringify({ error: response.error }, null, 2));
-		else console.error("Error: " + response.error.message);
+		if (jsonMode) {
+			console.log(
+				JSON.stringify(
+					{ error: response.error, ...(response.aftermath ? { aftermath: response.aftermath } : {}) },
+					null,
+					2,
+				),
+			);
+		} else {
+			console.error("Error: " + response.error.message);
+			if (response.aftermath) console.error(formatAftermath(response.aftermath));
+		}
 		return;
 	}
 	if (jsonMode) {
-		console.log(JSON.stringify(response.result, null, 2));
+		console.log(
+			JSON.stringify(
+				response.aftermath ? { result: response.result, aftermath: response.aftermath } : response.result,
+				null,
+				2,
+			),
+		);
 		return;
 	}
 	const result = response.result as unknown;
 	if (result === null || result === undefined) console.log("OK");
 	else if (typeof result === "string") console.log(result);
 	else console.log(JSON.stringify(result, null, 2));
+	if (response.aftermath) console.log(formatAftermath(response.aftermath));
+}
+
+function formatAftermath(aftermath: OperationAftermath): string {
+	const target =
+		aftermath.target?.kind === "chrome-tab"
+			? `chrome:${aftermath.target.tabId}:${aftermath.target.frameId ?? 0}`
+			: aftermath.target?.kind === "electron-window"
+				? `electron:${aftermath.target.sessionId}:${aftermath.target.windowRef}`
+				: "unresolved";
+	const warningSuffix = aftermath.warnings.length > 0 ? ` warnings=${aftermath.warnings.join(",")}` : "";
+	return `Aftermath: ${aftermath.outcome} ${aftermath.method} target=${target} duration=${aftermath.durationMs}ms${warningSuffix}`;
+}
+
+function printJournal(result: JournalListResult, jsonMode: boolean): void {
+	if (jsonMode) {
+		console.log(JSON.stringify(result, null, 2));
+		return;
+	}
+	if (result.entries.length === 0) {
+		console.log("No journal entries.");
+		return;
+	}
+	for (const entry of result.entries) {
+		console.log(`${entry.endedAt} ${formatAftermath(entry)} session=${entry.sessionKey}`);
+	}
 }
 
 function printSessionHistory(result: SessionHistoryResult, jsonMode: boolean): void {
@@ -274,11 +327,26 @@ function printRecordStopSummary(result: RecordStopResult, jsonMode: boolean, out
 	}
 	console.log(`Recording stopped: ${result.outcome}`);
 	console.log(`  File: ${outPath ?? "(not written by this command)"}`);
+	if (result.mode) console.log(`  Mode: ${result.mode}`);
+	if (result.mode === "tab-capture") console.log(`  Audio: ${result.audio === true ? "included" : "disabled"}`);
+	if (result.artifactState) console.log(`  Artifact: ${result.artifactState}`);
 	console.log(`  Duration: ${result.durationMs}ms`);
 	console.log(`  Frames: ${result.frameCount}`);
 	console.log(`  Source bytes: ${result.sourceBytes}`);
 	if (typeof result.encodedSizeBytes === "number") {
 		console.log(`  Encoded size: ${result.encodedSizeBytes} bytes`);
+	}
+	if (typeof result.encodedFrameCount === "number") {
+		console.log(`  Encoded source frames: ${result.encodedFrameCount}`);
+	}
+	if (typeof result.coalescedFrameCount === "number") {
+		console.log(`  Coalesced source frames: ${result.coalescedFrameCount}`);
+	}
+	if (typeof result.droppedFrameCount === "number") {
+		console.log(`  Dropped source frames: ${result.droppedFrameCount}`);
+	}
+	if (typeof result.chunkCount === "number") {
+		console.log(`  WebM chunks: ${result.chunkCount}`);
 	}
 }
 
@@ -316,7 +384,7 @@ function isRecordFrameEvent(event: BridgeEvent): event is BridgeEvent & { data: 
 	);
 }
 
-function isLegacyRecordChunkEvent(event: BridgeEvent): event is BridgeEvent & { data: RecordChunkEventData } {
+function isRecordChunkEvent(event: BridgeEvent): event is BridgeEvent & { data: RecordChunkEventData } {
 	const data = event.data as Partial<RecordChunkEventData> | undefined;
 	return (
 		event.event === "record_chunk" &&
@@ -361,7 +429,11 @@ async function fetchBridgeStatus(flags: { url?: string; host?: string; port?: st
 		if (jsonMode) {
 			console.log(JSON.stringify(status, null, 2));
 		} else {
-			for (const line of formatBridgeStatusText(status, { cliVersion: VERSION, statusUrl })) {
+			for (const line of formatBridgeStatusText(status, {
+				cliVersion: VERSION,
+				cliBuild: requireCliBuildIdentity(),
+				statusUrl,
+			})) {
 				console.log(line);
 			}
 		}
@@ -370,6 +442,32 @@ async function fetchBridgeStatus(flags: { url?: string; host?: string; port?: st
 		printError(err instanceof Error ? err.message : String(err), jsonMode);
 		process.exit(3);
 	}
+}
+
+async function cmdDoctor(flags: {
+	url?: string;
+	host?: string;
+	port?: string;
+	token?: string;
+	json?: boolean;
+	timeout?: string;
+}): Promise<void> {
+	const runtime = requireNodeRuntime();
+	const connection = runtime.resolveConnection(flags);
+	const report = await collectDoctorReport({
+		connection,
+		cliVersion: VERSION,
+		cliBuild: requireCliBuildIdentity(),
+		timeoutMs: parseTimeout(flags.timeout, BridgeDefaults.STATUS_TIMEOUT_MS) ?? BridgeDefaults.STATUS_TIMEOUT_MS,
+		developmentRoot: resolveDevelopmentRoot(),
+		configOwner: runtime.owner,
+	});
+	if (flags.json) {
+		console.log(JSON.stringify(report, null, 2));
+	} else {
+		for (const line of formatDoctorReportText(report)) console.log(line);
+	}
+	process.exit(report.ok ? 0 : 1);
 }
 
 async function cmdServe(args: string[]): Promise<void> {
@@ -400,6 +498,7 @@ async function cmdServe(args: string[]): Promise<void> {
 			port: binding.port,
 			token,
 			serverVersion: VERSION,
+			serverBuild: requireCliBuildIdentity(),
 			otel: {
 				enabled: otel.enabled,
 				ingestUrl: otel.ingestUrl,
@@ -448,7 +547,11 @@ async function runOneShot(
 	const jsonMode = flags.json || false;
 	try {
 		const response = await cmdOneShot(method, params, flags, defaultTimeoutMs, target);
-		printResult(response, jsonMode);
+		if (method === "journal_list" && !response.error) {
+			printJournal(response.result as JournalListResult, jsonMode);
+		} else {
+			printResult(response, jsonMode);
+		}
 		process.exit(exitCodeForResponse(response));
 	} catch (err) {
 		printError(err instanceof Error ? err.message : String(err), jsonMode);
@@ -609,11 +712,14 @@ async function cmdRecord(
 		printError("record start requires --out", jsonMode);
 		process.exit(1);
 	}
-	try {
-		assertFfmpegAvailable();
-	} catch (error) {
-		printError(error instanceof Error ? error.message : String(error), jsonMode);
-		process.exit(1);
+	const requestedMode = params.mode === "tab-capture" ? "tab-capture" : "cdp";
+	if (requestedMode === "cdp") {
+		try {
+			assertFfmpegAvailable();
+		} catch (error) {
+			printError(error instanceof Error ? error.message : String(error), jsonMode);
+			process.exit(1);
+		}
 	}
 
 	const resolved = requireNodeRuntime().requireConnection(flags);
@@ -634,6 +740,9 @@ async function cmdRecord(
 	let stopRequested = false;
 	let timeout: ReturnType<typeof setTimeout> | undefined;
 	let encoder: FfmpegWebmEncoder | undefined;
+	let activeMode: "cdp" | "tab-capture" = requestedMode;
+	let directOutputReady = false;
+	const pendingChunks: Buffer[] = [];
 	let encoderQueue = Promise.resolve();
 	const pendingFrames: Array<{ frame: Buffer; capturedAtMs: number }> = [];
 	const telemetry = resolveCliTelemetry();
@@ -667,6 +776,19 @@ async function cmdRecord(
 		span?.end("error");
 		printError(message, jsonMode);
 		finish(code);
+	};
+
+	const appendDirectChunk = (chunk: Buffer): boolean => {
+		try {
+			appendFileSync(outPath, chunk);
+			return true;
+		} catch (error) {
+			fail(
+				`Could not write tab-capture artifact ${outPath}: ${error instanceof Error ? error.message : String(error)}`,
+				1,
+			);
+			return false;
+		}
 	};
 
 	const sendStop = (): void => {
@@ -710,6 +832,7 @@ async function cmdRecord(
 				protocolVersion: BRIDGE_PROTOCOL_VERSION,
 				minProtocolVersion: BRIDGE_PROTOCOL_MIN_VERSION,
 				appVersion: VERSION,
+				build: requireCliBuildIdentity(),
 				name: "shuvgeist-cli-record",
 			}),
 		);
@@ -724,6 +847,9 @@ async function cmdRecord(
 				return;
 			}
 			ws.send(JSON.stringify(request));
+			if (!jsonMode && requestedMode === "tab-capture") {
+				console.log("Requesting Chrome tab capture. Approve the in-tab prompt if Chrome requires confirmation.");
+			}
 			return;
 		}
 		if (typeof msg.id === "number" && msg.id === requestId) {
@@ -743,17 +869,37 @@ async function cmdRecord(
 			const result: RecordStartResult = resultValidation.value;
 			recordingId = result.recordingId;
 			started = true;
-			encoder = new FfmpegWebmEncoder();
-			encoder.start({
-				outPath,
-				fps: typeof params.fps === "number" ? params.fps : BridgeDefaults.RECORD_DEFAULT_FPS,
-				mimeType: result.mimeType,
-				videoBitsPerSecond: result.videoBitsPerSecond,
-			});
-			for (const pendingFrame of pendingFrames.splice(0)) {
-				encoderQueue = encoderQueue
-					.then(() => encoder?.pushFrame(pendingFrame.frame, pendingFrame.capturedAtMs))
-					.then(() => undefined);
+			activeMode = result.mode === "tab-capture" ? "tab-capture" : "cdp";
+			if (activeMode === "tab-capture") {
+				try {
+					mkdirSync(dirname(outPath), { recursive: true });
+					writeFileSync(outPath, Buffer.alloc(0));
+				} catch (error) {
+					fail(
+						`Could not initialize tab-capture artifact ${outPath}: ${
+							error instanceof Error ? error.message : String(error)
+						}`,
+						1,
+					);
+					return;
+				}
+				directOutputReady = true;
+				for (const chunk of pendingChunks.splice(0)) {
+					if (!appendDirectChunk(chunk)) return;
+				}
+			} else {
+				encoder = new FfmpegWebmEncoder();
+				encoder.start({
+					outPath,
+					fps: typeof params.fps === "number" ? params.fps : BridgeDefaults.RECORD_DEFAULT_FPS,
+					mimeType: result.mimeType,
+					videoBitsPerSecond: result.videoBitsPerSecond,
+				});
+				for (const pendingFrame of pendingFrames.splice(0)) {
+					encoderQueue = encoderQueue
+						.then(() => encoder?.pushFrame(pendingFrame.frame, pendingFrame.capturedAtMs))
+						.then(() => undefined);
+				}
 			}
 			span?.setAttributes({
 				"record.recording_id": result.recordingId,
@@ -775,6 +921,10 @@ async function cmdRecord(
 		if (msg.type !== "event") return;
 		const event = msg as BridgeEvent;
 		if (isRecordFrameEvent(event)) {
+			if (activeMode === "tab-capture") {
+				fail("Tab-capture mode received an unexpected CDP frame event.", 3);
+				return;
+			}
 			if (recordingId && event.data.recordingId !== recordingId) return;
 			if (!recordingId) recordingId = event.data.recordingId;
 			if (event.data.dataBase64) {
@@ -801,7 +951,7 @@ async function cmdRecord(
 					.then(async () => {
 						if (!encoder) return summary;
 						const finished = await encoder.finish(Date.parse(summary.endedAt));
-						return withEncodedRecordingSize(summary, finished.encodedSizeBytes);
+						return withEncodedRecordingStats(summary, finished);
 					})
 					.then((finalSummary) => {
 						span?.setAttributes({
@@ -809,6 +959,9 @@ async function cmdRecord(
 							"record.size_bytes": finalSummary.sizeBytes,
 							"record.source_bytes": finalSummary.sourceBytes,
 							"record.encoded_size_bytes": finalSummary.encodedSizeBytes,
+							"record.encoded_frame_count": finalSummary.encodedFrameCount,
+							"record.coalesced_frame_count": finalSummary.coalescedFrameCount,
+							"record.dropped_frame_count": finalSummary.droppedFrameCount,
 							"record.frame_count": finalSummary.frameCount,
 							"record.outcome": finalSummary.outcome,
 						});
@@ -820,8 +973,40 @@ async function cmdRecord(
 			}
 			return;
 		}
-		if (isLegacyRecordChunkEvent(event)) {
-			fail("Bridge sent legacy record_chunk data; restart the extension to use debugger screencast recording.", 3);
+		if (isRecordChunkEvent(event)) {
+			if (recordingId && event.data.recordingId !== recordingId) return;
+			if (!recordingId) recordingId = event.data.recordingId;
+			if (requestedMode !== "tab-capture" && activeMode !== "tab-capture") {
+				fail("Bridge sent tab-capture chunks for a CDP recording.", 3);
+				return;
+			}
+			if (event.data.chunkBase64) {
+				const chunk = Buffer.from(event.data.chunkBase64, "base64");
+				if (directOutputReady) {
+					if (!appendDirectChunk(chunk)) return;
+				} else pendingChunks.push(chunk);
+			}
+			if (event.data.final && event.data.summary) {
+				const summaryValidation = validateBridgeCommandResult("record_stop", event.data.summary);
+				if (!summaryValidation.ok) {
+					fail(
+						`Invalid result for 'record_stop': ${formatBridgeCommandValidationErrors(summaryValidation.errors)}`,
+						3,
+					);
+					return;
+				}
+				const summary = summaryValidation.value;
+				span?.setAttributes({
+					"record.duration_ms": summary.durationMs,
+					"record.source_bytes": summary.sourceBytes,
+					"record.encoded_size_bytes": summary.encodedSizeBytes,
+					"record.chunk_count": summary.chunkCount,
+					"record.outcome": summary.outcome,
+				});
+				span?.end(summary.outcome === "stopped_error" ? "error" : "ok");
+				printRecordStopSummary(summary, jsonMode, outPath);
+				finish(summary.outcome === "stopped_error" ? 1 : 0);
+			}
 		}
 	});
 
@@ -894,6 +1079,7 @@ async function cmdSession(flags: {
 				protocolVersion: BRIDGE_PROTOCOL_VERSION,
 				minProtocolVersion: BRIDGE_PROTOCOL_MIN_VERSION,
 				appVersion: VERSION,
+				build: requireCliBuildIdentity(),
 				name: "shuvgeist-cli-follow",
 			}),
 		);
@@ -1256,6 +1442,7 @@ function printUsage(): void {
 
 Usage:
   shuvgeist serve [--host HOST] [--port PORT] [--token TOKEN]
+  shuvgeist doctor [--json] [--timeout 10s]
   shuvgeist launch [<url>] [--browser path] [--extension-path path] [--url url]
                    [--headless] [--foreground] [--profile name]
                    [--user-data-dir path] [--use-default-profile]
@@ -1278,9 +1465,15 @@ Usage:
   shuvgeist assert <expr|text|selector|role|label|url> <query> [--tab-id N] [--frame-id N] [--json]
   shuvgeist cookies [--json] [--timeout 120s]
   shuvgeist select <message> [--json] [--timeout none]
+  shuvgeist handoff <task-id> <session-id> [--kind manual|browser-native]
+                    [--message text] [--target target] [--timeout 2m] [--json]
   shuvgeist workflow <run|validate> (--file workflow.json | --inline '{...}') [--arg key=value]
-  shuvgeist snapshot [--tab-id N] [--frame-id N] [--max-entries N] [--json]
+  shuvgeist snapshot [--tab-id N] [--frame-id N] [--max-entries N] [--query text] [--json]
+  shuvgeist snapshot store [snapshot options] [--json]
+  shuvgeist snapshot diff <baseline-record-id> [snapshot options] [--json]
                     (snapshotIds are usable as refIds)
+  shuvgeist journal [--last N] [--json]
+  shuvgeist request-json <relative-path> [--method METHOD] [--body JSON] [--schema JSON] [--review-mutation]
   shuvgeist locate <role|text|label> <query> [--tab-id N] [--frame-id N] [--json]
   shuvgeist ref <click|fill> <refId> [--value text] [--native | --trusted] [--tab-id N] [--frame-id N] [--timeout 5s] [--json]
   shuvgeist frame <list|tree> [--tab-id N] [--json]
@@ -1288,6 +1481,7 @@ Usage:
   shuvgeist device <emulate|reset> [...] [--json]
   shuvgeist perf <metrics|trace-start|trace-stop> [...] [--json]
   shuvgeist record start --out file.webm [--tab-id N] [--max-duration 30s]
+                         [--mode cdp|tab-capture] [--audio]
                          [--fps N] [--quality N] [--max-width N] [--max-height N]
                          [--video-bitrate N] [--mime-type video/webm;codecs=vp9]
   shuvgeist record stop [--tab-id N] [--json]
@@ -1356,7 +1550,11 @@ Global options:
   --max-count <N>     Assertion maximum match count
   --url-pattern <re>  URL assertion regex
   --search <text>     Network list filter
-  --include-sensitive Include sensitive data in network curl export
+  --review-mutation  Confirm review before exporting a mutating request
+  --body <JSON>      JSON request body for request-json
+  --schema <JSON>    Optional bounded response schema for request-json
+  --max-response-bytes <N> Maximum request-json response bytes
+  --include-sensitive Deprecated; secret values are never placed in exports
   --preset <name>     Device preset
   --width <px>        Device viewport width
   --height <px>       Device viewport height
@@ -1370,6 +1568,8 @@ Global options:
   --quality <n>       Recording JPEG quality (1-100)
   --video-bitrate <n> Recording encoder video bitrate
   --mime-type <type>  Recording WebM mime type
+  --mode <mode>       Recording capture mode: cdp (default) or tab-capture
+  --audio             Include tab audio (requires --mode tab-capture)
   --user-data-dir <path>     Launch: explicit Chromium user-data-dir
                              (default: ~/.shuvgeist/profile/<browser>)
   --use-default-profile      Launch: share the user's existing browser profile
@@ -1525,9 +1725,8 @@ async function main(): Promise<void> {
 
 	// Best-effort: keep the packaged skill synced to ~/.agents/skills on every
 	// real command run (version-gated, silent, never fatal).
-	ensureSkillInstalled(VERSION);
-
 	const command = args[0];
+	if (command !== "doctor") ensureSkillInstalled(VERSION);
 	const rest = args.slice(1);
 	const { flags, positionals } = parseCliArguments(rest);
 	const plan = createCommandPlan(command, positionals, flags, (path) => readFileSync(path, "utf-8"));
@@ -1545,7 +1744,7 @@ async function main(): Promise<void> {
 	// extra wait here. JSON callers still get a single-shot view: the wait is
 	// silent and bounded, and commands that do not require an extension target
 	// (e.g. a disconnected `status --json`) still complete after the timeout.
-	if (plan.kind !== "serve" && plan.kind !== "usage-error") {
+	if (plan.kind !== "serve" && plan.kind !== "doctor" && plan.kind !== "usage-error") {
 		const runtime = requireNodeRuntime();
 		const bridgeFlags = plan.kind === "launch" ? { host: flags.host, port: flags.port, token: flags.token } : flags;
 		const connection = await runtime.ensureServer(bridgeFlags);
@@ -1556,6 +1755,7 @@ async function main(): Promise<void> {
 			plan.kind === "launch" ||
 			plan.kind === "close" ||
 			(plan.kind === "one-shot" && plan.method.startsWith("electron_")) ||
+			(plan.kind === "one-shot" && plan.method === "journal_list") ||
 			("target" in plan && plan.target?.kind === "electron-window");
 		if (!skipsExtensionWait) {
 			const wsUrl = runtime.resolveConnection(bridgeFlags).url;
@@ -1581,6 +1781,9 @@ async function main(): Promise<void> {
 			break;
 		case "status":
 			await fetchBridgeStatus(flags);
+			break;
+		case "doctor":
+			await cmdDoctor(flags);
 			break;
 		case "one-shot":
 			await runOneShot(

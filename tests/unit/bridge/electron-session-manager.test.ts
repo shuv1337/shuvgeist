@@ -1054,13 +1054,18 @@ describe("electron session manager", () => {
 			},
 		});
 
-		const redacted = await manager.networkCurl(target, { requestId: "req-1" });
-		expect(redacted.command).toContain("Authorization: <redacted>");
+		await expect(manager.networkCurl(target, { requestId: "req-1" })).rejects.toThrow(/explicit mutation review/u);
+		const redacted = await manager.networkCurl(target, { requestId: "req-1", reviewMutation: true });
+		expect(redacted.command).toContain("Authorization: {{shuvgeist-secret:");
 		expect(redacted.command).not.toContain("Bearer secret");
 		expect(redacted.redactedHeaders).toEqual(["Authorization"]);
 		expect("tabId" in redacted).toBe(false);
-		const sensitive = await manager.networkCurl(target, { requestId: "req-1", includeSensitive: true });
-		expect(sensitive.command).toContain("Bearer secret");
+		const sensitive = await manager.networkCurl(target, {
+			requestId: "req-1",
+			includeSensitive: true,
+			reviewMutation: true,
+		});
+		expect(sensitive.command).not.toContain("Bearer secret");
 		await manager.dispose();
 	});
 
@@ -1077,6 +1082,9 @@ describe("electron session manager", () => {
 		const session = await manager.attach({ appRef: "vscode", port: 9333, pid: 101 });
 		const target = { kind: "electron-window" as const, sessionId: session.id, windowRef: "w1" };
 		const events: RecordFrameEventData[] = [];
+		await expect(
+			manager.recordStart(target, { mode: "tab-capture", audio: true }, (event) => events.push(event)),
+		).rejects.toThrow("Chrome-only");
 		const started = await manager.recordStart(target, { maxDurationMs: 5_000 }, (event) => events.push(event));
 		transport.emit("Page.screencastFrame", { sessionId: 7, data: "AQID" });
 		await vi.waitFor(() => expect(events).toHaveLength(1));

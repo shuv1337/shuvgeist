@@ -103,14 +103,23 @@ export class McpHttpHandler {
 		});
 		if (response.error) {
 			const failed = this.options.taskRegistry.fail(task.id, response.error.message);
-			return this.toolResult({ task: failed, error: response.error }, true);
+			return this.toolResult(
+				{ task: failed, error: response.error, ...(response.aftermath ? { aftermath: response.aftermath } : {}) },
+				true,
+			);
 		}
-		const succeeded = this.options.taskRegistry.succeed(task.id, response.result);
-		return this.toolResult({ task: succeeded, result: response.result }, false);
+		const succeeded = this.options.taskRegistry.succeed(
+			task.id,
+			isNoStoreResult(response.result) ? { sensitive: true, noStore: true } : response.result,
+		);
+		return this.toolResult(
+			{ task: succeeded, result: response.result, ...(response.aftermath ? { aftermath: response.aftermath } : {}) },
+			false,
+		);
 	}
 
 	private toolResult(
-		payload: { task: TaskHandle; result?: unknown; error?: unknown },
+		payload: { task: TaskHandle; result?: unknown; error?: unknown; aftermath?: unknown },
 		isError: boolean,
 	): McpToolCallResult {
 		return {
@@ -125,7 +134,17 @@ export class McpHttpHandler {
 	}
 
 	private writeJson(res: ServerResponse, status: number, value: unknown): void {
-		res.writeHead(status, { "Content-Type": "application/json" });
+		res.writeHead(status, { "Content-Type": "application/json", "Cache-Control": "no-store" });
 		res.end(JSON.stringify(value));
 	}
+}
+
+function isNoStoreResult(value: unknown): boolean {
+	return (
+		typeof value === "object" &&
+		value !== null &&
+		!Array.isArray(value) &&
+		(value as Record<string, unknown>).sensitive === true &&
+		(value as Record<string, unknown>).noStore === true
+	);
 }

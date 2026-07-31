@@ -86,7 +86,7 @@ describe("NetworkCaptureEngine", () => {
 		});
 
 		await engine.startCapture(11);
-		manager.setResponseBody("body-1", "abcdefghij", false);
+		manager.setResponseBody("body-1", '{"value":"abcdefghij"}', false);
 		manager.emit(11, "Network.requestWillBeSent", {
 			requestId: "body-1",
 			type: "XHR",
@@ -128,6 +128,7 @@ describe("NetworkCaptureEngine", () => {
 				headers: {
 					Authorization: "Bearer secret-token",
 					Cookie: "session=s3cr3t",
+					"Content-Type": "application/json",
 					"X-Trace-Id": "trace-1",
 				},
 				postData: "{\"ok\":true}",
@@ -135,15 +136,19 @@ describe("NetworkCaptureEngine", () => {
 		});
 
 		const requestId = engine.list(12)[0].id;
-		const redacted = engine.toCurl(12, requestId);
-		expect(redacted.command).toContain("Authorization: <redacted>");
-		expect(redacted.command).toContain("Cookie: <redacted>");
+		expect(() => engine.toCurl(12, requestId)).toThrow(/explicit mutation review/u);
+		const redacted = engine.toCurl(12, requestId, { reviewMutation: true });
+		expect(redacted.command).toContain("Authorization: {{shuvgeist-secret:");
+		expect(redacted.command).toContain("Cookie: session={{shuvgeist-secret:");
 		expect(redacted.command).toContain("X-Trace-Id: trace-1");
 		expect(redacted.command).toContain("--data-raw");
 		expect(redacted.redactedHeaders).toEqual(expect.arrayContaining(["Authorization", "Cookie"]));
 
-		const raw = engine.toCurl(12, requestId, { redactSensitiveHeaders: false });
-		expect(raw.command).toContain("Authorization: Bearer secret-token");
-		expect(raw.command).toContain("Cookie: session=s3cr3t");
+		const rawRequested = engine.toCurl(12, requestId, {
+			redactSensitiveHeaders: false,
+			reviewMutation: true,
+		});
+		expect(rawRequested.command).not.toContain("Bearer secret-token");
+		expect(rawRequested.command).not.toContain("session=s3cr3t");
 	});
 });

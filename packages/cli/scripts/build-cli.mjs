@@ -8,6 +8,7 @@ import { chmodSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
+import { computeBuildIdentity } from "../../../scripts/build-identity.mjs";
 import { createInjectedArtifactsPlugin } from "../../../scripts/injected-artifacts.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -18,6 +19,7 @@ const outDir = join(packageRoot, "dist-cli");
 const manifest = JSON.parse(readFileSync(join(packageRoot, "static/manifest.chrome.json"), "utf-8"));
 const version = manifest.version;
 const includeInjectedArtifactTestSurface = process.env.SHUVGEIST_BUILD_TEST_SURFACES === "1";
+const buildIdentity = computeBuildIdentity(packageRoot, process.env.SHUVGEIST_BUILD_KIND ?? "development");
 
 rmSync(outDir, { recursive: true, force: true });
 mkdirSync(outDir, { recursive: true });
@@ -56,6 +58,8 @@ await build({
 		"process.env.NODE_ENV": JSON.stringify(process.env.NODE_ENV ?? "production"),
 		__SHUVGEIST_VERSION__: JSON.stringify(version),
 		__SHUVGEIST_DEV_ROOT__: JSON.stringify(packageRoot),
+		__SHUVGEIST_BUILD_ID__: JSON.stringify(buildIdentity.id),
+		__SHUVGEIST_BUILD_KIND__: JSON.stringify(buildIdentity.kind),
 	},
 	plugins: [createInjectedArtifactsPlugin()],
 	// Bundle ws but keep Node builtins external (they're available at runtime)

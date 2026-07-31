@@ -27,6 +27,11 @@ const artifactGroups = [
 				entryPoint: join(driverRoot, "src/injected/page-ref-action.ts"),
 				globalName: "__SHUVGEIST_INJECTED_PAGE_REF_ACTION__",
 			},
+			{
+				exportName: "AUTHENTICATED_JSON_INJECTED_ARTIFACT",
+				entryPoint: join(driverRoot, "src/injected/authenticated-json.ts"),
+				globalName: "__SHUVGEIST_INJECTED_AUTHENTICATED_JSON__",
+			},
 		],
 	},
 	{
@@ -52,6 +57,11 @@ const artifactGroups = [
 				exportName: "ELEMENT_PICKER_INJECTED_ARTIFACT",
 				entryPoint: join(extensionRoot, "src/injected/element-picker.ts"),
 				globalName: "__SHUVGEIST_INJECTED_ELEMENT_PICKER__",
+			},
+			{
+				exportName: "HANDOFF_INJECTED_ARTIFACT",
+				entryPoint: join(extensionRoot, "src/injected/handoff.ts"),
+				globalName: "__SHUVGEIST_INJECTED_HANDOFF__",
 			},
 		],
 	},

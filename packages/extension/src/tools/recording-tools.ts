@@ -23,6 +23,8 @@ import {
 	type ChromePageDriverRegistryLike,
 	type ResolvedChromePageDriver,
 } from "../bridge/chrome-page-driver-registry.js";
+import type { ChromeTabCaptureRecorder } from "../recording/chrome-tab-capture-recorder.js";
+import type { TabCaptureOffscreenEvent } from "../recording/tab-capture-messages.js";
 import type { DebuggerManager } from "./helpers/debugger-manager.js";
 
 interface RecordingState {
@@ -36,6 +38,7 @@ export interface RecordingToolsOptions {
 	pageDriverRegistry?: ChromePageDriverRegistryLike;
 	debuggerManager?: DebuggerManager;
 	emitRecordFrame: (data: RecordFrameEventData) => void;
+	tabCaptureRecorder?: ChromeTabCaptureRecorder;
 	telemetry?: BridgeTelemetry;
 }
 
@@ -62,6 +65,7 @@ export class RecordingTools {
 	private readonly ownsPageDrivers: boolean;
 	private readonly emitRecordFrame: (data: RecordFrameEventData) => void;
 	private readonly telemetry?: BridgeTelemetry;
+	private readonly tabCapture?: ChromeTabCaptureRecorder;
 	private readonly recordingsByTabId = new Map<number, RecordingState>();
 	private readonly recordingsById = new Map<string, RecordingState>();
 
@@ -77,6 +81,7 @@ export class RecordingTools {
 			});
 		this.ownsPageDrivers = options.pageDriverRegistry === undefined;
 		this.emitRecordFrame = options.emitRecordFrame;
+		this.tabCapture = options.tabCaptureRecorder;
 		this.telemetry = options.telemetry;
 	}
 
@@ -86,9 +91,17 @@ export class RecordingTools {
 		traceContext?: TraceContext,
 	): Promise<RecordStartResult> {
 		assertTopFrame(params.frameId);
+		if (params.mode === "tab-capture") {
+			if (!this.tabCapture) throw new Error("Chrome tab-capture recording is unavailable in this runtime.");
+			if (params.tabId !== undefined && this.recordingsByTabId.has(params.tabId)) {
+				throw new Error(`Recording is already active for tab ${params.tabId}`);
+			}
+			return this.tabCapture.start(params);
+		}
+		if (params.audio) throw new Error("Tab audio requires --mode tab-capture.");
 		const resolved = await this.pageDrivers.resolve(params.tabId);
 		assertRecordableTabUrl(resolved.tab.url);
-		if (this.recordingsByTabId.has(resolved.tabId)) {
+		if (this.recordingsByTabId.has(resolved.tabId) || this.tabCapture?.hasRecordingForTab(resolved.tabId)) {
 			throw new Error(`Recording is already active for tab ${resolved.tabId}`);
 		}
 		const span = this.telemetry?.startSpan("record.start", {
@@ -128,6 +141,13 @@ export class RecordingTools {
 	async stop(params: RecordStopParams, signal?: AbortSignal, traceContext?: TraceContext): Promise<RecordStopResult> {
 		assertTopFrame(params.frameId);
 		if (signal?.aborted) throw new Error("Recording stop aborted");
+		if (
+			(params.tabId !== undefined && this.tabCapture?.hasRecordingForTab(params.tabId)) ||
+			(params.tabId === undefined && this.recordingsById.size === 0 && this.tabCapture)
+		) {
+			return this.tabCapture.stop(params.tabId);
+		}
+		if (this.recordingsById.size === 0 && this.tabCapture) return this.tabCapture.stop(params.tabId);
 		const state = await this.resolveRecording(params.tabId);
 		const span = this.telemetry?.startSpan("record.stop", {
 			parent: traceContext,
@@ -150,6 +170,12 @@ export class RecordingTools {
 
 	async status(params: RecordStatusParams, traceContext?: TraceContext): Promise<RecordStatusResult> {
 		assertTopFrame(params.frameId);
+		if (
+			(params.tabId !== undefined && this.tabCapture?.hasRecordingForTab(params.tabId)) ||
+			(this.recordingsById.size === 0 && this.tabCapture)
+		) {
+			return this.tabCapture.status(params.tabId);
+		}
 		const resolved = await this.resolveStatusTarget(params.tabId);
 		const status = resolved.driver.screencast.status();
 		const result = statusToWire(status, resolved.tabId);
@@ -167,18 +193,30 @@ export class RecordingTools {
 	}
 
 	hasRecording(recordingId: string): boolean {
-		return this.recordingsById.has(recordingId);
+		return this.recordingsById.has(recordingId) || this.tabCapture?.hasRecording(recordingId) === true;
 	}
 
 	hasRecordingForTab(tabId: number): boolean {
-		return this.recordingsByTabId.has(tabId);
+		return this.recordingsByTabId.has(tabId) || this.tabCapture?.hasRecordingForTab(tabId) === true;
 	}
 
 	getActiveTabIds(): number[] {
-		return [...this.recordingsByTabId.keys()];
+		return [...new Set([...this.recordingsByTabId.keys(), ...(this.tabCapture?.getActiveTabIds() ?? [])])];
+	}
+
+	handleTabCaptureEvent(event: TabCaptureOffscreenEvent): boolean {
+		return this.tabCapture?.handleOffscreenEvent(event) === true;
+	}
+
+	handleTabNavigated(tabId: number): void {
+		this.tabCapture?.handleTabNavigated(tabId);
 	}
 
 	handleTabClosed(tabId: number): void {
+		if (this.tabCapture?.hasRecordingForTab(tabId)) {
+			this.tabCapture.handleTabClosed(tabId);
+			return;
+		}
 		const state = this.recordingsByTabId.get(tabId);
 		if (!state) {
 			void this.pageDrivers.release(tabId);
@@ -191,11 +229,12 @@ export class RecordingTools {
 	}
 
 	async dispose(): Promise<void> {
-		await Promise.all(
-			[...this.recordingsById.values()].map((state) =>
+		await Promise.all([
+			...[...this.recordingsById.values()].map((state) =>
 				state.driver.screencast.stop(state.recordingId, "abort").catch(() => undefined),
 			),
-		);
+			this.tabCapture?.dispose(),
+		]);
 		if (this.ownsPageDrivers) await this.pageDrivers.dispose();
 	}
 
@@ -259,6 +298,9 @@ function startResultToWire(result: PageScreencastStartResult, tabId: number): Re
 	return {
 		...pageDriverScopeToWire(result.scope, chromeTarget(tabId)),
 		ok: true,
+		mode: "cdp",
+		audio: false,
+		artifactState: "streaming",
 		recordingId: result.recordingId,
 		startedAt: result.startedAt,
 		mimeType: result.mimeType,
@@ -273,6 +315,9 @@ function statusToWire(status: PageScreencastStatus, tabId: number): RecordStatus
 	return {
 		...scope,
 		active: true,
+		mode: "cdp",
+		audio: false,
+		artifactState: "streaming",
 		recordingId: status.recordingId,
 		startedAt: status.startedAt,
 		mimeType: status.mimeType,
@@ -288,6 +333,9 @@ function summaryToWire(summary: PageScreencastSummary, tabId: number): RecordSto
 	return {
 		...pageDriverScopeToWire(summary.scope, chromeTarget(tabId)),
 		ok: true,
+		mode: "cdp",
+		audio: false,
+		artifactState: summary.reason === "abort" || summary.reason === "error" ? "partial" : "complete",
 		recordingId: summary.recordingId,
 		startedAt: summary.startedAt,
 		endedAt: summary.endedAt,

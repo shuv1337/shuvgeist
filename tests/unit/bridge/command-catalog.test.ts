@@ -69,7 +69,6 @@ describe("bridge command catalog", () => {
 			["status", "shadowed-by-local-command"],
 			["cookie_import", "server-internal"],
 			["cookie_import_apply", "extension-internal"],
-			["snapshot_store", "server-internal"],
 			["snapshot_read", "server-internal"],
 			["skills_snapshot_status", "server-internal"],
 		]);

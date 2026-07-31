@@ -14,6 +14,7 @@ interface CommonPageDriverBindingOptions {
 	buildSnapshotExpression: PageSnapshotExpressionBuilder;
 	buildRefActionExpression?: PageRefActionExpressionBuilder;
 	onClose?: Parameters<typeof createPageDriver>[1]["onClose"];
+	network?: Parameters<typeof createPageDriver>[1]["network"];
 }
 
 export interface ChromeDebuggerPageDriverOptions extends CommonPageDriverBindingOptions {
@@ -39,6 +40,7 @@ export function createChromeDebuggerPageDriver(options: ChromeDebuggerPageDriver
 		buildRefActionExpression: options.buildRefActionExpression,
 		authorizeCdpInput: () => true,
 		onClose: options.onClose,
+		network: options.network,
 	});
 }
 
@@ -50,5 +52,6 @@ export function createWebSocketCdpPageDriver(options: WebSocketCdpPageDriverOpti
 		buildRefActionExpression: options.buildRefActionExpression,
 		authorizeCdpInput: options.authorizeCdpInput,
 		onClose: options.onClose,
+		network: options.network,
 	});
 }

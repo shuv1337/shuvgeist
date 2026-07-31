@@ -25,6 +25,10 @@ describe("bridge command schemas", () => {
 		});
 		expect(validateBridgeCommandParams("electron_attach", {})).toMatchObject({ ok: false });
 		expect(validateBridgeCommandParams("record_start", { fps: 31 })).toMatchObject({ ok: false });
+		expect(
+			validateBridgeCommandParams("record_start", { mode: "tab-capture", audio: true }),
+		).toMatchObject({ ok: true });
+		expect(validateBridgeCommandParams("record_start", { mode: "other" })).toMatchObject({ ok: false });
 		expect(validateBridgeCommandParams("page_assert", { kind: "text" })).toMatchObject({ ok: false });
 		expect(validateBridgeCommandParams("page_assert", { kind: "text", text: "Ready" })).toMatchObject({ ok: true });
 		expect(validateBridgeCommandParams("electron_windows", { appRef: "vscode" })).toMatchObject({ ok: false });
@@ -140,12 +144,43 @@ describe("bridge command schemas", () => {
 		).toMatchObject({ ok: true });
 		expect(validateBridgeCommandResult("network_list", [])).toMatchObject({ ok: false });
 		expect(
+			validateBridgeCommandParams("authenticated_json_request", {
+				path: "/api/me",
+				method: "GET",
+				timeoutMs: 5_000,
+				maxResponseBytes: 4_096,
+				schema: { type: "object", required: ["name"] },
+			}),
+		).toMatchObject({ ok: true });
+		expect(
+			validateBridgeCommandParams("authenticated_json_request", { path: "/api/me", timeoutMs: 0 }),
+		).toMatchObject({ ok: false });
+		expect(
+			validateBridgeCommandResult("authenticated_json_request", {
+				...chromeScope,
+				ok: true,
+				status: 200,
+				origin: "https://example.test",
+				path: "/api/me",
+				method: "GET",
+				mutation: false,
+				responseBytes: 12,
+				data: { name: "Ada" },
+				sensitive: true,
+				noStore: true,
+			}),
+		).toMatchObject({ ok: true });
+		expect(
 			validateBridgeCommandResult("network_body", {
 				...electronScope,
 				requestId: "r1",
 				responseBody: "ok",
 				requestBodyTruncated: false,
 				responseBodyTruncated: false,
+				requestBodyOmitted: false,
+				responseBodyOmitted: false,
+				redactedFields: [],
+				secretReferences: [],
 			}),
 		).toMatchObject({ ok: true });
 		expect(
@@ -159,6 +194,9 @@ describe("bridge command schemas", () => {
 				mimeType: "video/webm",
 				sourceBytes: 4096,
 				encodedSizeBytes: 1024,
+				encodedFrameCount: 10,
+				coalescedFrameCount: 2,
+				droppedFrameCount: 0,
 				sizeBytes: 1024,
 				frameCount: 12,
 				outcome: "stopped_target_closed",
