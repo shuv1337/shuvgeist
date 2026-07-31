@@ -5,6 +5,8 @@ dist-chrome/
 dist-cli/
 dist-cli-package/
 *.tgz
+shuvgeist.zip
+shuvgeist.zip.sha256
 site/dist/
 site/data/
 *.log

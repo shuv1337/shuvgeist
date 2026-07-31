@@ -39,8 +39,8 @@ jobs:
       - name: Verify workspace boundaries
         run: npm run check:boundaries
 
-      - name: Build extension
-        run: npm run build
+      - name: Build and package extension
+        run: npm run package:extension
 
       - name: Build CLI and direct-CDP runtime
         run: npm run build:cli
@@ -50,12 +50,6 @@ jobs:
           node ./scripts/check-injected-artifact-test-surface.mjs
           test -s dist-cli/direct-cdp-runtime.mjs
           node --input-type=module -e "await import('./dist-cli/direct-cdp-runtime.mjs')"
-
-      - name: Create zip
-        run: |
-          cd dist-chrome
-          find . -name "*.map" -type f -delete
-          zip -r ../shuvgeist.zip .
 
       - name: Create installable CLI package
         run: |
@@ -89,7 +83,7 @@ jobs:
 
       - name: Create release
         run: |
-          gh release create ${{ github.ref_name }} shuvgeist.zip shuvgeist-cli.tgz \
+          gh release create ${{ github.ref_name }} shuvgeist.zip shuvgeist.zip.sha256 shuvgeist-cli.tgz \
             --title "Shuvgeist ${{ steps.version.outputs.version }}" \
             --notes-file /tmp/release-notes.md \
             --latest

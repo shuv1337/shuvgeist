@@ -28,6 +28,7 @@
 
 ### Changed
 
+- Extension releases now use an exact reviewed file and permission allowlist to produce reproducible ZIP bytes with a published SHA-256 digest.
 - Replaced CLI-side duplicate JPEG writes during recording with timestamped MJPEG/Matroska input and explicit frame accounting.
 - Bridge commands now derive wire schemas, correlated TypeScript contracts, CLI planning, capability advertising, and typed handler registries from one definition source, with runtime validation at transport boundaries. (#44)
 - Chrome debugger, Electron renderer, and direct-CDP automation now compose one target-neutral PageDriver for snapshots, refs, network capture, and screencast recording, with resolved target identities and distinct source-versus-encoded recording byte counts. (#45)

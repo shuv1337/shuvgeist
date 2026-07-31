@@ -35,7 +35,7 @@ const sharedBuildOptions = {
 	absWorkingDir: repoRoot,
 	target: ["chrome120"],
 	platform: "browser",
-	sourcemap: isWatch ? "inline" : true,
+	sourcemap: isWatch ? "inline" : false,
 	loader: {
 		".ts": "ts",
 		".tsx": "tsx",
@@ -95,6 +95,8 @@ const copyStatic = () => {
 		const filename = relative.replace("static/", "");
 		// Skip manifest files - we already copied the correct one above
 		if (filename.startsWith("manifest.")) continue;
+		// The extension-origin test fixture is emitted only for explicit E2E builds.
+		if (filename === "test.html" && !includeInjectedArtifactTestSurface) continue;
 
 		const source = join(repoRoot, relative);
 		const destination = join(outDir, filename);
