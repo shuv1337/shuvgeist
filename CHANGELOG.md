@@ -8,6 +8,7 @@
 
 ### Added
 
+- A separate Node compatibility spike now models isolated Playwright CDP views, OOPIF replay, worker filtering, duplicate reconciliation, generations, authorization, timeouts, and teardown, with a documented no-go decision for production integration.
 - Named automation session ownership now has an ADR and isolated executable prototype proving transactional reserve/commit/rollback, exclusive target adoption, lease expiry, and fail-closed restart restoration before production integration.
 - Explicit Chrome tab-capture recording can stream MediaRecorder WebM directly to the CLI with opt-in tab audio, visible in-tab and badge controls, deterministic lifecycle summaries, and no ffmpeg dependency.
 - Origin-bound authenticated JSON requests use the selected Chrome or explicitly authorized Electron page session with relative-path, redirect, timeout, byte, mutation-review, schema, and no-store gates.
