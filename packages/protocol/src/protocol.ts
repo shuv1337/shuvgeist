@@ -9,6 +9,7 @@
 // Protocol versioning
 // ---------------------------------------------------------------------------
 
+import type { Static } from "@sinclair/typebox";
 import {
 	CatalogBridgeMethods,
 	CatalogExtensionBridgeCapabilities,
@@ -22,6 +23,7 @@ import type {
 	BridgeCommandParamsMap,
 	BridgeCommandResult,
 	BridgeCommandResultMap,
+	operationAftermathSchema,
 	NavigateCloseTabFilter as SchemaNavigateCloseTabFilter,
 	ResolvedPageTarget as SchemaResolvedPageTarget,
 	TargetedBridgeParams as SchemaTargetedBridgeParams,
@@ -161,6 +163,7 @@ export interface BridgeResponse {
 	id: number;
 	result?: unknown;
 	error?: BridgeError;
+	aftermath?: OperationAftermath;
 }
 
 /** A method-correlated response for typed producers and adapter registries. */
@@ -230,6 +233,10 @@ export type CookieImportApplyParams = BridgeCommandParams<"cookie_import_apply">
 export type SelectElementParams = BridgeCommandParams<"select_element">;
 export type HandoffStartParams = BridgeCommandParams<"handoff_start">;
 export type HandoffStartResult = BridgeCommandResult<"handoff_start">;
+export type JournalListParams = BridgeCommandParams<"journal_list">;
+export type JournalListResult = BridgeCommandResult<"journal_list">;
+export type OperationAftermath = Static<typeof operationAftermathSchema>;
+export type OperationOutcome = OperationAftermath["outcome"];
 export type WorkflowRunParams = BridgeCommandParams<"workflow_run">;
 export type WorkflowValidateParams = BridgeCommandParams<"workflow_validate">;
 export type PageSnapshotBridgeParams = BridgeCommandParams<"page_snapshot">;

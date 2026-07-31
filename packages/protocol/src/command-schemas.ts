@@ -256,6 +256,57 @@ const snapshotReadParamsSchema = Type.Object(
 	{ additionalProperties: false },
 );
 
+const operationOutcomeSchema = Type.Union([
+	Type.Literal("succeeded"),
+	Type.Literal("failed"),
+	Type.Literal("timed_out"),
+	Type.Literal("cancelled"),
+]);
+
+export const operationAftermathSchema = Type.Object(
+	{
+		id: Type.String({ minLength: 1 }),
+		sessionKey: Type.String({ pattern: "^[a-f0-9]{20}$" }),
+		method: Type.String({ minLength: 1 }),
+		startedAt: Type.String(),
+		endedAt: Type.String(),
+		durationMs: Type.Integer({ minimum: 0 }),
+		outcome: operationOutcomeSchema,
+		target: Type.Optional(resolvedPageTargetSchema),
+		navigationGeneration: Type.Optional(Type.Integer({ minimum: 0 })),
+		urlMovement: Type.Optional(
+			Type.Object(
+				{
+					fromOrigin: Type.Optional(Type.String()),
+					toOrigin: Type.Optional(Type.String()),
+				},
+				{ additionalProperties: false },
+			),
+		),
+		consoleErrorCount: Type.Integer({ minimum: 0 }),
+		pageErrorCount: Type.Integer({ minimum: 0 }),
+		warnings: Type.Array(Type.String()),
+		handoffCount: Type.Integer({ minimum: 0 }),
+		artifactIds: Type.Array(Type.String()),
+	},
+	{ additionalProperties: false },
+);
+
+const journalListParamsSchema = Type.Object(
+	{
+		last: Type.Optional(Type.Integer({ minimum: 1, maximum: 500 })),
+		sessionKey: Type.Optional(Type.String({ pattern: "^[a-f0-9]{20}$" })),
+	},
+	{ additionalProperties: false },
+);
+
+const journalListResultSchema = Type.Object(
+	{
+		entries: Type.Array(operationAftermathSchema),
+	},
+	{ additionalProperties: false },
+);
+
 const pageAssertKindSchema = Type.Union([
 	Type.Literal("expression"),
 	Type.Literal("text"),
@@ -1821,6 +1872,25 @@ export const BridgeCommandDefinitions = [
 		defaultTimeout: "request",
 		params: snapshotReadParamsSchema,
 		result: snapshotReadResultSchema,
+	},
+	{
+		method: "journal_list",
+		capabilities: ["journal_list"],
+		route: "server-local",
+		targets: [],
+		cli: bridgeCli(
+			defineCliBinding({
+				family: "journal",
+				select: [],
+				usage: "Usage: shuvgeist journal [--last N]",
+				flags: [cliFlag("last", { param: "last", parse: "integer" })],
+				positionals: [],
+				codec: "generic",
+			}),
+		),
+		defaultTimeout: "request",
+		params: journalListParamsSchema,
+		result: journalListResultSchema,
 	},
 	{
 		method: "page_assert",

@@ -103,14 +103,20 @@ export class McpHttpHandler {
 		});
 		if (response.error) {
 			const failed = this.options.taskRegistry.fail(task.id, response.error.message);
-			return this.toolResult({ task: failed, error: response.error }, true);
+			return this.toolResult(
+				{ task: failed, error: response.error, ...(response.aftermath ? { aftermath: response.aftermath } : {}) },
+				true,
+			);
 		}
 		const succeeded = this.options.taskRegistry.succeed(task.id, response.result);
-		return this.toolResult({ task: succeeded, result: response.result }, false);
+		return this.toolResult(
+			{ task: succeeded, result: response.result, ...(response.aftermath ? { aftermath: response.aftermath } : {}) },
+			false,
+		);
 	}
 
 	private toolResult(
-		payload: { task: TaskHandle; result?: unknown; error?: unknown },
+		payload: { task: TaskHandle; result?: unknown; error?: unknown; aftermath?: unknown },
 		isError: boolean,
 	): McpToolCallResult {
 		return {

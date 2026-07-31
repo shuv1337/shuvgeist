@@ -182,6 +182,12 @@ describe("cli-core coverage cases", () => {
 			defaultTimeoutMs: undefined,
 			target: { kind: "chrome-tab", tabId: 42 },
 		});
+		expect(createCommandPlan("journal", [], { last: "25" }, readFileText)).toEqual({
+			kind: "one-shot",
+			method: "journal_list",
+			params: { last: 25 },
+			defaultTimeoutMs: 60_000,
+		});
 		expect(createCommandPlan("mystery", [], {}, readFileText)).toEqual({
 			kind: "usage-error",
 			message: "Unknown command: mystery",

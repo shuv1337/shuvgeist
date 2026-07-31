@@ -39,6 +39,8 @@ import {
 	formatBridgeCommandValidationErrors,
 	formatBridgeProtocolMismatch,
 	isBridgeProtocolCompatible,
+	type JournalListResult,
+	type OperationAftermath,
 	type RecordChunkEventData,
 	type RecordFrameEventData,
 	type RecordStartResult,
@@ -131,7 +133,7 @@ function sendRequest(
 			timeout = setTimeout(() => {
 				if (!settled) {
 					settled = true;
-					ws.close();
+					ws.close(4000, "request timeout");
 					span?.recordError(new Error(`Connection timeout after ${timeoutMs}ms`));
 					span?.setAttribute("bridge.outcome", "timeout");
 					span?.end("error");
@@ -241,18 +243,60 @@ function printError(message: string, jsonMode: boolean): void {
 
 function printResult(response: BridgeResponse, jsonMode: boolean): void {
 	if (response.error) {
-		if (jsonMode) console.log(JSON.stringify({ error: response.error }, null, 2));
-		else console.error("Error: " + response.error.message);
+		if (jsonMode) {
+			console.log(
+				JSON.stringify(
+					{ error: response.error, ...(response.aftermath ? { aftermath: response.aftermath } : {}) },
+					null,
+					2,
+				),
+			);
+		} else {
+			console.error("Error: " + response.error.message);
+			if (response.aftermath) console.error(formatAftermath(response.aftermath));
+		}
 		return;
 	}
 	if (jsonMode) {
-		console.log(JSON.stringify(response.result, null, 2));
+		console.log(
+			JSON.stringify(
+				response.aftermath ? { result: response.result, aftermath: response.aftermath } : response.result,
+				null,
+				2,
+			),
+		);
 		return;
 	}
 	const result = response.result as unknown;
 	if (result === null || result === undefined) console.log("OK");
 	else if (typeof result === "string") console.log(result);
 	else console.log(JSON.stringify(result, null, 2));
+	if (response.aftermath) console.log(formatAftermath(response.aftermath));
+}
+
+function formatAftermath(aftermath: OperationAftermath): string {
+	const target =
+		aftermath.target?.kind === "chrome-tab"
+			? `chrome:${aftermath.target.tabId}:${aftermath.target.frameId ?? 0}`
+			: aftermath.target?.kind === "electron-window"
+				? `electron:${aftermath.target.sessionId}:${aftermath.target.windowRef}`
+				: "unresolved";
+	const warningSuffix = aftermath.warnings.length > 0 ? ` warnings=${aftermath.warnings.join(",")}` : "";
+	return `Aftermath: ${aftermath.outcome} ${aftermath.method} target=${target} duration=${aftermath.durationMs}ms${warningSuffix}`;
+}
+
+function printJournal(result: JournalListResult, jsonMode: boolean): void {
+	if (jsonMode) {
+		console.log(JSON.stringify(result, null, 2));
+		return;
+	}
+	if (result.entries.length === 0) {
+		console.log("No journal entries.");
+		return;
+	}
+	for (const entry of result.entries) {
+		console.log(`${entry.endedAt} ${formatAftermath(entry)} session=${entry.sessionKey}`);
+	}
 }
 
 function printSessionHistory(result: SessionHistoryResult, jsonMode: boolean): void {
@@ -497,7 +541,11 @@ async function runOneShot(
 	const jsonMode = flags.json || false;
 	try {
 		const response = await cmdOneShot(method, params, flags, defaultTimeoutMs, target);
-		printResult(response, jsonMode);
+		if (method === "journal_list" && !response.error) {
+			printJournal(response.result as JournalListResult, jsonMode);
+		} else {
+			printResult(response, jsonMode);
+		}
 		process.exit(exitCodeForResponse(response));
 	} catch (err) {
 		printError(err instanceof Error ? err.message : String(err), jsonMode);
@@ -1340,6 +1388,7 @@ Usage:
   shuvgeist snapshot store [snapshot options] [--json]
   shuvgeist snapshot diff <baseline-record-id> [snapshot options] [--json]
                     (snapshotIds are usable as refIds)
+  shuvgeist journal [--last N] [--json]
   shuvgeist locate <role|text|label> <query> [--tab-id N] [--frame-id N] [--json]
   shuvgeist ref <click|fill> <refId> [--value text] [--native | --trusted] [--tab-id N] [--frame-id N] [--timeout 5s] [--json]
   shuvgeist frame <list|tree> [--tab-id N] [--json]
@@ -1614,6 +1663,7 @@ async function main(): Promise<void> {
 			plan.kind === "launch" ||
 			plan.kind === "close" ||
 			(plan.kind === "one-shot" && plan.method.startsWith("electron_")) ||
+			(plan.kind === "one-shot" && plan.method === "journal_list") ||
 			("target" in plan && plan.target?.kind === "electron-window");
 		if (!skipsExtensionWait) {
 			const wsUrl = runtime.resolveConnection(bridgeFlags).url;
