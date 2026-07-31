@@ -30,6 +30,7 @@
 		"./page-snapshot-store": "./src/page-snapshot-store.ts",
 		"./page-snapshot-diff": "./src/page-snapshot-diff.ts",
 		"./per-handle-write-lock": "./src/per-handle-write-lock.ts",
+		"./prototypes/named-session-ownership": "./src/prototypes/named-session-ownership.ts",
 		"./request-handler": "./src/request-handler.ts",
 		"./server": "./src/server.ts",
 		"./session-registry": "./src/session-registry.ts",
