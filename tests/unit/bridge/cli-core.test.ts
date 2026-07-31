@@ -12,6 +12,7 @@ import {
 	parseTimeout,
 	resolveBridgeUrl,
 	resolveConfig,
+	withEncodedRecordingStats,
 	withEncodedRecordingSize,
 } from "shuvgeist/cli-core";
 import {
@@ -220,6 +221,39 @@ describe("cli-core", () => {
 			sizeBytes: 1024,
 		});
 		expect(() => withEncodedRecordingSize({ sourceBytes: 1 }, -1)).toThrow("non-negative safe integer");
+	});
+
+	it("adds validated encoder frame accounting without replacing source frame counts", () => {
+		expect(
+			withEncodedRecordingStats(
+				{ sourceBytes: 4096, frameCount: 12 },
+				{
+					encodedSizeBytes: 1024,
+					encodedFrameCount: 8,
+					coalescedFrameCount: 3,
+					droppedFrameCount: 1,
+				},
+			),
+		).toEqual({
+			sourceBytes: 4096,
+			frameCount: 12,
+			sizeBytes: 1024,
+			encodedSizeBytes: 1024,
+			encodedFrameCount: 8,
+			coalescedFrameCount: 3,
+			droppedFrameCount: 1,
+		});
+		expect(() =>
+			withEncodedRecordingStats(
+				{},
+				{
+					encodedSizeBytes: 1,
+					encodedFrameCount: -1,
+					coalescedFrameCount: 0,
+					droppedFrameCount: 0,
+				},
+			),
+		).toThrow("encodedFrameCount must be a non-negative safe integer");
 	});
 
 	it("maps commands to the actual bridge protocol", () => {

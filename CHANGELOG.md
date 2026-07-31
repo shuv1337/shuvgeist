@@ -28,6 +28,7 @@
 
 ### Changed
 
+- Replaced CLI-side duplicate JPEG writes during recording with timestamped MJPEG/Matroska input and explicit frame accounting.
 - Bridge commands now derive wire schemas, correlated TypeScript contracts, CLI planning, capability advertising, and typed handler registries from one definition source, with runtime validation at transport boundaries. (#44)
 - Chrome debugger, Electron renderer, and direct-CDP automation now compose one target-neutral PageDriver for snapshots, refs, network capture, and screencast recording, with resolved target identities and distinct source-versus-encoded recording byte counts. (#45)
 - Agent sessions, REPL sandboxes, tools, artifacts, and planner memory now live in the persistent offscreen runtime; the sidepanel is a window-scoped remote presentation client that can close and reconnect without ending the session. (#46)

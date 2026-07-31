@@ -290,6 +290,37 @@ export function withEncodedRecordingSize<T extends object>(
 	return { ...summary, encodedSizeBytes, sizeBytes: encodedSizeBytes };
 }
 
+export interface EncodedRecordingStats {
+	encodedSizeBytes: number;
+	encodedFrameCount: number;
+	coalescedFrameCount: number;
+	droppedFrameCount: number;
+}
+
+/** Add CLI-side encoder output stats without conflating them with raw captured-frame counts. */
+export function withEncodedRecordingStats<T extends object>(
+	summary: T,
+	stats: EncodedRecordingStats,
+): T & EncodedRecordingStats & { sizeBytes: number } {
+	const withSize = withEncodedRecordingSize(summary, stats.encodedSizeBytes);
+	for (const [name, value] of Object.entries({
+		encodedFrameCount: stats.encodedFrameCount,
+		coalescedFrameCount: stats.coalescedFrameCount,
+		droppedFrameCount: stats.droppedFrameCount,
+	})) {
+		if (!Number.isSafeInteger(value) || value < 0) {
+			throw new Error(`${name} must be a non-negative safe integer`);
+		}
+	}
+	return {
+		...withSize,
+		encodedSizeBytes: stats.encodedSizeBytes,
+		encodedFrameCount: stats.encodedFrameCount,
+		coalescedFrameCount: stats.coalescedFrameCount,
+		droppedFrameCount: stats.droppedFrameCount,
+	};
+}
+
 export function isNetworkOrConfigError(err: unknown): boolean {
 	if (err instanceof NodeConfigError) return true;
 	const code = typeof err === "object" && err && "code" in err ? String((err as { code?: string }).code) : "";

@@ -62,7 +62,7 @@ import {
 	isNetworkOrConfigError,
 	parseCliArguments,
 	parseTimeout,
-	withEncodedRecordingSize,
+	withEncodedRecordingStats,
 } from "./cli-core.js";
 import { type CliNodeRuntime, createCliNodeRuntime } from "./cli-node-runtime.js";
 import { formatBridgeStatusText, isBridgeStatusReady } from "./cli-status.js";
@@ -279,6 +279,15 @@ function printRecordStopSummary(result: RecordStopResult, jsonMode: boolean, out
 	console.log(`  Source bytes: ${result.sourceBytes}`);
 	if (typeof result.encodedSizeBytes === "number") {
 		console.log(`  Encoded size: ${result.encodedSizeBytes} bytes`);
+	}
+	if (typeof result.encodedFrameCount === "number") {
+		console.log(`  Encoded source frames: ${result.encodedFrameCount}`);
+	}
+	if (typeof result.coalescedFrameCount === "number") {
+		console.log(`  Coalesced source frames: ${result.coalescedFrameCount}`);
+	}
+	if (typeof result.droppedFrameCount === "number") {
+		console.log(`  Dropped source frames: ${result.droppedFrameCount}`);
 	}
 }
 
@@ -801,7 +810,7 @@ async function cmdRecord(
 					.then(async () => {
 						if (!encoder) return summary;
 						const finished = await encoder.finish(Date.parse(summary.endedAt));
-						return withEncodedRecordingSize(summary, finished.encodedSizeBytes);
+						return withEncodedRecordingStats(summary, finished);
 					})
 					.then((finalSummary) => {
 						span?.setAttributes({
@@ -809,6 +818,9 @@ async function cmdRecord(
 							"record.size_bytes": finalSummary.sizeBytes,
 							"record.source_bytes": finalSummary.sourceBytes,
 							"record.encoded_size_bytes": finalSummary.encodedSizeBytes,
+							"record.encoded_frame_count": finalSummary.encodedFrameCount,
+							"record.coalesced_frame_count": finalSummary.coalescedFrameCount,
+							"record.dropped_frame_count": finalSummary.droppedFrameCount,
 							"record.frame_count": finalSummary.frameCount,
 							"record.outcome": finalSummary.outcome,
 						});
