@@ -15,7 +15,14 @@ export interface PageSnapshotRecord {
 	url: string;
 	title: string;
 	query?: string;
+	capture?: PageSnapshotCaptureSignature;
 	raw: PageSnapshotBridgeResult;
+}
+
+export interface PageSnapshotCaptureSignature {
+	maxEntries: number;
+	includeHidden: boolean;
+	query?: string;
 }
 
 export interface PageSnapshotReadQuery {
@@ -28,6 +35,20 @@ export interface PageSnapshotReadQuery {
 
 interface PageSnapshotStoreData {
 	records: PageSnapshotRecord[];
+}
+
+export function normalizePageSnapshotCaptureSignature(params: {
+	maxEntries?: number;
+	includeHidden?: boolean;
+	query?: string;
+}): PageSnapshotCaptureSignature {
+	const requestedMaxEntries = params.maxEntries ?? 120;
+	const maxEntries = Math.max(1, Math.min(500, Math.trunc(requestedMaxEntries)));
+	return {
+		maxEntries,
+		includeHidden: params.includeHidden === true,
+		...(params.query ? { query: params.query } : {}),
+	};
 }
 
 export function pageSnapshotStorePath(
@@ -48,6 +69,9 @@ export class PageSnapshotStore {
 		_target: BridgeTarget,
 		snapshot: PageSnapshotBridgeResult,
 		capturedAt = new Date().toISOString(),
+		capture: PageSnapshotCaptureSignature = normalizePageSnapshotCaptureSignature({
+			query: snapshot.query,
+		}),
 	): PageSnapshotRecord {
 		const record: PageSnapshotRecord = {
 			id: this.recordId(snapshot),
@@ -59,6 +83,7 @@ export class PageSnapshotStore {
 			url: snapshot.url,
 			title: snapshot.title,
 			query: snapshot.query,
+			capture,
 			raw: snapshot,
 		};
 		this.records.set(record.id, record);

@@ -44,6 +44,8 @@ import {
 	type PageSnapshotBridgeResult,
 	type PageSnapshotRecordSummary,
 	type RegistrationMessage,
+	type SnapshotDiffParams,
+	type SnapshotDiffResult,
 } from "@shuvgeist/protocol/protocol";
 import { parseBridgeSkillSnapshot } from "@shuvgeist/protocol/skill-snapshot";
 import {
@@ -77,7 +79,13 @@ import {
 import { executeElectronTargetCommand, isElectronTargetBridgeMethod } from "./electron/target-handler-registry.js";
 import { McpHttpHandler } from "./mcp/http-server.js";
 import { createNodeConfigOwner, type NodeConfigOwner } from "./node-config.js";
-import { type PageSnapshotRecord, PageSnapshotStore, pageSnapshotStorePath } from "./page-snapshot-store.js";
+import { comparePageSnapshotRecords } from "./page-snapshot-diff.js";
+import {
+	normalizePageSnapshotCaptureSignature,
+	type PageSnapshotRecord,
+	PageSnapshotStore,
+	pageSnapshotStorePath,
+} from "./page-snapshot-store.js";
 import { BridgeRequestHandler, type BridgeRequestTargetHandle } from "./request-handler.js";
 import { SessionRegistry, type TargetSessionHandle } from "./session-registry.js";
 import { TaskRegistry } from "./task-registry.js";
@@ -262,6 +270,10 @@ export class BridgeServer {
 		},
 		snapshot_store: async ({ client, request, span }): Promise<typeof SERVER_LOCAL_RESPONSE_HANDLED> => {
 			await this.handleSnapshotStoreRequest(client, request, span);
+			return SERVER_LOCAL_RESPONSE_HANDLED;
+		},
+		snapshot_diff: async ({ client, request, span }): Promise<typeof SERVER_LOCAL_RESPONSE_HANDLED> => {
+			await this.handleSnapshotDiffRequest(client, request, span);
 			return SERVER_LOCAL_RESPONSE_HANDLED;
 		},
 		snapshot_read: (_context, params) => ({
@@ -1013,10 +1025,11 @@ export class BridgeServer {
 	): Promise<void> {
 		const target = requestTarget(req);
 		const params = this.snapshotStoreParams(req.params);
+		const capture = normalizePageSnapshotCaptureSignature(params);
 		if (isElectronTarget(target)) {
 			try {
 				const snapshot = await this.electronSessions.snapshot(target, params);
-				const record = this.pageSnapshotStore.write(target, snapshot);
+				const record = this.pageSnapshotStore.write(target, snapshot, new Date().toISOString(), capture);
 				const result = this.validatedCommandResult("snapshot_store", {
 					record: this.snapshotRecordSummary(record),
 				});
@@ -1083,7 +1096,7 @@ export class BridgeServer {
 			span,
 			transformResult: (result) => {
 				const snapshot = this.parsePageSnapshotResult(result);
-				const record = this.pageSnapshotStore.write(target, snapshot);
+				const record = this.pageSnapshotStore.write(target, snapshot, new Date().toISOString(), capture);
 				return { record: this.snapshotRecordSummary(record) };
 			},
 		});
@@ -1093,6 +1106,155 @@ export class BridgeServer {
 			params,
 			target,
 			...(span ? span.toTraceHeaders() : {}),
+		});
+	}
+
+	private async handleSnapshotDiffRequest(
+		client: ClientInfo,
+		req: BridgeRequest,
+		span?: BridgeTelemetrySpan,
+	): Promise<void> {
+		const params = this.validatedCommandParams("snapshot_diff", req.params);
+		const baseline = this.pageSnapshotStore.read({ id: params.baselineId })[0];
+		if (!baseline) {
+			this.sendSnapshotDiffResult(
+				client,
+				req.id,
+				{
+					ok: false,
+					baselineId: params.baselineId,
+					reason: "baseline_not_found",
+					message: `Snapshot baseline '${params.baselineId}' was not found.`,
+				},
+				span,
+			);
+			return;
+		}
+		const target = requestTarget(req);
+		const snapshotParams = this.snapshotStoreParams(params);
+		const capture = normalizePageSnapshotCaptureSignature(snapshotParams);
+		if (isElectronTarget(target)) {
+			try {
+				const snapshot = await this.electronSessions.snapshot(target, snapshotParams);
+				const current = this.pageSnapshotStore.write(target, snapshot, new Date().toISOString(), capture);
+				this.sendSnapshotDiffResult(
+					client,
+					req.id,
+					this.snapshotDiffResult(params.baselineId, baseline, current),
+					span,
+				);
+			} catch (error) {
+				this.sendSnapshotDiffError(client, req.id, error, span);
+			}
+			return;
+		}
+
+		if (!isChromeTarget(target)) {
+			this.sendSnapshotDiffError(
+				client,
+				req.id,
+				new BridgeCommandBoundaryError(
+					ErrorCodes.INVALID_TARGET,
+					"Cannot diff snapshot for target '" + targetTeachingLabel(target) + "'",
+				),
+				span,
+			);
+			return;
+		}
+		const handle = this.sessionRegistry.resolve(target);
+		if (!handle?.connection || handle.connection.ws.readyState !== WebSocket.OPEN) {
+			this.sendSnapshotDiffError(
+				client,
+				req.id,
+				new BridgeCommandBoundaryError(ErrorCodes.NO_EXTENSION_TARGET, "No active extension target connected"),
+				span,
+			);
+			return;
+		}
+		if (handle.capabilities && !handle.capabilities.includes("page_snapshot")) {
+			this.sendSnapshotDiffError(
+				client,
+				req.id,
+				new BridgeCommandBoundaryError(
+					ErrorCodes.CAPABILITY_DISABLED,
+					"Method 'page_snapshot' is disabled on the active extension target",
+				),
+				span,
+			);
+			return;
+		}
+
+		const relayRequestId = this.nextRelayRequestId++;
+		this.pendingRequests.set(relayRequestId, {
+			relayRequestId,
+			clientRequestId: req.id,
+			cliConnectionId: client.connectionId,
+			cliWs: client.ws,
+			method: "snapshot_diff",
+			startedAt: Date.now(),
+			targetHandleKey: handle.key,
+			span,
+			transformResult: (result) => {
+				const snapshot = this.parsePageSnapshotResult(result);
+				const current = this.pageSnapshotStore.write(target, snapshot, new Date().toISOString(), capture);
+				return this.snapshotDiffResult(params.baselineId, baseline, current);
+			},
+		});
+		this.sendJson(handle.connection.ws, {
+			id: relayRequestId,
+			method: "page_snapshot",
+			params: snapshotParams,
+			target,
+			...(span ? span.toTraceHeaders() : {}),
+		});
+	}
+
+	private snapshotDiffResult(
+		baselineId: string,
+		baseline: PageSnapshotRecord,
+		current: PageSnapshotRecord,
+	): SnapshotDiffResult {
+		const comparison = comparePageSnapshotRecords(baseline, current);
+		return comparison.ok
+			? {
+					ok: true,
+					baseline: this.snapshotRecordSummary(baseline),
+					current: this.snapshotRecordSummary(current),
+					diff: comparison.diff,
+				}
+			: { ok: false, baselineId, reason: comparison.reason, message: comparison.message };
+	}
+
+	private sendSnapshotDiffResult(
+		client: ClientInfo,
+		requestId: number,
+		result: SnapshotDiffResult,
+		span?: BridgeTelemetrySpan,
+	): void {
+		const validated = this.validatedCommandResult("snapshot_diff", result);
+		span?.setAttribute("bridge.outcome", validated.ok ? "success" : "incompatible");
+		span?.end(validated.ok ? "ok" : "error");
+		void this.telemetry?.flush();
+		this.sendJson(client.ws, { id: requestId, result: validated });
+	}
+
+	private sendSnapshotDiffError(
+		client: ClientInfo,
+		requestId: number,
+		error: unknown,
+		span?: BridgeTelemetrySpan,
+	): void {
+		const message = error instanceof Error ? error.message : String(error);
+		span?.recordError(new Error(message));
+		span?.setAttribute("bridge.outcome", "error");
+		span?.end("error");
+		void this.telemetry?.flush();
+		this.sendJson(client.ws, {
+			id: requestId,
+			error: {
+				code: error instanceof BridgeCommandBoundaryError ? error.code : ErrorCodes.EXECUTION_ERROR,
+				message,
+			},
 		});
 	}
 
@@ -1189,6 +1351,7 @@ export class BridgeServer {
 			entryCount: record.raw.entries.length,
 			totalCandidates: record.raw.totalCandidates,
 			truncated: record.raw.truncated,
+			capture: record.capture,
 		};
 	}
 
@@ -1207,6 +1370,11 @@ export class BridgeServer {
 			traceparent: request.traceparent,
 			tracestate: request.tracestate,
 		};
+		if (bridgeRequest.method === "snapshot_store" || bridgeRequest.method === "snapshot_diff") {
+			return this.executeMcpSnapshotRequest(
+				bridgeRequest as BridgeRequest & { method: "snapshot_store" | "snapshot_diff" },
+			);
+		}
 		const plan = this.requestHandler.plan(bridgeRequest, {
 			cliConnectionId: "mcp",
 			resolveTarget: (target) => this.resolveRequestTargetHandle(target),
@@ -1240,6 +1408,89 @@ export class BridgeServer {
 				...bridgeRequest,
 				id: relayRequestId,
 				target: plan.target,
+			});
+		});
+	}
+
+	private executeMcpSnapshotRequest(
+		request: BridgeRequest & { method: "snapshot_store" | "snapshot_diff" },
+	): Promise<BridgeResponse> {
+		const paramsValidation = validateBridgeCommandParams(request.method, request.params);
+		if (!paramsValidation.ok) {
+			return Promise.resolve({
+				id: request.id,
+				error: {
+					code: ErrorCodes.INVALID_PARAMS,
+					message: `Invalid parameters for '${request.method}': ${formatBridgeCommandValidationErrors(paramsValidation.errors)}`,
+				},
+			});
+		}
+		const params = paramsValidation.value;
+		const baselineId = request.method === "snapshot_diff" ? (params as SnapshotDiffParams).baselineId : undefined;
+		const baseline =
+			request.method === "snapshot_diff" ? this.pageSnapshotStore.read({ id: baselineId })[0] : undefined;
+		if (request.method === "snapshot_diff" && !baseline) {
+			return Promise.resolve({
+				id: request.id,
+				result: this.validatedCommandResult("snapshot_diff", {
+					ok: false,
+					baselineId,
+					reason: "baseline_not_found",
+					message: `Snapshot baseline '${baselineId}' was not found.`,
+				}),
+			});
+		}
+		const target = requestTarget(request);
+		if (!isChromeTarget(target)) {
+			return Promise.resolve({
+				id: request.id,
+				error: {
+					code: ErrorCodes.INVALID_TARGET,
+					message: "MCP snapshot store and diff currently require a Chrome extension target.",
+				},
+			});
+		}
+		const handle = this.sessionRegistry.resolve(target);
+		if (!handle?.connection || handle.connection.ws.readyState !== WebSocket.OPEN) {
+			return Promise.resolve({
+				id: request.id,
+				error: { code: ErrorCodes.NO_EXTENSION_TARGET, message: "No active extension target connected" },
+			});
+		}
+		if (handle.capabilities && !handle.capabilities.includes("page_snapshot")) {
+			return Promise.resolve({
+				id: request.id,
+				error: {
+					code: ErrorCodes.CAPABILITY_DISABLED,
+					message: "Method 'page_snapshot' is disabled on the active extension target",
+				},
+			});
+		}
+		const snapshotParams = this.snapshotStoreParams(params);
+		const capture = normalizePageSnapshotCaptureSignature(snapshotParams);
+		const relayRequestId = this.nextRelayRequestId++;
+		return new Promise<BridgeResponse>((resolve) => {
+			this.pendingRequests.set(relayRequestId, {
+				relayRequestId,
+				clientRequestId: request.id,
+				cliConnectionId: "mcp",
+				method: request.method,
+				startedAt: Date.now(),
+				targetHandleKey: handle.key,
+				respond: resolve,
+				transformResult: (result) => {
+					const snapshot = this.parsePageSnapshotResult(result);
+					const current = this.pageSnapshotStore.write(target, snapshot, new Date().toISOString(), capture);
+					return request.method === "snapshot_store"
+						? { record: this.snapshotRecordSummary(current) }
+						: this.snapshotDiffResult(baselineId as string, baseline as PageSnapshotRecord, current);
+				},
+			});
+			this.sendJson(handle.connection.ws, {
+				id: relayRequestId,
+				method: "page_snapshot",
+				params: snapshotParams,
+				target,
 			});
 		});
 	}

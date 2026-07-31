@@ -25,6 +25,25 @@ describe("mcp tool adapter", () => {
 		});
 	});
 
+	it("maps observe storage and semantic diff modes through the same capability-gated surface", () => {
+		expect(mcpToolCallToBridgeRequest(2, "shuvgeist_observe", { store: true, maxEntries: 50 })).toMatchObject({
+			method: "snapshot_store",
+			params: { maxEntries: 50 },
+		});
+		expect(
+			mcpToolCallToBridgeRequest(3, "shuvgeist_observe", {
+				baselineId: "chrome:7:frame:0:generation:1:snapshot:100",
+				query: "billing",
+			}),
+		).toMatchObject({
+			method: "snapshot_diff",
+			params: {
+				baselineId: "chrome:7:frame:0:generation:1:snapshot:100",
+				query: "billing",
+			},
+		});
+	});
+
 	it("maps act, extract, and agent calls to bridge methods", () => {
 		expect(mcpToolCallToBridgeRequest(2, "shuvgeist_act", { action: "click", refId: "e1" })).toMatchObject({
 			method: "ref_click",

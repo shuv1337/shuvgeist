@@ -1334,7 +1334,9 @@ Usage:
   shuvgeist cookies [--json] [--timeout 120s]
   shuvgeist select <message> [--json] [--timeout none]
   shuvgeist workflow <run|validate> (--file workflow.json | --inline '{...}') [--arg key=value]
-  shuvgeist snapshot [--tab-id N] [--frame-id N] [--max-entries N] [--json]
+  shuvgeist snapshot [--tab-id N] [--frame-id N] [--max-entries N] [--query text] [--json]
+  shuvgeist snapshot store [snapshot options] [--json]
+  shuvgeist snapshot diff <baseline-record-id> [snapshot options] [--json]
                     (snapshotIds are usable as refIds)
   shuvgeist locate <role|text|label> <query> [--tab-id N] [--frame-id N] [--json]
   shuvgeist ref <click|fill> <refId> [--value text] [--native | --trusted] [--tab-id N] [--frame-id N] [--timeout 5s] [--json]

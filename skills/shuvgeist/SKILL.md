@@ -68,7 +68,7 @@ Important operational facts:
 - **Session commands** such as `session`, `inject`, `new-session`, `set-model`, and `artifacts` require an accepted offscreen-backed session. Once created, that session remains available while its sidepanel is closed.
 - Sensitive commands are gated by Bridge settings.
 - Chrome/Edge is the default target. Electron commands require `--target electron:...` unless they are `shuvgeist electron ...` management commands.
-- Some bridge methods are server-local or do not have a first-class CLI wrapper. Do not invent CLI commands for `snapshot_store`, `snapshot_read`, `cookie_import`, or the direct-CDP headless adapter. MCP exposes only its declared tools; it is not a generic wrapper for every bridge method.
+- Some bridge methods are server-local or do not have a first-class CLI wrapper. Do not invent CLI commands for `snapshot_read`, `cookie_import`, or the direct-CDP headless adapter. MCP exposes only its declared tools; it is not a generic wrapper for every bridge method.
 
 ## First command
 
@@ -647,27 +647,34 @@ Use snapshots when you need a compact semantic representation of the current pag
 shuvgeist snapshot --json
 shuvgeist snapshot --tab-id 123 --frame-id 7 --max-entries 80 --json
 shuvgeist snapshot --include-hidden --json
+shuvgeist snapshot --query "billing" --json
 ```
 
-Options: `--max-entries <N>` caps how many entries are returned; `--include-hidden` adds hidden / `aria-hidden` elements (omitted by default).
+Options: `--max-entries <N>` caps how many entries are returned; `--include-hidden` adds hidden / `aria-hidden` elements (omitted by default); `--query <text>` retains entries relevant to a semantic query.
 
 Snapshots return semantic entries, candidate selectors, page metadata, and stable `snapshotId` values. Each entry's `snapshotId` is the same value as the `refId` returned by `locate` — pass it directly to `shuvgeist ref click|fill <id>`.
 
-### Server-side snapshot store
+### Stored snapshots and semantic diffs
 
-The normal CLI `snapshot --json` returns the current compact snapshot directly. The bridge also has server-local `snapshot_store` and `snapshot_read` methods for clients that need to persist raw pre-filter snapshot records without dumping them into every response.
+The normal CLI `snapshot --json` returns the current compact snapshot directly. Store a compatible baseline and compare a later capture with:
 
-This is not exposed as a top-level CLI command and is not a current MCP tool. Use it from raw bridge integrations or custom WebSocket clients.
+```bash
+baseline_id="$(shuvgeist snapshot store --max-entries 80 --query save --json | jq -r '.record.id')"
+shuvgeist snapshot diff "$baseline_id" --max-entries 80 --query save --json
+```
 
-Bridge method shapes:
+The baseline and current capture must have the same exact resolved target, frame, navigation generation, query, entry budget, and hidden-element policy. Truncated snapshots fail closed because removals cannot be proven. Added and changed entries contain current `refId` values; removed and previous states intentionally contain no actionable snapshot ID.
+
+MCP exposes the same modes through `shuvgeist_observe`: pass `store: true` to create a baseline, then pass its `record.id` as `baselineId` with the same query/budget arguments.
+
+The bridge retains `snapshot_read` for raw integrations that need stored records:
 
 ```json
-{ "method": "snapshot_store", "params": { "tabId": 42, "frameId": 7, "maxEntries": 80, "query": "save" } }
 { "method": "snapshot_read", "params": { "id": "chrome:active:42:frame:7:snapshot:12345" } }
 { "method": "snapshot_read", "params": { "snapshotId": "e1" } }
 ```
 
-`snapshot_store` relays `page_snapshot` to the target, stores the raw result in the local bridge, and returns a record summary. `snapshot_read` returns matching stored records with raw entries.
+`snapshot_read` has no top-level CLI command and returns matching stored records with raw entries.
 
 ### Semantic locate
 

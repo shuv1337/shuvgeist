@@ -207,6 +207,8 @@ shuvgeist record start --out /tmp/example.webm --max-duration 5s
 shuvgeist repl 'return await browserjs(() => document.title)'
 shuvgeist assert text "Example Domain" --timeout 10s
 shuvgeist snapshot --json
+baseline_id="$(shuvgeist snapshot store --json | jq -r '.record.id')"
+shuvgeist snapshot diff "$baseline_id" --json
 shuvgeist locate text "Sign in" --json
 ```
 

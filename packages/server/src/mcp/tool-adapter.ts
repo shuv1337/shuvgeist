@@ -41,6 +41,8 @@ export const MCP_TOOL_DEFINITIONS: McpToolDefinition[] = [
 				query: { type: "string" },
 				maxEntries: { type: "number" },
 				includeHidden: { type: "boolean" },
+				store: { type: "boolean" },
+				baselineId: { type: "string" },
 				target: targetSchema,
 			},
 			additionalProperties: false,
@@ -103,16 +105,20 @@ export function mcpToolCallToBridgeRequest(id: number, name: string, args: Recor
 export function mcpToolCallToBridgePlan(name: string, args: Record<string, unknown>): McpToolBridgePlan {
 	const target = parseTarget(args.target);
 	switch (name) {
-		case "shuvgeist_observe":
+		case "shuvgeist_observe": {
+			const baselineId = stringArg(args, "baselineId");
+			const params = compactParams({
+				query: stringArg(args, "query"),
+				maxEntries: numberArg(args, "maxEntries"),
+				includeHidden: booleanArg(args, "includeHidden"),
+				...(baselineId ? { baselineId } : {}),
+			});
 			return {
-				method: "page_snapshot",
-				params: compactParams({
-					query: stringArg(args, "query"),
-					maxEntries: numberArg(args, "maxEntries"),
-					includeHidden: booleanArg(args, "includeHidden"),
-				}),
+				method: baselineId ? "snapshot_diff" : booleanArg(args, "store") ? "snapshot_store" : "page_snapshot",
+				params,
 				target,
 			};
+		}
 		case "shuvgeist_act": {
 			const action = stringArg(args, "action") || "click";
 			const refId = requiredStringArg(args, "refId");

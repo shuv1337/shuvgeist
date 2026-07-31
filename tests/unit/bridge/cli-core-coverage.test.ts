@@ -77,6 +77,32 @@ describe("cli-core coverage cases", () => {
 		expect(createCommandPlan("status", [], {}, readFileText)).toEqual({ kind: "status" });
 		expect(createCommandPlan("doctor", [], {}, readFileText)).toEqual({ kind: "doctor" });
 		expect(createCommandPlan("serve", [], {}, readFileText)).toEqual({ kind: "serve" });
+		expect(
+			createCommandPlan(
+				"snapshot",
+				["store"],
+				{ maxEntries: "25", includeHidden: true, query: "billing" },
+				readFileText,
+			),
+		).toEqual({
+			kind: "one-shot",
+			method: "snapshot_store",
+			params: { maxEntries: 25, includeHidden: true, query: "billing" },
+			defaultTimeoutMs: 120_000,
+		});
+		expect(
+			createCommandPlan(
+				"snapshot",
+				["diff", "baseline-record"],
+				{ maxEntries: "25", query: "billing" },
+				readFileText,
+			),
+		).toEqual({
+			kind: "one-shot",
+			method: "snapshot_diff",
+			params: { baselineId: "baseline-record", maxEntries: 25, query: "billing" },
+			defaultTimeoutMs: 120_000,
+		});
 		expect(createCommandPlan("screenshot", [], { maxWidth: "640" }, readFileText)).toEqual({
 			kind: "screenshot",
 			params: { maxWidth: 640 },

@@ -1125,7 +1125,7 @@ describe("BridgeServer", () => {
 					generatedAt: 12345,
 					totalCandidates: 9,
 					truncated: false,
-					entries: [validSnapshotEntry(42, 7)],
+					entries: [{ ...validSnapshotEntry(42, 7), stableElementId: "stable-save" }],
 				},
 			}),
 		);
@@ -1151,6 +1151,61 @@ describe("BridgeServer", () => {
 		expect(JSON.stringify(stored)).not.toContain("entries");
 
 		const recordId = (stored.result as { record: { id: string } }).record.id;
+		const diffResponse = sendRequestAndReadResponse(cli.ws, {
+			id: 91,
+			method: "snapshot_diff",
+			params: { baselineId: recordId, tabId: 42, frameId: 7, maxEntries: 25, query: "save" },
+		});
+		const diffRelayed = await readMessage<{ id: number; method: string; params?: unknown }>(extension.ws);
+		expect(diffRelayed).toMatchObject({
+			method: "page_snapshot",
+			params: { tabId: 42, frameId: 7, maxEntries: 25, query: "save" },
+		});
+		extension.ws.send(
+			JSON.stringify({
+				id: diffRelayed.id,
+				result: {
+					target: { kind: "chrome-tab", tabId: 42, frameId: 7 },
+					navigationGeneration: 0,
+					tabId: 42,
+					frameId: 7,
+					query: "save",
+					url: "https://example.test/settings",
+					title: "Settings",
+					generatedAt: 12346,
+					totalCandidates: 1,
+					truncated: false,
+					entries: [
+						{
+							...validSnapshotEntry(42, 7, "current:ref1"),
+							stableElementId: "stable-save",
+							name: "Save changes",
+						},
+					],
+				},
+			}),
+		);
+		await expect(diffResponse).resolves.toMatchObject({
+			id: 91,
+			result: {
+				ok: true,
+				baseline: { id: recordId, capture: { maxEntries: 25, includeHidden: false, query: "save" } },
+				current: { id: "chrome:42:frame:7:generation:0:snapshot:12346" },
+				diff: {
+					unchangedCount: 0,
+					added: [],
+					changed: [
+						{
+							identity: "stable:stable-save",
+							refId: "current:ref1",
+							previous: { name: "Save" },
+							current: { snapshotId: "current:ref1", name: "Save changes" },
+						},
+					],
+					removed: [],
+				},
+			},
+		});
 		await expect(
 			sendRequestAndReadResponse(cli.ws, { id: 89, method: "snapshot_read", params: { id: recordId } }),
 		).resolves.toMatchObject({
@@ -1344,6 +1399,104 @@ describe("BridgeServer", () => {
 				},
 			},
 		});
+		const storeCall = fetch(`http://127.0.0.1:${port}/mcp`, {
+			method: "POST",
+			headers: { authorization: "Bearer secret-token", "content-type": "application/json" },
+			body: JSON.stringify({
+				jsonrpc: "2.0",
+				id: 6,
+				method: "tools/call",
+				params: {
+					name: "shuvgeist_observe",
+					arguments: {
+						store: true,
+						query: "save",
+						maxEntries: 10,
+						target: { kind: "chrome-tab", tabRef: "window:64" },
+					},
+				},
+			}),
+		});
+		const storeRelayed = await readMessage<{ id: number; method: string }>(extension.ws);
+		expect(storeRelayed.method).toBe("page_snapshot");
+		extension.ws.send(
+			JSON.stringify({
+				id: storeRelayed.id,
+				result: {
+					...validPageSnapshotResult(64, 0, "stored:ref1"),
+					query: "save",
+					generatedAt: 2,
+					entries: [
+						{ ...validSnapshotEntry(64, 0, "stored:ref1"), stableElementId: "stable-save" },
+					],
+				},
+			}),
+		);
+		const storeJson = await (await storeCall).json();
+		const baselineId = storeJson.result.structuredContent.result.record.id as string;
+		expect(storeJson).toMatchObject({
+			id: 6,
+			result: {
+				structuredContent: {
+					result: {
+						record: {
+							capture: { maxEntries: 10, includeHidden: false, query: "save" },
+						},
+					},
+				},
+			},
+		});
+
+		const diffCall = fetch(`http://127.0.0.1:${port}/mcp`, {
+			method: "POST",
+			headers: { authorization: "Bearer secret-token", "content-type": "application/json" },
+			body: JSON.stringify({
+				jsonrpc: "2.0",
+				id: 7,
+				method: "tools/call",
+				params: {
+					name: "shuvgeist_observe",
+					arguments: {
+						baselineId,
+						query: "save",
+						maxEntries: 10,
+						target: { kind: "chrome-tab", tabRef: "window:64" },
+					},
+				},
+			}),
+		});
+		const diffRelayed = await readMessage<{ id: number; method: string }>(extension.ws);
+		expect(diffRelayed.method).toBe("page_snapshot");
+		extension.ws.send(
+			JSON.stringify({
+				id: diffRelayed.id,
+				result: {
+					...validPageSnapshotResult(64, 0, "current:ref1"),
+					query: "save",
+					generatedAt: 3,
+					entries: [
+						{
+							...validSnapshotEntry(64, 0, "current:ref1"),
+							stableElementId: "stable-save",
+							name: "Save changes",
+						},
+					],
+				},
+			}),
+		);
+		await expect((await diffCall).json()).resolves.toMatchObject({
+			id: 7,
+			result: {
+				structuredContent: {
+					result: {
+						ok: true,
+						diff: {
+							changed: [{ identity: "stable:stable-save", refId: "current:ref1" }],
+						},
+					},
+				},
+			},
+		});
 		const actPromise = fetch(`http://127.0.0.1:${port}/mcp`, {
 			method: "POST",
 			headers: { authorization: "Bearer secret-token", "content-type": "application/json" },
@@ -1409,10 +1562,20 @@ describe("BridgeServer", () => {
 		await expect(tasksResponse.json()).resolves.toMatchObject({
 			id: 5,
 			result: {
-				tasks: [
+				tasks: expect.arrayContaining([
 					expect.objectContaining({ kind: "shuvgeist_observe", status: "succeeded" }),
+					expect.objectContaining({
+						kind: "shuvgeist_observe",
+						status: "succeeded",
+						metadata: expect.objectContaining({ bridgeMethod: "snapshot_store" }),
+					}),
+					expect.objectContaining({
+						kind: "shuvgeist_observe",
+						status: "succeeded",
+						metadata: expect.objectContaining({ bridgeMethod: "snapshot_diff" }),
+					}),
 					expect.objectContaining({ kind: "shuvgeist_act", status: "succeeded" }),
-				],
+				]),
 			},
 		});
 		extension.ws.close();

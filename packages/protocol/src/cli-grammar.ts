@@ -67,6 +67,7 @@ export const CliFlagDefinitions = [
 	{ names: ["--title-pattern"], key: "titlePattern", kind: "string" },
 	{ names: ["--window-id"], key: "windowId", kind: "string" },
 	{ names: ["--search"], key: "search", kind: "string" },
+	{ names: ["--query"], key: "query", kind: "string" },
 	{ names: ["--preset"], key: "preset", kind: "string" },
 	{ names: ["--width"], key: "width", kind: "string" },
 	{ names: ["--height"], key: "height", kind: "string" },

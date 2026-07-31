@@ -208,12 +208,18 @@ const workflowValidateParamsSchema = Type.Object(
 	{ additionalProperties: false },
 );
 
-const pageSnapshotParamsSchema = Type.Object(
+const pageSnapshotParamProperties = {
+	...targetedBridgeParamProperties,
+	maxEntries: Type.Optional(Type.Integer({ minimum: 1 })),
+	includeHidden: Type.Optional(Type.Boolean()),
+	query: Type.Optional(Type.String()),
+};
+const pageSnapshotParamsSchema = Type.Object(pageSnapshotParamProperties, { additionalProperties: false });
+
+const snapshotDiffParamsSchema = Type.Object(
 	{
-		...targetedBridgeParamProperties,
-		maxEntries: Type.Optional(Type.Integer({ minimum: 1 })),
-		includeHidden: Type.Optional(Type.Boolean()),
-		query: Type.Optional(Type.String()),
+		...pageSnapshotParamProperties,
+		baselineId: Type.String({ minLength: 1 }),
 	},
 	{ additionalProperties: false },
 );
@@ -785,11 +791,97 @@ const snapshotRecordSummarySchema = Type.Object({
 	entryCount: Type.Integer({ minimum: 0 }),
 	totalCandidates: Type.Integer({ minimum: 0 }),
 	truncated: Type.Boolean(),
+	capture: Type.Optional(
+		Type.Object(
+			{
+				maxEntries: Type.Integer({ minimum: 1, maximum: 500 }),
+				includeHidden: Type.Boolean(),
+				query: Type.Optional(Type.String()),
+			},
+			{ additionalProperties: false },
+		),
+	),
 });
 const snapshotStoreResultSchema = Type.Object({ record: snapshotRecordSummarySchema });
 const snapshotReadResultSchema = Type.Object({
 	records: Type.Array(Type.Intersect([snapshotRecordSummarySchema, Type.Object({ raw: pageSnapshotResultSchema })])),
 });
+const snapshotEntryStateSchema = Type.Object(
+	{
+		stableElementId: Type.Optional(Type.String()),
+		tagName: Type.String(),
+		role: Type.Optional(Type.String()),
+		name: Type.Optional(Type.String()),
+		text: Type.Optional(Type.String()),
+		label: Type.Optional(Type.String()),
+		attributes: stringMapSchema,
+		ordinalPath: Type.Array(Type.Integer({ minimum: 0 })),
+		boundingBox: boundingBoxSchema,
+		interactive: Type.Boolean(),
+		headingLevel: Type.Optional(Type.Integer({ minimum: 1, maximum: 6 })),
+		landmark: Type.Optional(Type.String()),
+	},
+	{ additionalProperties: false },
+);
+const snapshotDiffFailureReasonSchema = Type.Union([
+	Type.Literal("baseline_not_found"),
+	Type.Literal("target_mismatch"),
+	Type.Literal("frame_mismatch"),
+	Type.Literal("navigation_generation_mismatch"),
+	Type.Literal("capture_signature_missing"),
+	Type.Literal("query_mismatch"),
+	Type.Literal("budget_mismatch"),
+	Type.Literal("truncated_snapshot"),
+	Type.Literal("ambiguous_identity"),
+]);
+const snapshotDiffResultSchema = Type.Union([
+	Type.Object(
+		{
+			ok: Type.Literal(false),
+			baselineId: Type.String(),
+			reason: snapshotDiffFailureReasonSchema,
+			message: Type.String(),
+		},
+		{ additionalProperties: false },
+	),
+	Type.Object(
+		{
+			ok: Type.Literal(true),
+			baseline: snapshotRecordSummarySchema,
+			current: snapshotRecordSummarySchema,
+			diff: Type.Object(
+				{
+					unchangedCount: Type.Integer({ minimum: 0 }),
+					added: Type.Array(
+						Type.Object(
+							{ identity: Type.String(), refId: Type.String(), current: snapshotEntrySchema },
+							{ additionalProperties: false },
+						),
+					),
+					changed: Type.Array(
+						Type.Object(
+							{
+								identity: Type.String(),
+								refId: Type.String(),
+								previous: snapshotEntryStateSchema,
+								current: snapshotEntrySchema,
+							},
+							{ additionalProperties: false },
+						),
+					),
+					removed: Type.Array(
+						Type.Object(
+							{ identity: Type.String(), previous: snapshotEntryStateSchema },
+							{ additionalProperties: false },
+						),
+					),
+				},
+				{ additionalProperties: false },
+			),
+		},
+		{ additionalProperties: false },
+	),
+]);
 const snapshotLocatorMatchSchema = Type.Object({
 	refId: Type.String(),
 	score: Type.Number(),
@@ -1590,6 +1682,7 @@ export const BridgeCommandDefinitions = [
 					...cliTargetFlags,
 					cliFlag("maxEntries", { param: "maxEntries", parse: "integer" }),
 					cliFlag("includeHidden", { param: "includeHidden", parse: "boolean" }),
+					cliFlag("query", { param: "query" }),
 				],
 				positionals: [],
 				codec: "generic",
@@ -1604,10 +1697,55 @@ export const BridgeCommandDefinitions = [
 		capabilities: ["snapshot_store"],
 		route: "server-local",
 		targets: [],
-		cli: noCli("server-internal"),
+		cli: bridgeCli(
+			defineCliBinding({
+				family: "snapshot",
+				select: ["store"],
+				usage: "Usage: shuvgeist snapshot store [--max-entries N] [--include-hidden] [--query text]",
+				flags: [
+					...cliTargetFlags,
+					cliFlag("maxEntries", { param: "maxEntries", parse: "integer" }),
+					cliFlag("includeHidden", { param: "includeHidden", parse: "boolean" }),
+					cliFlag("query", { param: "query" }),
+				],
+				positionals: [],
+				codec: "generic",
+			}),
+		),
 		defaultTimeout: "slow",
 		params: pageSnapshotParamsSchema,
 		result: snapshotStoreResultSchema,
+	},
+	{
+		method: "snapshot_diff",
+		capabilities: ["snapshot_diff"],
+		route: "server-local",
+		targets: [],
+		cli: bridgeCli(
+			defineCliBinding({
+				family: "snapshot",
+				select: ["diff"],
+				usage: "Usage: shuvgeist snapshot diff <baseline-record-id> [--max-entries N] [--include-hidden] [--query text]",
+				flags: [
+					...cliTargetFlags,
+					cliFlag("maxEntries", { param: "maxEntries", parse: "integer" }),
+					cliFlag("includeHidden", { param: "includeHidden", parse: "boolean" }),
+					cliFlag("query", { param: "query" }),
+				],
+				positionals: [
+					cliPositional("baselineId", {
+						source: "index",
+						index: 0,
+						param: "baselineId",
+						required: true,
+					}),
+				],
+				codec: "generic",
+			}),
+		),
+		defaultTimeout: "slow",
+		params: snapshotDiffParamsSchema,
+		result: snapshotDiffResultSchema,
 	},
 	{
 		method: "snapshot_read",
