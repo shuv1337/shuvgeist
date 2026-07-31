@@ -1333,6 +1333,8 @@ Usage:
   shuvgeist assert <expr|text|selector|role|label|url> <query> [--tab-id N] [--frame-id N] [--json]
   shuvgeist cookies [--json] [--timeout 120s]
   shuvgeist select <message> [--json] [--timeout none]
+  shuvgeist handoff <task-id> <session-id> [--kind manual|browser-native]
+                    [--message text] [--target target] [--timeout 2m] [--json]
   shuvgeist workflow <run|validate> (--file workflow.json | --inline '{...}') [--arg key=value]
   shuvgeist snapshot [--tab-id N] [--frame-id N] [--max-entries N] [--query text] [--json]
   shuvgeist snapshot store [snapshot options] [--json]

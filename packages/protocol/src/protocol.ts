@@ -181,6 +181,7 @@ export type BridgeEventType =
 	| "session_message"
 	| "session_tool"
 	| "session_run_state"
+	| "handoff_lifecycle"
 	| "record_frame"
 	| "record_chunk";
 
@@ -227,6 +228,8 @@ export type CookiesParams = BridgeCommandParams<"cookies">;
 export type CookieImportParams = BridgeCommandParams<"cookie_import">;
 export type CookieImportApplyParams = BridgeCommandParams<"cookie_import_apply">;
 export type SelectElementParams = BridgeCommandParams<"select_element">;
+export type HandoffStartParams = BridgeCommandParams<"handoff_start">;
+export type HandoffStartResult = BridgeCommandResult<"handoff_start">;
 export type WorkflowRunParams = BridgeCommandParams<"workflow_run">;
 export type WorkflowValidateParams = BridgeCommandParams<"workflow_validate">;
 export type PageSnapshotBridgeParams = BridgeCommandParams<"page_snapshot">;

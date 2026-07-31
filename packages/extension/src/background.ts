@@ -70,6 +70,7 @@ import {
 } from "./bridge/browser-command-executor.js";
 import { ChromePageDriverRegistry } from "./bridge/chrome-page-driver-registry.js";
 import { BridgeClient, type BridgeConnectionState } from "./bridge/extension-client.js";
+import { sharedHandoffCoordinator } from "./bridge/handoff-coordinator.js";
 import type {
 	AgentRuntimeAbortIntent,
 	AgentRuntimeConnectionDescriptor,
@@ -1279,6 +1280,18 @@ interface BridgeWindowSession {
 }
 
 const bridgeWindowSessions = new Map<number, BridgeWindowSession>();
+sharedHandoffCoordinator.subscribe((event) => {
+	bridgeWindowSessions.get(event.windowId)?.client.sendEvent("handoff_lifecycle", {
+		handoffId: event.handoffId,
+		taskId: event.taskId,
+		sessionId: event.sessionId,
+		kind: event.kind,
+		target: { kind: "chrome-tab", tabId: event.tabId, frameId: event.frameId },
+		navigationGeneration: event.navigationGeneration,
+		state: event.state,
+		at: event.at,
+	});
+});
 const bridgeSettingsStorage = createChromeStorageBridgeSettingsAdapter();
 let currentSettings: BridgeSettings | null = null;
 let bootstrapSettingsPromise: Promise<BridgeSettings> | null = null;
@@ -1488,6 +1501,18 @@ async function executeAgentRuntimePageOperation(input: AgentRuntimePageDelegateI
 			);
 		case "page-snapshot":
 			return executor.dispatch("page_snapshot", input.payload, input.signal, input.trace);
+		case "human-handoff":
+			return executor.dispatch(
+				"handoff_start",
+				{
+					...input.payload,
+					taskId: input.executionRequestId,
+					sessionId: input.sessionId,
+					...(input.target.frameId !== undefined ? { frameId: input.target.frameId } : {}),
+				},
+				input.signal,
+				input.trace,
+			);
 		case "select-element":
 			return executor.dispatch("select_element", input.payload, input.signal, input.trace);
 		case "screenshot":
@@ -1657,6 +1682,7 @@ async function disposeBridgeWindowResources(windowId: number): Promise<void> {
 	bridgeWindowSessions.delete(windowId);
 	recordingToolsByWindowId.delete(windowId);
 	pageDriverRegistriesByWindowId.delete(windowId);
+	sharedHandoffCoordinator.cancelWindow(windowId);
 
 	session?.client.disconnect();
 
@@ -2025,6 +2051,14 @@ chrome.action.onClicked.addListener((tab: chrome.tabs.Tab) => {
 // from background-initiated chrome.userScripts.execute() invocations)
 if (chrome.runtime.onUserScriptMessage) {
 	chrome.runtime.onUserScriptMessage.addListener((message, sender, sendResponse) => {
+		if (runtimeRecord(message) && message.type === "shuvgeist-handoff-lifecycle") {
+			const response = sharedHandoffCoordinator.acceptPageEvent(message, {
+				tabId: sender.tab?.id,
+				frameId: sender.frameId,
+			});
+			sendResponse(response);
+			return false;
+		}
 		if (runtimeRecord(message) && message.type === "agent-runtime-abort-intent") {
 			void handleAgentRuntimeAbortIntent(message, sender)
 				.then((response) => sendResponse(response))

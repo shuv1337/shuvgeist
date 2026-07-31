@@ -15,6 +15,7 @@ import {
 import {
 	BROWSERJS_WRAPPER_INJECTED_ARTIFACT,
 	ELEMENT_PICKER_INJECTED_ARTIFACT,
+	HANDOFF_INJECTED_ARTIFACT,
 	PAGE_EXECUTION_INJECTED_ARTIFACT,
 	REPL_OVERLAY_INJECTED_ARTIFACT,
 } from "@shuvgeist/extension/injected/extension-artifacts.generated";
@@ -40,6 +41,7 @@ const EXTENSION_ARTIFACTS = [
 	PAGE_EXECUTION_INJECTED_ARTIFACT,
 	REPL_OVERLAY_INJECTED_ARTIFACT,
 	ELEMENT_PICKER_INJECTED_ARTIFACT,
+	HANDOFF_INJECTED_ARTIFACT,
 ] as const satisfies readonly InjectedArtifactDescriptor[];
 
 const ARTIFACTS = [...DRIVER_ARTIFACTS, ...EXTENSION_ARTIFACTS] as const;
@@ -81,6 +83,7 @@ describe("generated injected artifacts", () => {
 				expect.stringMatching(/src\/injected\/page-ref-action\.ts$/),
 				expect.stringMatching(/src\/injected\/repl-overlay\.ts$/),
 				expect.stringMatching(/src\/injected\/element-picker\.ts$/),
+				expect.stringMatching(/src\/injected\/handoff\.ts$/),
 			]),
 		);
 	});

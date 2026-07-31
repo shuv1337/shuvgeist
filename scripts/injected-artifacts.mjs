@@ -53,6 +53,11 @@ const artifactGroups = [
 				entryPoint: join(extensionRoot, "src/injected/element-picker.ts"),
 				globalName: "__SHUVGEIST_INJECTED_ELEMENT_PICKER__",
 			},
+			{
+				exportName: "HANDOFF_INJECTED_ARTIFACT",
+				entryPoint: join(extensionRoot, "src/injected/handoff.ts"),
+				globalName: "__SHUVGEIST_INJECTED_HANDOFF__",
+			},
 		],
 	},
 ];

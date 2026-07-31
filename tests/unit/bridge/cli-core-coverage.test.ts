@@ -161,6 +161,27 @@ describe("cli-core coverage cases", () => {
 			kind: "usage-error",
 			message: "Usage: shuvgeist select <message>",
 		});
+		expect(
+			createCommandPlan(
+				"handoff",
+				["task-1", "session-1"],
+				{ kind: "manual", message: "Complete sign-in", timeout: "2m", tabId: "42" },
+				readFileText,
+			),
+		).toEqual({
+			kind: "one-shot",
+			method: "handoff_start",
+			params: {
+				taskId: "task-1",
+				sessionId: "session-1",
+				kind: "manual",
+				message: "Complete sign-in",
+				timeoutMs: 120_000,
+				tabId: 42,
+			},
+			defaultTimeoutMs: undefined,
+			target: { kind: "chrome-tab", tabId: 42 },
+		});
 		expect(createCommandPlan("mystery", [], {}, readFileText)).toEqual({
 			kind: "usage-error",
 			message: "Unknown command: mystery",

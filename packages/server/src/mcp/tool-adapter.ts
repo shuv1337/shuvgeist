@@ -90,6 +90,24 @@ export const MCP_TOOL_DEFINITIONS: McpToolDefinition[] = [
 			additionalProperties: false,
 		},
 	},
+	{
+		name: "shuvgeist_handoff",
+		description: "Pause automation for an exact, target-bound human handoff.",
+		inputSchema: {
+			type: "object",
+			properties: {
+				taskId: { type: "string" },
+				sessionId: { type: "string" },
+				kind: { type: "string", enum: ["manual", "browser-native"] },
+				message: { type: "string" },
+				timeoutMs: { type: "number" },
+				triggerRefId: { type: "string" },
+				triggerMode: { type: "string", enum: ["dom", "cdp-trusted"] },
+				target: targetSchema,
+			},
+			additionalProperties: false,
+		},
+	},
 ];
 
 export function mcpToolCallToBridgeRequest(id: number, name: string, args: Record<string, unknown>): BridgeRequest {
@@ -152,6 +170,28 @@ export function mcpToolCallToBridgePlan(name: string, args: Record<string, unkno
 				}),
 				target,
 			};
+		case "shuvgeist_handoff": {
+			const triggerRefId = stringArg(args, "triggerRefId");
+			return {
+				method: "handoff_start",
+				params: compactParams({
+					taskId: requiredStringArg(args, "taskId"),
+					sessionId: requiredStringArg(args, "sessionId"),
+					kind: stringArg(args, "kind"),
+					message: stringArg(args, "message"),
+					timeoutMs: numberArg(args, "timeoutMs"),
+					...(triggerRefId
+						? {
+								trigger: compactParams({
+									refId: triggerRefId,
+									mode: stringArg(args, "triggerMode"),
+								}),
+							}
+						: {}),
+				}),
+				target,
+			};
+		}
 		default:
 			throw new Error("Unknown MCP tool '" + name + "'");
 	}

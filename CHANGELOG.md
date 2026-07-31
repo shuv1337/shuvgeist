@@ -8,6 +8,7 @@
 
 ### Added
 
+- Exact-target human handoffs pause the extension agent, CLI, or MCP caller behind an in-page acknowledgement and resume overlay, with generation-bound completion and fail-closed timeout/cancellation.
 - Target-safe semantic snapshot diffs compare stored, compatible normalized snapshots and return deterministic added, changed, removed, and unchanged entries while minting refs only for current entries.
 - Exact source/build fingerprints now identify the CLI, bridge, and connected extension, and the read-only `shuvgeist doctor` command reports package, protocol, artifact, authentication, ffmpeg, and stale-instance diagnostics with stable JSON codes.
 - Tab lifecycle: close tabs by Chrome tab ID or title/url filter via navigate tool and `shuvgeist tabs close`, with dry-run and `--yes` safety for filters.

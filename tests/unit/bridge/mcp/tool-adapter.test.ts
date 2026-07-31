@@ -1,12 +1,13 @@
 import { MCP_TOOL_DEFINITIONS, mcpToolCallToBridgeRequest } from "@shuvgeist/server/mcp/tool-adapter";
 
 describe("mcp tool adapter", () => {
-	it("exposes observe, act, extract, and agent tools", () => {
+	it("exposes observe, act, extract, agent, and handoff tools", () => {
 		expect(MCP_TOOL_DEFINITIONS.map((tool) => tool.name)).toEqual([
 			"shuvgeist_observe",
 			"shuvgeist_act",
 			"shuvgeist_extract",
 			"shuvgeist_agent",
+			"shuvgeist_handoff",
 		]);
 	});
 
@@ -60,6 +61,33 @@ describe("mcp tool adapter", () => {
 		expect(mcpToolCallToBridgeRequest(5, "shuvgeist_agent", { workflow: { steps: [] } })).toMatchObject({
 			method: "workflow_run",
 			params: { workflow: { steps: [] } },
+		});
+	});
+
+	it("maps a target-bound handoff without leaking its message into metadata", () => {
+		expect(
+			mcpToolCallToBridgeRequest(6, "shuvgeist_handoff", {
+				taskId: "task-1",
+				sessionId: "session-1",
+				kind: "browser-native",
+				message: "Complete the passkey prompt",
+				timeoutMs: 45_000,
+				triggerRefId: "sign-in",
+				triggerMode: "cdp-trusted",
+				target: { kind: "chrome-tab", tabId: 42, frameId: 0 },
+			}),
+		).toEqual({
+			id: 6,
+			method: "handoff_start",
+			params: {
+				taskId: "task-1",
+				sessionId: "session-1",
+				kind: "browser-native",
+				message: "Complete the passkey prompt",
+				timeoutMs: 45_000,
+				trigger: { refId: "sign-in", mode: "cdp-trusted" },
+			},
+			target: { kind: "chrome-tab", tabId: 42, frameId: 0 },
 		});
 	});
 });

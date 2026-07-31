@@ -164,6 +164,7 @@ export interface AgentRuntimePageOperationMessage {
 		| "native-input"
 		| "navigation-context"
 		| "page-snapshot"
+		| "human-handoff"
 		| "select-element"
 		| "screenshot"
 		| "extract-image-source"

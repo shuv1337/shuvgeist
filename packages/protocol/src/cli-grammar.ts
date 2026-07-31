@@ -35,6 +35,8 @@ export const CliFlagDefinitions = [
 	{ names: ["--port"], key: "port", kind: "string" },
 	{ names: ["--token"], key: "token", kind: "string" },
 	{ names: ["--timeout"], key: "timeout", kind: "string" },
+	{ names: ["--message"], key: "message", kind: "string" },
+	{ names: ["--kind"], key: "kind", kind: "string" },
 	{ names: ["--interval"], key: "interval", kind: "string" },
 	{ names: ["--out"], key: "out", kind: "string" },
 	{ names: ["--max-width"], key: "maxWidth", kind: "string" },

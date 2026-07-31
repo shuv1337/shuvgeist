@@ -210,7 +210,10 @@ shuvgeist snapshot --json
 baseline_id="$(shuvgeist snapshot store --json | jq -r '.record.id')"
 shuvgeist snapshot diff "$baseline_id" --json
 shuvgeist locate text "Sign in" --json
+shuvgeist handoff task-42 session-7 --kind manual --message "Complete sign-in, then resume"
 ```
+
+Human handoffs are bound to the exact task, session, Chrome tab, frame, and navigation generation. The page overlay must acknowledge the pause before automation can trigger an optional browser-native action, and only the same overlay can resume it. Closing the bridge, cancelling the request, timing out, navigating, or reloading the extension revokes the handoff before the caller regains control; late or duplicate page events are rejected. See [docs/human-handoff.md](docs/human-handoff.md).
 
 ### Deterministic e2e smoke
 

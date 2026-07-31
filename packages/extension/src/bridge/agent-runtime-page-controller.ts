@@ -75,6 +75,7 @@ const PAGE_OPERATIONS: readonly AgentRuntimePageOperationMessage["operation"][] 
 	"native-input",
 	"navigation-context",
 	"page-snapshot",
+	"human-handoff",
 	"select-element",
 	"screenshot",
 	"extract-image-source",

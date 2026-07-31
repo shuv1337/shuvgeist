@@ -191,6 +191,27 @@ const selectElementParamsSchema = Type.Object(
 	{ additionalProperties: false },
 );
 
+const handoffStartParamsSchema = Type.Object(
+	{
+		...targetedBridgeParamProperties,
+		taskId: Type.String({ minLength: 1, maxLength: 200 }),
+		sessionId: Type.String({ minLength: 1, maxLength: 200 }),
+		kind: Type.Optional(Type.Union([Type.Literal("manual"), Type.Literal("browser-native")])),
+		message: Type.Optional(Type.String({ maxLength: 500 })),
+		timeoutMs: Type.Optional(Type.Integer({ minimum: 1_000, maximum: 600_000 })),
+		trigger: Type.Optional(
+			Type.Object(
+				{
+					refId: Type.String({ minLength: 1 }),
+					mode: Type.Optional(Type.Union([Type.Literal("dom"), Type.Literal("cdp-trusted")])),
+				},
+				{ additionalProperties: false },
+			),
+		),
+	},
+	{ additionalProperties: false },
+);
+
 const workflowRunParamsSchema = Type.Object(
 	{
 		workflow: workflowSchema,
@@ -682,6 +703,22 @@ const selectElementResultSchema = Type.Object({
 	computedStyles: stringMapSchema,
 	parentChain: Type.Array(Type.String()),
 });
+
+const handoffStartResultSchema = Type.Object(
+	{
+		...resolvedPageScopeResultProperties,
+		handoffId: Type.String({ minLength: 1 }),
+		taskId: Type.String({ minLength: 1 }),
+		sessionId: Type.String({ minLength: 1 }),
+		kind: Type.Union([Type.Literal("manual"), Type.Literal("browser-native")]),
+		state: Type.Union([Type.Literal("completed"), Type.Literal("cancelled"), Type.Literal("timed_out")]),
+		startedAt: Type.String(),
+		acknowledgedAt: Type.Optional(Type.String()),
+		endedAt: Type.String(),
+		triggered: Type.Boolean(),
+	},
+	{ additionalProperties: false },
+);
 
 const workflowRunResultSchema = Type.Object({
 	ok: Type.Boolean(),
@@ -1618,6 +1655,34 @@ export const BridgeCommandDefinitions = [
 		defaultTimeout: "none",
 		params: selectElementParamsSchema,
 		result: selectElementResultSchema,
+	},
+	{
+		method: "handoff_start",
+		capabilities: ["handoff_start"],
+		route: "extension",
+		targets: ["chrome-tab"],
+		cli: bridgeCli(
+			defineCliBinding({
+				family: "handoff",
+				select: [],
+				usage: "Usage: shuvgeist handoff <task-id> <session-id> [--target target] [--kind manual|browser-native] [--message text] [--timeout duration]",
+				flags: [
+					...cliTargetFlags,
+					cliFlag("kind", { param: "kind" }),
+					cliFlag("message", { param: "message" }),
+					cliFlag("timeout", { param: "timeoutMs", parse: "duration" }),
+				],
+				positionals: [
+					cliPositional("taskId", { source: "index", index: 0, param: "taskId", required: true }),
+					cliPositional("sessionId", { source: "index", index: 1, param: "sessionId", required: true }),
+				],
+				codec: "generic",
+			}),
+		),
+		defaultTimeout: "none",
+		write: true,
+		params: handoffStartParamsSchema,
+		result: handoffStartResultSchema,
 	},
 	{
 		method: "workflow_run",
