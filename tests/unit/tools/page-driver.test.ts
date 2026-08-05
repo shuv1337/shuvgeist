@@ -421,9 +421,10 @@ describe("PageDriver concrete target-neutral core", () => {
 		const { driver } = createFixture([snapshot([original])], [resolveSuccess(original)], cdp, undefined, () => true);
 		const stored = await driver.snapshot();
 		const previous = cdp.responseFor;
+		const selectAllKey = process.platform === "darwin" ? "Meta" : "Control";
 		cdp.responseFor = (method, params) => {
 			const response = previous(method, params);
-			if (method === "Input.dispatchKeyEvent" && params?.type === "keyDown" && params?.key === "Control") {
+			if (method === "Input.dispatchKeyEvent" && params?.type === "keyDown" && params?.key === selectAllKey) {
 				cdp.navigate();
 			}
 			return response;
@@ -437,8 +438,8 @@ describe("PageDriver concrete target-neutral core", () => {
 		).toMatchObject({ ok: false, reason: "target_changed" });
 		const inputCalls = cdp.calls.filter((call) => call.method.startsWith("Input."));
 		expect(inputCalls.filter((call) => call.method === "Input.dispatchKeyEvent")).toEqual([
-			expect.objectContaining({ params: expect.objectContaining({ type: "keyDown", key: "Control" }) }),
-			expect.objectContaining({ params: expect.objectContaining({ type: "keyUp", key: "Control" }) }),
+			expect.objectContaining({ params: expect.objectContaining({ type: "keyDown", key: selectAllKey }) }),
+			expect.objectContaining({ params: expect.objectContaining({ type: "keyUp", key: selectAllKey }) }),
 		]);
 		expect(inputCalls.some((call) => call.method === "Input.insertText")).toBe(false);
 		await driver.dispose();

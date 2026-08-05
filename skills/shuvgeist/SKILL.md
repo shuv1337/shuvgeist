@@ -64,8 +64,8 @@ Important operational facts:
 
 - The CLI can auto-start the bridge only for an exact local `ws://.../ws` endpoint on `localhost`, `127.0.0.1`, or `::1`, with no query or fragment. Start every TLS, remote, wildcard, alternate-loopback, or custom-path endpoint explicitly.
 - Most browser commands work even when the sidepanel is closed.
-- REPL execution can run with the sidepanel closed through the offscreen runtime.
-- **Session commands** such as `session`, `inject`, `new-session`, `set-model`, and `artifacts` require an accepted offscreen-backed session. Once created, that session remains available while its sidepanel is closed.
+- REPL execution can run with the sidepanel closed through the offscreen runtime. The first `repl` auto-bootstraps an offscreen session when none exists yet.
+- **Session commands** such as `session`, `inject`, `set-model`, and `artifacts` require an accepted offscreen-backed session. `new-session` and `repl` can create that session without opening the sidepanel. Once created, the session remains available while its sidepanel is closed.
 - Sensitive commands are gated by Bridge settings.
 - Chrome/Edge is the default target. Electron commands require `--target electron:...` unless they are `shuvgeist electron ...` management commands.
 - Some bridge methods are server-local or do not have a first-class CLI wrapper. Do not invent CLI commands for `snapshot_read`, `cookie_import`, or the direct-CDP headless adapter. MCP exposes only its declared tools; it is not a generic wrapper for every bridge method.

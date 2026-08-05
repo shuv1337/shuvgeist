@@ -767,7 +767,9 @@ function createReplRouter(windowId: number): ReplRouter {
 			if (signal?.aborted) {
 				throw Object.assign(new Error("REPL execution aborted"), { code: ErrorCodes.ABORTED });
 			}
-			const descriptor = await requireAgentRuntimeDescriptor(windowId);
+			// Bootstrap an offscreen session when none exists yet so CLI REPL works
+			// without first opening the sidepanel.
+			const descriptor = await ensureAgentRuntimeDescriptor(windowId);
 			const result = await agentRuntimeCoordinator.requestSession(
 				descriptor,
 				{
@@ -1090,6 +1092,8 @@ function sessionBridgeError(message: string, code: number): Error {
 	return Object.assign(new Error(message), { code });
 }
 
+const agentSessionBootstrapByWindow = new Map<number, Promise<AgentRuntimeConnectionDescriptor>>();
+
 async function requireAgentRuntimeDescriptor(windowId: number): Promise<AgentRuntimeConnectionDescriptor> {
 	const descriptors = await agentRuntimeCoordinator.getDescriptorsForWindow(windowId);
 	if (descriptors.length === 0) {
@@ -1109,6 +1113,57 @@ async function requireAgentRuntimeDescriptor(windowId: number): Promise<AgentRun
 		);
 	}
 	return descriptor;
+}
+
+/**
+ * Return a ready agent-runtime descriptor for the window, creating an offscreen
+ * session when the sidepanel has never accepted one. Used by bridge REPL so CLI
+ * automation does not require opening the sidepanel first.
+ */
+async function ensureAgentRuntimeDescriptor(windowId: number): Promise<AgentRuntimeConnectionDescriptor> {
+	try {
+		return await requireAgentRuntimeDescriptor(windowId);
+	} catch (error) {
+		const code =
+			error && typeof error === "object" && "code" in error ? (error as { code?: unknown }).code : undefined;
+		if (code !== ErrorCodes.NO_ACTIVE_SESSION) throw error;
+	}
+
+	const inflight = agentSessionBootstrapByWindow.get(windowId);
+	if (inflight) return inflight;
+
+	const bootstrap = (async () => {
+		const existing = (await agentRuntimeCoordinator.getDescriptorsForWindow(windowId))[0];
+		if (existing) {
+			await agentRuntimeCoordinator.waitForSessionReady(existing);
+			return existing;
+		}
+		const descriptor: AgentRuntimeConnectionDescriptor = {
+			clientId: "bridge",
+			windowId,
+			sessionId: crypto.randomUUID(),
+			target: { kind: "chrome-tab", tabRef: `window:${windowId}` },
+			mode: "create",
+			systemPrompt: SYSTEM_PROMPT,
+		};
+		await agentRuntimeCoordinator.bindSession(descriptor);
+		await agentRuntimeCoordinator.requestSession(descriptor, {
+			type: "create",
+			systemPrompt: descriptor.systemPrompt,
+		});
+		await agentRuntimeCoordinator.waitForSessionReady(descriptor);
+		await replaceRuntimeSessionLock(windowId, descriptor.sessionId);
+		return descriptor;
+	})();
+
+	agentSessionBootstrapByWindow.set(windowId, bootstrap);
+	try {
+		return await bootstrap;
+	} finally {
+		if (agentSessionBootstrapByWindow.get(windowId) === bootstrap) {
+			agentSessionBootstrapByWindow.delete(windowId);
+		}
+	}
 }
 
 async function resolveBackgroundModel(spec: string, providerHint?: string) {
@@ -1377,11 +1432,12 @@ function createBackgroundSessionBridge(windowId: number): SessionBridgeAdapter {
 
 function getCurrentCapabilities(windowId: number): BridgeCapability[] {
 	const allCapabilities = getBridgeCapabilities(currentSettings?.sensitiveAccessEnabled ?? false);
-	const sessionCapabilities = new Set<BridgeCapability>([
-		"repl",
+	// These require an existing ready session (history/inject/model/artifacts).
+	// `repl` and `session_new` stay advertised so the CLI can bootstrap an
+	// offscreen session without opening the sidepanel first.
+	const requiresReadySession = new Set<BridgeCapability>([
 		"session_history",
 		"session_inject",
-		"session_new",
 		"session_set_model",
 		"session_artifacts",
 	]);
@@ -1391,7 +1447,7 @@ function getCurrentCapabilities(windowId: number): BridgeCapability[] {
 		.some((descriptor) => descriptor.windowId === windowId);
 
 	return allCapabilities.filter((cap) => {
-		if (sessionCapabilities.has(cap)) {
+		if (requiresReadySession.has(cap)) {
 			return hasAgentSession;
 		}
 		return true;

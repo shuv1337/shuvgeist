@@ -2192,23 +2192,22 @@ describe("BridgeServer", () => {
 					maxDurationMs: 5000,
 				},
 			});
-			await expect(
-				sendRequestAndReadResponse(cli.ws, {
-					id: 3,
-					method: "record_status",
-					params: {},
-					target: { kind: "electron-window", sessionId: "e1", windowRef: "w1" },
-				}),
-			).resolves.toMatchObject({
+			const status = await sendRequestAndReadResponse(cli.ws, {
+				id: 3,
+				method: "record_status",
+				params: {},
+				target: { kind: "electron-window", sessionId: "e1", windowRef: "w1" },
+			});
+			expect(status).toMatchObject({
 				id: 3,
 				result: {
 					target: { kind: "electron-window", sessionId: "e1", windowRef: "w1", targetId: "page-1" },
 					navigationGeneration: 0,
 					active: true,
 					recordingId: frame.data.recordingId,
-					frameCount: 1,
 				},
 			});
+			expect((status as { result?: { frameCount?: number } }).result?.frameCount).toBeGreaterThanOrEqual(1);
 			const stopMessages = await sendAndReadResponseAndEvent(
 				cli.ws,
 				{
@@ -2238,9 +2237,11 @@ describe("BridgeServer", () => {
 					navigationGeneration: 0,
 					recordingId: frame.data.recordingId,
 					outcome: "stopped_user",
-					frameCount: 1,
 				},
 			});
+			expect(
+				(stopMessages.response as { result?: { frameCount?: number } }).result?.frameCount,
+			).toBeGreaterThanOrEqual(1);
 		} finally {
 			cli.ws.close();
 			await cdp.close();

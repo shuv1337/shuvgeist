@@ -75,6 +75,7 @@ describe("CdpSession trusted input engine", () => {
 
 	it("attempts modifier cleanup when select-all dispatch fails", async () => {
 		const cdp = new FakePageCdpSession();
+		const selectAllModifier = selectAllModifierForPlatform(process.platform);
 		cdp.responseFor = (method, params) => {
 			if (method === "Input.dispatchKeyEvent" && params?.key === "a" && params.type === "keyDown") {
 				throw new Error("target rejected key");
@@ -86,7 +87,7 @@ describe("CdpSession trusted input engine", () => {
 		await expect(input.fill({ x: 4, y: 5 }, "text")).rejects.toThrow("target rejected key");
 		expect(cdp.calls.at(-1)).toMatchObject({
 			method: "Input.dispatchKeyEvent",
-			params: { type: "keyUp", key: "Control", modifiers: 0 },
+			params: { type: "keyUp", key: selectAllModifier, modifiers: 0 },
 		});
 		expect(cdp.releases).toEqual(cdp.acquisitions);
 	});

@@ -36,17 +36,29 @@ describe("electron process discovery", () => {
 		writeFileSync(rogue, "rogue");
 		symlinkSync(trusted, registryLink);
 		const app = testApp({ linux: [registryLink] });
+		const matchOptions = { platform: "linux" as const };
 
 		expect(
-			processMatchesElectronApp({ pid: 10, command: trusted, executablePath: trusted, generation: "1" }, app),
+			processMatchesElectronApp(
+				{ pid: 10, command: trusted, executablePath: trusted, generation: "1" },
+				app,
+				matchOptions,
+			),
 		).toBe(true);
 		expect(
 			processMatchesElectronApp(
 				{ pid: 11, command: `${rogue} code`, args: [rogue, "code"], executablePath: rogue, generation: "1" },
 				app,
+				matchOptions,
 			),
 		).toBe(false);
-		expect(processMatchesElectronApp({ pid: 12, command: registryLink, args: [registryLink] }, app)).toBe(false);
+		expect(
+			processMatchesElectronApp(
+				{ pid: 12, command: registryLink, args: [registryLink] },
+				app,
+				matchOptions,
+			),
+		).toBe(false);
 	});
 
 	it("normalizes Windows path case and separators without parsing a spaced path as credentials", () => {

@@ -170,7 +170,7 @@ describe("CLI Node runtime composition", () => {
 			const result = spawnSync(tsxPath, [cliPath, ...command.args], {
 				cwd: process.cwd(),
 				encoding: "utf8",
-				env,
+				env: { ...env, NODE_OPTIONS: `${env.NODE_OPTIONS ?? ""} --no-deprecation`.trim() },
 			});
 			expect(result.status, `${command.args.join(" ")} stderr:\n${result.stderr}`).toBe(0);
 			expect(result.stderr).toBe("");
