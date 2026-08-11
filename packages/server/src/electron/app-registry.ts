@@ -48,8 +48,8 @@ export const KNOWN_ELECTRON_APPS: ElectronApp[] = [
 			linux: [
 				"/usr/bin/codex-desktop",
 				"/opt/codex-desktop/codex-desktop-electron",
-				join(homedir(), ".local/opt/codex-desktop-linux/codex-app/start.sh"),
-				join(homedir(), ".local/opt/codex-desktop-linux/codex-app/codex-desktop-electron"),
+				join(homedir(), "repos/codex-desktop-linux/codex-app/start.sh"),
+				join(homedir(), "repos/codex-desktop-linux/codex-app/electron"),
 			],
 			win32: [],
 		},

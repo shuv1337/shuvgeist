@@ -1,3 +1,6 @@
+import { homedir } from "node:os";
+import { join } from "node:path";
+
 import {
 	KNOWN_ELECTRON_APPS,
 	listElectronRegistryEntries,
@@ -33,6 +36,8 @@ describe("electron app registry", () => {
 			expect.arrayContaining([
 				"/usr/bin/codex-desktop",
 				"/opt/codex-desktop/codex-desktop-electron",
+				join(homedir(), "repos/codex-desktop-linux/codex-app/start.sh"),
+				join(homedir(), "repos/codex-desktop-linux/codex-app/electron"),
 			]),
 		);
 	});
