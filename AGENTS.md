@@ -3,6 +3,20 @@
 ## First Message
 If the user did not give you a concrete task, read README.md first.
 
+## Agent skills
+
+### Issue tracker
+
+Issues and specs are tracked in GitHub Issues. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Use the canonical five-role triage vocabulary. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+This repository uses a single root domain context. See `docs/agents/domain.md`.
+
 ## Commands
 - After code changes: run `./check.sh`. Fix all errors and warnings before committing.
 - After code changes that affect the extension UI or runtime: rebuild with `npm run build` so `dist-chrome/` is updated. There is no persistent dev watcher; the agent must rebuild explicitly.
