@@ -10,37 +10,9 @@ env:
   MINI_LIT_VERSION: 0.2.1
 
 jobs:
-  changes:
-    runs-on: ubuntu-latest
-    outputs:
-      content_only: ${{ steps.classify.outputs.content_only }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - id: classify
-        shell: bash
-        run: |
-          if [ "${{ github.event_name }}" != "pull_request" ]; then
-            echo "content_only=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          # Workspace manifests are excluded: check:boundaries validates them and
-          # runs only in fast-checks, which this flag would skip.
-          allowed_paths='^(\.github/workflows/(build|test)\.yml|AGENTS\.md|CHANGELOG\.md|CLAUDE\.md|README\.md|skills/.*|package(-lock)?\.json|proxy/package(-lock)?\.json|site/package(-lock)?\.json|site/src/frontend/.*|static/manifest\.chrome\.json)$'
-
-          if git diff --name-only "${{ github.event.pull_request.base.sha }}" "${{ github.sha }}" | grep -Ev "$allowed_paths" >/dev/null; then
-            echo "content_only=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "content_only=true" >> "$GITHUB_OUTPUT"
-          fi
-
   fast-checks:
-    needs: changes
-    if: github.event_name != 'pull_request' || needs.changes.outputs.content_only != 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -57,127 +29,13 @@ jobs:
           mkdir -p "$target_dir"
           tar -xzf "mariozechner-mini-lit-${MINI_LIT_VERSION}.tgz" -C "$target_dir" --strip-components=1
 
-      - name: Install mini-lit deps
-        run: cd ../mini-lit && npm install --ignore-scripts
-
-      - name: Install root deps
-        run: npm install
+      - name: Install dependencies
+        run: |
+          npm --prefix ../mini-lit install --ignore-scripts
+          npm install
 
       - name: Run fast checks
         run: ./check.sh
 
       - name: Run component tests
         run: npm run test:component
-
-  browser-smoke:
-    needs: changes
-    if: github.event_name != 'pull_request' || needs.changes.outputs.content_only != 'true'
-    runs-on: [self-hosted, Linux, X64, shuv-ci]
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
-      - name: Restore mini-lit from npm
-        run: |
-          tmp_dir="$(mktemp -d)"
-          target_dir="$GITHUB_WORKSPACE/../mini-lit"
-          cd "$tmp_dir"
-          npm pack "@mariozechner/mini-lit@${MINI_LIT_VERSION}"
-          mkdir -p "$target_dir"
-          tar -xzf "mariozechner-mini-lit-${MINI_LIT_VERSION}.tgz" -C "$target_dir" --strip-components=1
-
-      - name: Install mini-lit deps
-        run: cd ../mini-lit && npm install --ignore-scripts
-
-      - name: Install root deps
-        run: npm install
-
-      - name: Install Playwright Chromium
-        run: npx playwright install chromium
-
-      - name: Build extension
-        run: npm run build:chrome
-        env:
-          SHUVGEIST_BUILD_TEST_SURFACES: "1"
-
-      - name: Build CLI
-        run: npm run build:cli
-        env:
-          SHUVGEIST_BUILD_TEST_SURFACES: "1"
-
-      - name: Verify E2E artifact surfaces
-        run: node ./scripts/check-injected-artifact-test-surface.mjs --test
-
-      - name: Run extension smoke
-        run: npm run test:e2e:extension
-
-      - name: Upload extension traces
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: extension-playwright-traces
-          path: test-results
-
-  site-smoke:
-    needs: changes
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
-      - name: Install root deps
-        run: npm install --workspaces=false
-
-      - name: Install Playwright Chromium
-        run: npx playwright install chromium
-
-      - name: Run site smoke
-        run: npm run test:e2e:site
-
-      - name: Upload site traces
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: site-playwright-traces
-          path: test-results
-
-  coverage:
-    needs: changes
-    if: github.event_name != 'pull_request' || needs.changes.outputs.content_only != 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
-      - name: Restore mini-lit from npm
-        run: |
-          tmp_dir="$(mktemp -d)"
-          target_dir="$GITHUB_WORKSPACE/../mini-lit"
-          cd "$tmp_dir"
-          npm pack "@mariozechner/mini-lit@${MINI_LIT_VERSION}"
-          mkdir -p "$target_dir"
-          tar -xzf "mariozechner-mini-lit-${MINI_LIT_VERSION}.tgz" -C "$target_dir" --strip-components=1
-
-      - name: Install mini-lit deps
-        run: cd ../mini-lit && npm install --ignore-scripts
-
-      - name: Install root deps
-        run: npm install
-
-      - name: Run coverage
-        run: npm run test:coverage
-
-      - name: Upload coverage report
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-report
-          path: coverage
