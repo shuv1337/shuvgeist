@@ -1,6 +1,6 @@
 {
 	"name": "@shuvgeist/driver",
-	"version": "2.0.0",
+	"version": "2.0.1",
 	"private": true,
 	"type": "module",
 	"exports": {
@@ -39,7 +39,7 @@
 	"dependencies": {
 		"@shuv1337/pi-agent-core": "0.78.0",
 		"@shuv1337/pi-ai": "0.78.0",
-		"@shuvgeist/protocol": "2.0.0",
+		"@shuvgeist/protocol": "2.0.1",
 		"ws": "^8.18.0"
 	},
 	"devDependencies": {

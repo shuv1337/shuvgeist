@@ -1,6 +1,6 @@
 {
 	"name": "@shuvgeist/extension",
-	"version": "2.0.0",
+	"version": "2.0.1",
 	"private": true,
 	"description": "Shuvgeist Chrome extension runtime and user interface",
 	"type": "module",
@@ -19,8 +19,8 @@
 		"@shuv1337/pi-agent-core": "0.78.0",
 		"@shuv1337/pi-ai": "0.78.0",
 		"@shuv1337/pi-web-ui": "0.78.0",
-		"@shuvgeist/driver": "2.0.0",
-		"@shuvgeist/protocol": "2.0.0",
+		"@shuvgeist/driver": "2.0.1",
+		"@shuvgeist/protocol": "2.0.1",
 		"chart.js": "^4.5.1",
 		"docx-preview": "^0.3.7",
 		"fuse.js": "^7.1.0",

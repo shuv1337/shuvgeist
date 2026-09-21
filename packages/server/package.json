@@ -1,6 +1,6 @@
 {
 	"name": "@shuvgeist/server",
-	"version": "2.0.0",
+	"version": "2.0.1",
 	"private": true,
 	"type": "module",
 	"scripts": {
@@ -39,8 +39,8 @@
 		"./task-registry": "./src/task-registry.ts"
 	},
 	"dependencies": {
-		"@shuvgeist/driver": "2.0.0",
-		"@shuvgeist/protocol": "2.0.0",
+		"@shuvgeist/driver": "2.0.1",
+		"@shuvgeist/protocol": "2.0.1",
 		"ws": "^8.18.0"
 	},
 	"devDependencies": {

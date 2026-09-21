@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.0.1] - 2026-09-21
+
 ### Breaking Changes
 
 - Bridge protocol v4 page-target results now use a strict resolved `target` plus `navigationGeneration`; network list/get results are scoped wrappers, Electron no longer emits negative tab sentinels, and recording `sizeBytes` no longer aliases raw frame bytes. (#45)
