@@ -47,6 +47,7 @@ Shuvgeist supports two main auth/config paths:
   - ChatGPT Plus/Pro via OpenAI Codex OAuth
   - GitHub Copilot
   - Google Gemini
+  - xAI SuperGrok (Grok through 4.7)
 - API key and custom-provider setup through the Providers & Models UI
 
 The repo also includes:

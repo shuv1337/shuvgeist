@@ -1,4 +1,4 @@
-export type OAuthProviderId = "anthropic" | "openai-codex" | "github-copilot" | "google-gemini-cli";
+export type OAuthProviderId = "anthropic" | "openai-codex" | "github-copilot" | "google-gemini-cli" | "xai";
 
 export interface ProviderCatalogEntry {
 	id: string;
@@ -75,7 +75,7 @@ export const PROVIDER_CATALOG = {
 	"openai-codex": {
 		id: "openai-codex",
 		credentialStorageKey: "openai-codex",
-		defaultModelId: "gpt-5.1-codex-mini",
+		defaultModelId: "gpt-5.6-sol",
 		oauthDisplayName: "ChatGPT Plus/Pro",
 	},
 	opencode: { id: "opencode", credentialStorageKey: "opencode", defaultModelId: "claude-opus-4-6" },
@@ -95,7 +95,12 @@ export const PROVIDER_CATALOG = {
 		credentialStorageKey: "vercel-ai-gateway",
 		defaultModelId: "anthropic/claude-opus-4-6",
 	},
-	xai: { id: "xai", credentialStorageKey: "xai", defaultModelId: "grok-4-fast-non-reasoning" },
+	xai: {
+		id: "xai",
+		credentialStorageKey: "xai",
+		defaultModelId: "grok-4.7",
+		oauthDisplayName: "xAI SuperGrok",
+	},
 	zai: { id: "zai", credentialStorageKey: "zai", defaultModelId: "glm-4.6" },
 } as const satisfies Record<string, ProviderCatalogEntry>;
 
@@ -104,6 +109,7 @@ export const OAUTH_PROVIDER_IDS = [
 	"openai-codex",
 	"github-copilot",
 	"google-gemini-cli",
+	"xai",
 ] as const satisfies readonly OAuthProviderId[];
 
 export function getProviderCatalogEntry(provider: string): ProviderCatalogEntry | undefined {

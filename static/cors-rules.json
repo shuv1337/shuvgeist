@@ -91,5 +91,47 @@
 			"urlFilter": "||api.z.ai",
 			"resourceTypes": ["xmlhttprequest", "other"]
 		}
+	},
+	{
+		"id": 6,
+		"priority": 1,
+		"action": {
+			"type": "modifyHeaders",
+			"requestHeaders": [
+				{ "header": "Origin", "operation": "remove" },
+				{ "header": "Referer", "operation": "remove" }
+			],
+			"responseHeaders": [
+				{ "header": "Access-Control-Allow-Origin", "operation": "set", "value": "*" },
+				{ "header": "Access-Control-Allow-Methods", "operation": "set", "value": "GET, POST, OPTIONS" },
+				{ "header": "Access-Control-Allow-Headers", "operation": "set", "value": "*" },
+				{ "header": "Access-Control-Max-Age", "operation": "set", "value": "86400" }
+			]
+		},
+		"condition": {
+			"urlFilter": "||auth.x.ai",
+			"resourceTypes": ["xmlhttprequest", "other"]
+		}
+	},
+	{
+		"id": 7,
+		"priority": 1,
+		"action": {
+			"type": "modifyHeaders",
+			"requestHeaders": [
+				{ "header": "Origin", "operation": "remove" },
+				{ "header": "Referer", "operation": "remove" }
+			],
+			"responseHeaders": [
+				{ "header": "Access-Control-Allow-Origin", "operation": "set", "value": "*" },
+				{ "header": "Access-Control-Allow-Methods", "operation": "set", "value": "GET, POST, OPTIONS" },
+				{ "header": "Access-Control-Allow-Headers", "operation": "set", "value": "*" },
+				{ "header": "Access-Control-Max-Age", "operation": "set", "value": "86400" }
+			]
+		},
+		"condition": {
+			"urlFilter": "||api.x.ai",
+			"resourceTypes": ["xmlhttprequest", "other"]
+		}
 	}
 ]

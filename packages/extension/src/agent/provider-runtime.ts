@@ -3,6 +3,7 @@ import { type Api, getModels, getProviders, type KnownProvider, type Model, regi
 import { createStreamFn } from "@shuv1337/pi-web-ui";
 import type { CustomProvider } from "@shuv1337/pi-web-ui/storage/stores/custom-providers-store.js";
 import { resolveApiKey } from "../oauth/index.js";
+import { registerCatalogExtensionModels } from "../providers/extension-models.js";
 import { BUNDLED_FREE_TIER_PROVIDER, createBundledFreeTierModel } from "../providers/free-tier.js";
 import {
 	normalizeModelForRuntime,
@@ -109,6 +110,7 @@ export function registerShuvgeistProviderModels(): void {
 	if (extensionModelsRegistered) return;
 	registerModels(FIREWORKS_EXTENSION_MODELS);
 	registerModels(MINIMAX_EXTENSION_MODELS);
+	registerCatalogExtensionModels();
 	extensionModelsRegistered = true;
 }
 

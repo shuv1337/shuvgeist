@@ -8,6 +8,8 @@
 
 ### Added
 
+- xAI SuperGrok subscription login via OAuth device code, with Grok 4.5, 4.6, and 4.7 on the xAI model list.
+- ChatGPT Codex catalog includes gpt-5.6-luna, gpt-5.6-terra, gpt-5.6-sol, and gpt-6-astra.
 - A separate Node compatibility spike now models isolated Playwright CDP views, OOPIF replay, worker filtering, duplicate reconciliation, generations, authorization, timeouts, and teardown, with a documented no-go decision for production integration.
 - Named automation session ownership now has an ADR and isolated executable prototype proving transactional reserve/commit/rollback, exclusive target adoption, lease expiry, and fail-closed restart restoration before production integration.
 - Explicit Chrome tab-capture recording can stream MediaRecorder WebM directly to the CLI with opt-in tab audio, visible in-tab and badge controls, deterministic lifecycle summaries, and no ffmpeg dependency.

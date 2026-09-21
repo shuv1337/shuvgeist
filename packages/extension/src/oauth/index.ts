@@ -20,6 +20,7 @@ import {
 	serializeFreeTierCredential,
 	serializeOAuthCredentials,
 } from "./types.js";
+import { loginXai, refreshXai } from "./xai.js";
 
 export {
 	type OAuthCredentials,
@@ -71,6 +72,8 @@ export async function oauthLogin(
 			return loginGitHubCopilot(onDeviceCode || (() => {}));
 		case "google-gemini-cli":
 			return loginGeminiCli();
+		case "xai":
+			return loginXai(onDeviceCode || (() => {}));
 		default:
 			throw new Error(`Unknown OAuth provider: ${provider}`);
 	}
@@ -90,6 +93,8 @@ export async function oauthRefresh(credentials: OAuthCredentials, _proxyUrl?: st
 			return refreshGitHubCopilot(credentials);
 		case "google-gemini-cli":
 			return refreshGeminiCli(credentials);
+		case "xai":
+			return refreshXai(credentials);
 		default:
 			throw new Error(`Unknown OAuth provider: ${credentials.providerId}`);
 	}

@@ -56,6 +56,7 @@ import {
 	serializeFreeTierCredential,
 } from "./oauth/index.js";
 import { SYSTEM_PROMPT } from "./prompts/prompts.js";
+import { registerCatalogExtensionModels } from "./providers/extension-models.js";
 import {
 	BUNDLED_FREE_TIER_KEY,
 	BUNDLED_FREE_TIER_PROVIDER,
@@ -248,6 +249,7 @@ const MINIMAX_EXTENSION_MODELS: Model<"anthropic-messages">[] = [
 
 registerModels(FIREWORKS_EXTENSION_MODELS);
 registerModels(MINIMAX_EXTENSION_MODELS);
+registerCatalogExtensionModels();
 
 async function getCustomProviderByName(providerName: string) {
 	const customProviders = await storage.customProviders.getAll();
