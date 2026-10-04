@@ -2,8 +2,10 @@ import {
 	bridgeStatusUrl,
 	CliCommandPlanners,
 	CliFlagDefinitions,
+	cliPositionalsRequestHelp,
 	createCommandPlan,
 	exitCodeForResponse,
+	formatCommandHelp,
 	generateRequestId,
 	getCliPlannerCoverage,
 	isNetworkOrConfigError,
@@ -63,6 +65,31 @@ describe("cli-core", () => {
 			flags: { file: "workflow.json" },
 			positionals: [],
 		});
+	});
+
+	it("treats --help and -h as help only when they are positionals", () => {
+		expect(cliPositionalsRequestHelp(parseCliArguments(["--help"]).positionals)).toBe(true);
+		expect(cliPositionalsRequestHelp(parseCliArguments(["-h"]).positionals)).toBe(true);
+		expect(cliPositionalsRequestHelp(parseCliArguments(["--headless", "--help"]).positionals)).toBe(true);
+		expect(cliPositionalsRequestHelp(parseCliArguments(["--url", "--help"]).positionals)).toBe(false);
+		expect(parseCliArguments(["--url", "--help"])).toEqual({
+			flags: { url: "--help" },
+			positionals: [],
+		});
+	});
+
+	it("formats per-command grammar usage for help positionals", () => {
+		expect(formatCommandHelp("launch", ["--help"])).toBe("Usage: shuvgeist launch [url] [browser options]");
+		expect(formatCommandHelp("navigate", ["--help"])).toBe("Usage: shuvgeist navigate <url> [--new-tab]");
+		expect(formatCommandHelp("electron", ["launch", "--help"])).toBe(
+			"Usage: shuvgeist electron launch <app-id-or-alias>",
+		);
+		expect(formatCommandHelp("assert", ["text", "-h"])).toBe("Usage: shuvgeist assert text <text>");
+		const electronHelp = formatCommandHelp("electron", ["--help"]);
+		expect(electronHelp).toContain("Usage: shuvgeist electron [list]");
+		expect(electronHelp).toContain("Usage: shuvgeist electron launch <app-id-or-alias>");
+		expect(formatCommandHelp("electron", ["bogus", "--help"])).toBe(electronHelp);
+		expect(formatCommandHelp("not-a-command", ["--help"])).toBeUndefined();
 	});
 
 	it("maps both trusted-input spellings to one canonical flag", () => {
