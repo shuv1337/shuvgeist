@@ -906,6 +906,8 @@ Use them with page-scoped commands, including:
 - `network ...`, `device ...`, `perf ...`
 - `record start` / `record stop` / `record status`
 
+`repl --tab-id` runs `browserjs`, `navigate`, native input, and the activity overlay on that tab. It does not focus the tab. A missing tab, a tab outside the connected window, or a protected URL is an error.
+
 `--target <spec>` routes to a non-default surface (e.g. `electron:e1:w1`); Chrome/Edge is the default. Do not assume the currently focused browser window is the intended target.
 
 ## JSON mode

@@ -7,6 +7,8 @@ import {
 	ArtifactStore,
 	OffscreenArtifactsRuntimeProvider,
 	OffscreenBrowserJsRuntimeProvider,
+	OffscreenNativeInputRuntimeProvider,
+	OffscreenNavigateRuntimeProvider,
 	type OffscreenPrivilegedOperationContext,
 	type OffscreenReplTool,
 	PureOffscreenAgentToolRuntime,
@@ -975,6 +977,144 @@ describe("PureOffscreenAgentToolRuntime", () => {
 			requestId: "prompt-request",
 			executionId: "prompt-execution",
 		});
+	});
+
+	it("pins CLI repl page operations to the requested tab without overriding an explicit tab", async () => {
+		const calls: Array<{ operation: string; params: RuntimeValue }> = [];
+		let replTool: OffscreenReplTool | undefined;
+		const runtime = new PureOffscreenAgentToolRuntime({
+			privilegedOperations: {
+				async execute(operation, params) {
+					calls.push({ operation, params });
+					return { success: true, result: null };
+				},
+			},
+			createReplTool(_context, privilegedOperations) {
+				if (!privilegedOperations) throw new Error("bound privileged operations missing");
+				replTool = {
+					name: "repl",
+					label: "REPL",
+					description: "repl",
+					parameters: Type.Object({ title: Type.String(), code: Type.String() }),
+					async execute(_toolCallId, _args, signal) {
+						const providers = replTool?.runtimeProvidersFactory?.() ?? [];
+						const browser = providers.find((provider) => provider instanceof OffscreenBrowserJsRuntimeProvider);
+						const navigate = providers.find((provider) => provider instanceof OffscreenNavigateRuntimeProvider);
+						const nativeInput = providers.find(
+							(provider) => provider instanceof OffscreenNativeInputRuntimeProvider,
+						);
+						if (
+							!(browser instanceof OffscreenBrowserJsRuntimeProvider) ||
+							!(navigate instanceof OffscreenNavigateRuntimeProvider) ||
+							!(nativeInput instanceof OffscreenNativeInputRuntimeProvider)
+						) {
+							throw new Error("REPL page providers missing");
+						}
+						const sandboxId = "pinned-sandbox";
+						browser.onExecutionStart?.(sandboxId, signal);
+						navigate.onExecutionStart?.(sandboxId, signal);
+						nativeInput.onExecutionStart?.(sandboxId, signal);
+						try {
+							await browser.handleMessage?.(
+								{
+									type: "browser-js",
+									code: "() => location.host",
+									args: "[]",
+									sandboxId,
+									messageId: "browser",
+								},
+								() => {},
+							);
+							await navigate.handleMessage?.(
+								{
+									type: "navigate",
+									args: { url: "https://background.test" },
+									sandboxId,
+									messageId: "navigate",
+								},
+								() => {},
+							);
+							await navigate.handleMessage?.(
+								{
+									type: "navigate",
+									args: { url: "https://explicit.test", tabId: 99 },
+									sandboxId,
+									messageId: "navigate-explicit",
+								},
+								() => {},
+							);
+							await nativeInput.handleMessage?.(
+								{
+									type: "native-input",
+									action: "press",
+									key: "Enter",
+									sandboxId,
+									messageId: "native",
+								},
+								() => {},
+							);
+						} finally {
+							browser.onExecutionEnd?.(sandboxId);
+							navigate.onExecutionEnd?.(sandboxId);
+							nativeInput.onExecutionEnd?.(sandboxId);
+						}
+						await privilegedOperations.execute(
+							"repl-overlay-show",
+							{ taskName: "Pinned REPL" },
+							{
+								operationId: "overlay-show",
+								origin: { kind: "repl", sandboxId: "overlay", messageId: "show" },
+								...(signal ? { signal } : {}),
+							},
+						);
+						await privilegedOperations.execute(
+							"debugger",
+							{ action: "eval", code: "1" },
+							{
+								operationId: "debugger",
+								origin: { kind: "repl", sandboxId: "debugger", messageId: "eval" },
+								...(signal ? { signal } : {}),
+							},
+						);
+						return { content: [{ type: "text", text: "done" }], details: { files: [] } };
+					},
+				};
+				return replTool;
+			},
+		});
+		await runtime.create(context());
+		const pinned = {
+			...operationContext(new AbortController().signal),
+			requestId: "pinned-request",
+			executionId: "pinned-execution",
+			pageTarget: { tabId: 42, frameId: 3 },
+		};
+		await runtime.execute("return location.host", pinned);
+
+		expect(calls.map(({ operation }) => operation)).toEqual([
+			"browser-js",
+			"navigate",
+			"navigate",
+			"native-input",
+			"repl-overlay-show",
+			"debugger",
+		]);
+		expect(calls[0]?.params).toMatchObject({ tabId: 42, frameId: 3, code: "() => location.host" });
+		expect(calls[1]?.params).toEqual({ url: "https://background.test", tabId: 42, frameId: 3 });
+		expect(calls[2]?.params).toEqual({ url: "https://explicit.test", tabId: 99, frameId: 3 });
+		expect(calls[3]?.params).toEqual({ action: "press", key: "Enter", tabId: 42, frameId: 3 });
+		expect(calls[4]?.params).toEqual({ taskName: "Pinned REPL", tabId: 42, frameId: 3 });
+		expect(calls[5]?.params).toEqual({ action: "eval", code: "1" });
+
+		calls.length = 0;
+		const unpinned = {
+			...operationContext(new AbortController().signal),
+			requestId: "open-request",
+			executionId: "open-execution",
+		};
+		await runtime.execute("return location.host", unpinned);
+		expect(calls[0]?.params).toMatchObject({ code: "() => location.host" });
+		expect(calls[0]?.params).not.toMatchObject({ tabId: 42 });
 	});
 
 	it("uses one injected DOM REPL tool for Agent and host delegate execution", async () => {

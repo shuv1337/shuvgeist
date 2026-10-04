@@ -83,6 +83,7 @@ import type {
 	BridgeStateData,
 	BridgeToOffscreenMessage,
 } from "./bridge/internal-messages.js";
+import { replPageTargetFromParams } from "./bridge/repl-page-target.js";
 import {
 	BRIDGE_RUNTIME_STATE_KEYS,
 	readBridgeRuntimeState,
@@ -110,7 +111,12 @@ import { ShuvgeistAppStorage } from "./storage/app-storage.js";
 import { loadDeveloperSettings } from "./storage/developer-settings.js";
 import { DebuggerTool } from "./tools/debugger.js";
 import { getImageInfoFromPage } from "./tools/extract-image.js";
-import { isProtectedTabUrl, isUsableWindowId, resolveTabTarget } from "./tools/helpers/browser-target.js";
+import {
+	assertTabCanExecuteScripts,
+	isProtectedTabUrl,
+	isUsableWindowId,
+	resolveTabTarget,
+} from "./tools/helpers/browser-target.js";
 import { configureSharedDebuggerManagerTelemetry, getSharedDebuggerManager } from "./tools/helpers/debugger-manager.js";
 import type { PageSnapshotResult } from "./tools/page-snapshot.js";
 import { RecordingTools } from "./tools/recording-tools.js";
@@ -767,6 +773,11 @@ function createReplRouter(windowId: number): ReplRouter {
 			if (signal?.aborted) {
 				throw Object.assign(new Error("REPL execution aborted"), { code: ErrorCodes.ABORTED });
 			}
+			const pageTarget = replPageTargetFromParams(params);
+			if (pageTarget) {
+				const resolved = await resolveTabTarget({ windowId, ...pageTarget });
+				assertTabCanExecuteScripts(resolved.tab);
+			}
 			// Bootstrap an offscreen session when none exists yet so CLI REPL works
 			// without first opening the sidepanel.
 			const descriptor = await ensureAgentRuntimeDescriptor(windowId);
@@ -777,6 +788,7 @@ function createReplRouter(windowId: number): ReplRouter {
 					executionId: crypto.randomUUID(),
 					code: params.code,
 					language: "javascript",
+					...pageTarget,
 				},
 				{ signal, trace: traceContext },
 			);
@@ -1635,11 +1647,13 @@ async function executeAgentRuntimePageOperation(input: AgentRuntimePageDelegateI
 			targetRequestId: input.executionRequestId,
 			reason: "Stopped from the page activity overlay",
 		};
-		await injectOverlayForActiveTab(taskName, abortIntent, input.windowId);
+		const overlayTabId = typeof input.payload.tabId === "number" ? input.payload.tabId : undefined;
+		await injectOverlayForActiveTab(taskName, abortIntent, input.windowId, overlayTabId);
 		return { shown: true };
 	}
 	if (input.operation === "repl-overlay-remove") {
-		await removeOverlayForActiveTab(input.windowId);
+		const overlayTabId = typeof input.payload.tabId === "number" ? input.payload.tabId : undefined;
+		await removeOverlayForActiveTab(input.windowId, overlayTabId);
 		return { removed: true };
 	}
 	if (input.operation === "extract-image-source") {

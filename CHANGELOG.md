@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- `shuvgeist repl --tab-id` and `--frame-id` now run `browserjs`, `navigate`, native input, and the activity overlay on the requested tab. A tab that cannot be used is an error. (#89, pc_b8a2cc3b5088)
+
 ## [2.0.1] - 2026-09-21
 
 ### Breaking Changes

@@ -108,7 +108,7 @@ Executes JavaScript in a sandboxed iframe. The sandbox is loaded from `sandbox.h
 **Execution flow:**
 
 1. Code is checked for restricted navigation patterns
-2. If code uses `browserjs(`, an overlay is injected into the active tab
+2. If code uses `browserjs(`, an overlay is injected into the REPL page target (the active tab, or the tab selected by `repl --tab-id`)
 3. A `SandboxIframe` is created and appended to the offscreen document (hidden)
 4. Code is executed via `sandbox.execute()` with runtime providers
 5. Results (console output, return value, files) are collected
@@ -133,7 +133,7 @@ interface SandboxRuntimeProvider {
 
 #### OffscreenBrowserJsRuntimeProvider
 
-Provides `browserjs(fn, ...args)` to REPL scripts. Executes functions in the active tab's page context via `chrome.userScripts.execute()`.
+Provides `browserjs(fn, ...args)` to REPL scripts. Executes functions in the active tab's page context via `chrome.userScripts.execute()`, or in the tab given by `repl --tab-id` / `--frame-id` without focusing that tab.
 
 **Execution path:**
 1. REPL code calls `browserjs(() => document.title)`

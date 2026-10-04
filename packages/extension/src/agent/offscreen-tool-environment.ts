@@ -3,6 +3,7 @@ import { type Static, StringEnum, type TSchema, Type } from "@shuv1337/pi-ai";
 import { AttachmentsRuntimeProvider } from "@shuv1337/pi-web-ui/sandbox/AttachmentsRuntimeProvider.js";
 import { FileDownloadRuntimeProvider } from "@shuv1337/pi-web-ui/sandbox/FileDownloadRuntimeProvider.js";
 import type { SandboxRuntimeProvider } from "@shuv1337/pi-web-ui/sandbox/SandboxRuntimeProvider.js";
+import { applyPinnedReplPageTarget, type ReplPageTarget } from "../bridge/repl-page-target.js";
 import {
 	BROWSERJS_RUNTIME_PROVIDER_DESCRIPTION,
 	NATIVE_INPUT_EVENTS_DESCRIPTION,
@@ -135,6 +136,7 @@ export interface OffscreenParentExecutionIdentity {
 	requestId: string;
 	executionId: string;
 	trace?: RuntimeTraceContext;
+	pageTarget?: ReplPageTarget;
 }
 
 export interface OffscreenPrivilegedOperationContext
@@ -720,6 +722,10 @@ abstract class DeduplicatingRuntimeProvider implements SandboxRuntimeProvider {
 		respond(await response);
 	}
 
+	protected withPinnedPageTarget(signal: AbortSignal, params: RuntimeRecord): RuntimeRecord {
+		return applyPinnedReplPageTarget(this.messageType, params, this.resolveParentExecution(signal).pageTarget);
+	}
+
 	protected contextFor(message: RuntimeMessageRecord): OffscreenPrivilegedOperationContext {
 		if (typeof message.sandboxId !== "string") {
 			throw new Error(`${this.messageType} message is missing its sandbox execution identity`);
@@ -789,11 +795,11 @@ export class OffscreenBrowserJsRuntimeProvider extends DeduplicatingRuntimeProvi
 		const providerBundle = serializeRuntimeProviders(this.pageProviders());
 		const result = await this.executor.execute(
 			"browser-js",
-			{
+			this.withPinnedPageTarget(context.signal, {
 				code: message.code,
 				...(typeof message.args === "string" ? { args: message.args } : {}),
 				...providerBundle,
-			},
+			}),
 			context,
 		);
 		throwIfAborted(context.signal);
@@ -840,7 +846,11 @@ export class OffscreenNavigateRuntimeProvider extends DeduplicatingRuntimeProvid
 		const params = toRuntimeRecord(message.args, "navigate args");
 		const context = this.contextFor(message);
 		throwIfAborted(context.signal);
-		const result = await this.executor.execute("navigate", params, context);
+		const result = await this.executor.execute(
+			"navigate",
+			this.withPinnedPageTarget(context.signal, params),
+			context,
+		);
 		throwIfAborted(context.signal);
 		return normalizedProviderResponse(result);
 	}
@@ -892,7 +902,11 @@ export class OffscreenNativeInputRuntimeProvider extends DeduplicatingRuntimePro
 		}
 		const context = this.contextFor(message);
 		throwIfAborted(context.signal);
-		const result = await this.executor.execute("native-input", params, context);
+		const result = await this.executor.execute(
+			"native-input",
+			this.withPinnedPageTarget(context.signal, params),
+			context,
+		);
 		throwIfAborted(context.signal);
 		return normalizedProviderResponse(result);
 	}
@@ -1571,16 +1585,20 @@ export class OffscreenSessionToolEnvironment implements OffscreenAgentToolEnviro
 		const operationSignal = options.signal ?? new AbortController().signal;
 		throwIfAborted(operationSignal);
 		const parent = this.requireParentExecution(options.parentSignal ?? options.signal);
-		const result = await executor.execute(operation, params, {
-			clientId: this.context.clientId,
-			windowId: this.context.windowId,
-			sessionId: this.context.sessionId,
-			target: this.context.target,
-			...parent,
-			operationId: options.operationId,
-			origin: options.origin,
-			signal: operationSignal,
-		});
+		const result = await executor.execute(
+			operation,
+			applyPinnedReplPageTarget(operation, params, parent.pageTarget),
+			{
+				clientId: this.context.clientId,
+				windowId: this.context.windowId,
+				sessionId: this.context.sessionId,
+				target: this.context.target,
+				...parent,
+				operationId: options.operationId,
+				origin: options.origin,
+				signal: operationSignal,
+			},
+		);
 		throwIfAborted(operationSignal);
 		return result;
 	}
@@ -1594,6 +1612,7 @@ export class OffscreenSessionToolEnvironment implements OffscreenAgentToolEnviro
 			requestId: context.requestId,
 			executionId: context.executionId,
 			...(context.trace ? { trace: { ...context.trace } } : {}),
+			...(context.pageTarget ? { pageTarget: { ...context.pageTarget } } : {}),
 		};
 	}
 
