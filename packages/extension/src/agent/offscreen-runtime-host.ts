@@ -1,3 +1,4 @@
+import { type ReplPageTarget, replPageTargetFromParams } from "../bridge/repl-page-target.js";
 import {
 	correlateRuntimeResponse,
 	executionReferenceFor,
@@ -84,6 +85,8 @@ export interface OffscreenRuntimeOperationContext extends OffscreenRuntimeSessio
 	requestId: string;
 	executionId?: string;
 	trace?: RuntimeTraceContext;
+	/** Tab selected by `repl --tab-id` / `--frame-id`. Absent for agent prompts. */
+	pageTarget?: ReplPageTarget;
 	signal: AbortSignal;
 	session: OffscreenRuntimeSessionAdapter;
 }
@@ -789,8 +792,9 @@ export class OffscreenRuntimeHost {
 					const session = this.requireSession(request);
 					const repl = this.repl;
 					if (!repl) throw new OffscreenRuntimeHostError("UNSUPPORTED", "REPL delegate is unavailable");
+					const pageTarget = replPageTargetFromParams(operation);
 					return this.executeLongRequest(request, entry, session, controller, "repl", (context) =>
-						repl.execute(operation.code, context),
+						repl.execute(operation.code, pageTarget ? { ...context, pageTarget } : context),
 					);
 				}
 				case "page-operation": {

@@ -142,6 +142,13 @@ describe("runtime protocol", () => {
 			{ type: "release", force: true, reason: "window-removed" },
 			{ type: "repl-execute", executionId: "execution-repl", code: "return 1", language: "javascript" },
 			{
+				type: "repl-execute",
+				executionId: "execution-repl-tab",
+				code: "return 1",
+				tabId: 42,
+				frameId: 3,
+			},
+			{
 				type: "page-operation",
 				executionId: "execution-page",
 				operation: "trusted-click",
@@ -277,6 +284,10 @@ describe("runtime protocol", () => {
 			{ ...request({ type: "load" }), kind: "response", operation: "load", ok: true, result: null, error: { code: "BAD", message: "ambiguous", retryable: false } },
 			{ ...request({ type: "load" }), kind: "response", operation: "load", ok: false, result: null, error: { code: "BAD", message: "ambiguous", retryable: false } },
 			{ ...request({ type: "set-thinking", thinkingLevel: "medium" }), operation: { type: "set-thinking", thinkingLevel: "extreme" } },
+			{
+				...request({ type: "repl-execute", executionId: "execution-repl", code: "return 1" }),
+				operation: { type: "repl-execute", executionId: "execution-repl", code: "return 1", tabId: -1 },
+			},
 			{ ...request({ type: "prompt", executionId: "e1", message }), operation: { type: "prompt", executionId: "e1", message: { content: "missing role" } } },
 			{ ...request({ type: "page-operation", executionId: "e1", operation: "click", params: {} }), operation: { type: "page-operation", executionId: "e1", operation: "click", params: { run: () => true } } },
 			{ ...request({ type: "load" }), pending: new Set(["call-1"]) },

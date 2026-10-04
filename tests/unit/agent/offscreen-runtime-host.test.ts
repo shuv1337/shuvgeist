@@ -242,6 +242,43 @@ function errorCode(response: RuntimeResponseEnvelope): string | undefined {
 }
 
 describe("OffscreenRuntimeHost", () => {
+	it("passes repl --tab-id and --frame-id to the delegate", async () => {
+		const seen: Array<OffscreenRuntimeOperationContext["pageTarget"]> = [];
+		const factory = new TestSessionFactory();
+		const host = new OffscreenRuntimeHost({
+			runtimeEpoch: "epoch-1",
+			sessionFactory: factory,
+			emit: () => {},
+			repl: {
+				async execute(_code, context) {
+					seen.push(context.pageTarget);
+					return { output: "ok" };
+				},
+			},
+		});
+
+		expect((await host.handle(createRequest())).ok).toBe(true);
+		const pinned = await host.handle(
+			request({
+				type: "repl-execute",
+				executionId: "execution-repl",
+				code: "return 1",
+				tabId: 42,
+				frameId: 3,
+			}),
+		);
+		const open = await host.handle(
+			request(
+				{ type: "repl-execute", executionId: "execution-repl-open", code: "return 2" },
+				{ requestId: "request-repl-open" },
+			),
+		);
+
+		expect(pinned.ok).toBe(true);
+		expect(open.ok).toBe(true);
+		expect(seen).toEqual([{ tabId: 42, frameId: 3 }, undefined]);
+	});
+
 	it("isolates equal session and request ids by client window", async () => {
 		const factory = new TestSessionFactory();
 		const host = new OffscreenRuntimeHost({ runtimeEpoch: "epoch-1", sessionFactory: factory, emit: () => {} });

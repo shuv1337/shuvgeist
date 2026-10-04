@@ -171,7 +171,14 @@ export type RuntimeRequestOperation =
 	  }
 	| { type: "artifacts"; payload: RuntimeArtifactsPayload }
 	| { type: "release"; force?: boolean; reason?: string }
-	| { type: "repl-execute"; executionId: string; code: string; language?: "javascript" }
+	| {
+			type: "repl-execute";
+			executionId: string;
+			code: string;
+			language?: "javascript";
+			tabId?: number;
+			frameId?: number;
+	  }
 	| { type: "page-operation"; executionId: string; operation: string; params: RuntimeRecord }
 	| {
 			type: "resync";
@@ -702,6 +709,8 @@ function validateRequestOperation(value: unknown, path: string, issues: RuntimeV
 			if (operation.language !== undefined && operation.language !== "javascript") {
 				issue(issues, `${path}.language`, "must be javascript");
 			}
+			optionalIntegerAt(operation.tabId, `${path}.tabId`, issues);
+			optionalIntegerAt(operation.frameId, `${path}.frameId`, issues);
 			return;
 		case "page-operation":
 			nonEmptyStringAt(operation.executionId, `${path}.executionId`, issues);
