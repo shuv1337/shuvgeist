@@ -165,6 +165,31 @@ describe("CLI Node runtime composition", () => {
 				args: ["skill", "path", "--json"],
 				assertOutput: (stdout) => expect(JSON.parse(stdout)).toEqual({ path: expect.any(String) }),
 			},
+			{
+				args: ["launch", "--help"],
+				assertOutput: (stdout) => {
+					expect(stdout.trim()).toBe("Usage: shuvgeist launch [url] [browser options]");
+				},
+			},
+			{
+				args: ["launch", "-h"],
+				assertOutput: (stdout) => {
+					expect(stdout.trim()).toBe("Usage: shuvgeist launch [url] [browser options]");
+				},
+			},
+			{
+				args: ["electron", "launch", "--help"],
+				assertOutput: (stdout) => {
+					expect(stdout.trim()).toBe("Usage: shuvgeist electron launch <app-id-or-alias>");
+				},
+			},
+			{
+				args: ["not-a-command", "--help"],
+				assertOutput: (stdout) => {
+					expect(stdout).toContain("Usage:");
+					expect(stdout).toContain("exact /ws path with no query or fragment");
+				},
+			},
 		];
 		for (const command of localCommands) {
 			const result = spawnSync(tsxPath, [cliPath, ...command.args], {
@@ -176,5 +201,14 @@ describe("CLI Node runtime composition", () => {
 			expect(result.stderr).toBe("");
 			command.assertOutput(result.stdout);
 		}
-	});
+
+		const helpAsValue = spawnSync(tsxPath, [cliPath, "launch", "--url", "--help"], {
+			cwd: process.cwd(),
+			encoding: "utf8",
+			env,
+		});
+		expect(helpAsValue.status, helpAsValue.stderr).toBe(3);
+		expect(helpAsValue.stdout).toBe("");
+		expect(helpAsValue.stderr).toContain("Fatal: Invalid SHUVGEIST_BRIDGE_CONFIG");
+	}, 60_000);
 });

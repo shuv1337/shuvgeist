@@ -52,6 +52,13 @@ for (const definition of CliFlagDefinitions) {
 	}
 }
 
+const CliHelpTokens = new Set(["--help", "-h"]);
+
+/** True when `--help` or `-h` survived flag parsing as its own positional. */
+export function cliPositionalsRequestHelp(positionals: readonly string[]): boolean {
+	return positionals.some((token) => CliHelpTokens.has(token));
+}
+
 /** Parse bridge-command argv while preserving legacy unknown/missing-value handling. */
 export function parseCliArguments(args: readonly string[]): ParsedCliArguments {
 	const parsedFlags: Record<string, boolean | string | string[]> = {};
@@ -489,6 +496,29 @@ function resolveBridgeCliBinding(command: string, positionals: string[]): Resolv
 	if (best) return { ok: true, value: best };
 	const usages = Array.from(new Set(familyBindings.map(({ binding }) => binding.usage)));
 	return { ok: false, message: usages.join("\n") };
+}
+
+function familyUsageLines(command: string): readonly string[] | undefined {
+	const local = LocalCliCommandDefinitions.find((definition) => definition.family === command);
+	if (local) return [local.usage];
+	const bindings = BridgeCliBindings.filter(({ binding }) => binding.family === command);
+	if (bindings.length === 0) return undefined;
+	return Array.from(new Set(bindings.map(({ binding }) => binding.usage)));
+}
+
+/**
+ * Usage for `shuvgeist <command> … --help`.
+ * Family-level help lists every binding. A recognized subcommand lists that binding.
+ * Unknown commands return undefined so the caller can print top-level usage.
+ */
+export function formatCommandHelp(command: string, positionals: readonly string[]): string | undefined {
+	const lines = familyUsageLines(command);
+	if (!lines) return undefined;
+	const withoutHelp = positionals.filter((token) => !CliHelpTokens.has(token));
+	if (withoutHelp.length === 0 || lines.length === 1) return lines.join("\n");
+	const resolved = resolveBridgeCliBinding(command, withoutHelp);
+	if (!resolved.ok) return lines.join("\n");
+	return resolved.value.binding.usage;
 }
 
 function isMissingCliValue(value: unknown): boolean {

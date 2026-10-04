@@ -59,8 +59,10 @@ import { WebSocket } from "ws";
 import { resolveCliBuildIdentity, resolveDevelopmentRoot } from "./build-identity.js";
 import {
 	bridgeStatusUrl,
+	cliPositionalsRequestHelp,
 	createCommandPlan,
 	exitCodeForResponse,
+	formatCommandHelp,
 	generateRequestId,
 	isNetworkOrConfigError,
 	parseCliArguments,
@@ -1718,6 +1720,21 @@ async function main(): Promise<void> {
 		return;
 	}
 
+	// Help must run before Node runtime construction. Otherwise `launch --help`
+	// is planned as a URL and launchBrowser waits on extension registration.
+	const command = args[0];
+	const rest = args.slice(1);
+	const parsed = parseCliArguments(rest);
+	if (cliPositionalsRequestHelp(parsed.positionals)) {
+		const usage = formatCommandHelp(command, parsed.positionals);
+		if (usage) {
+			console.log(usage);
+		} else {
+			printUsage();
+		}
+		process.exit(0);
+	}
+
 	// Explicit config-path overrides are validated only for commands that use
 	// Node runtime state. Keeping construction here puts failures under the CLI
 	// error boundary while help, version, and skill remain recovery-safe.
@@ -1725,10 +1742,8 @@ async function main(): Promise<void> {
 
 	// Best-effort: keep the packaged skill synced to ~/.agents/skills on every
 	// real command run (version-gated, silent, never fatal).
-	const command = args[0];
 	if (command !== "doctor") ensureSkillInstalled(VERSION);
-	const rest = args.slice(1);
-	const { flags, positionals } = parseCliArguments(rest);
+	const { flags, positionals } = parsed;
 	const plan = createCommandPlan(command, positionals, flags, (path) => readFileSync(path, "utf-8"));
 
 	// Auto-start bridge for commands that need it. For the `launch` command,

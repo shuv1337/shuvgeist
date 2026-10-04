@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- `shuvgeist <command> --help` and `-h` print cli-grammar usage and exit before bridge startup or browser launch. A help token passed as a flag value is left for the command. (`pc_455a731dc40b`, #85)
+
 ## [2.0.1] - 2026-09-21
 
 ### Breaking Changes
