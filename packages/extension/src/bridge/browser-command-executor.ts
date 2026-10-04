@@ -889,6 +889,14 @@ export class BrowserCommandExecutor {
 					{ parent: traceContext },
 				);
 			}
+			this.debuggerManager.rememberDeviceEmulation(tabId, {
+				width: normalized.viewport.width,
+				height: normalized.viewport.height,
+				deviceScaleFactor: normalized.viewport.deviceScaleFactor,
+				mobile: normalized.viewport.mobile,
+				touch: normalized.touch,
+				userAgent: normalized.userAgent,
+			});
 			return {
 				ok: true,
 				tabId,
@@ -930,6 +938,7 @@ export class BrowserCommandExecutor {
 				},
 				{ parent: traceContext },
 			);
+			this.debuggerManager.forgetDeviceEmulation(tabId);
 			return { ok: true, tabId };
 		} finally {
 			await this.debuggerManager.releaseWithTrace(tabId, owner, { parent: traceContext });
