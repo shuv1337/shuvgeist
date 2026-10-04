@@ -142,6 +142,13 @@ describe("runtime protocol", () => {
 			{ type: "release", force: true, reason: "window-removed" },
 			{ type: "repl-execute", executionId: "execution-repl", code: "return 1", language: "javascript" },
 			{
+				type: "repl-execute",
+				executionId: "execution-repl-pin",
+				code: "return location.host",
+				tabId: 17,
+				frameId: 0,
+			},
+			{
 				type: "page-operation",
 				executionId: "execution-page",
 				operation: "trusted-click",
@@ -292,6 +299,10 @@ describe("runtime protocol", () => {
 				recovery: { mode: "restarted", sessions: [] },
 			},
 			{ ...request({ type: "load" }), target: { kind: "electron-window", windowRef: "w1" } },
+			{
+				...request({ type: "repl-execute", executionId: "execution-repl", code: "return 1" }),
+				operation: { type: "repl-execute", executionId: "execution-repl", code: "return 1", tabId: -1 },
+			},
 			{ ...streamBase(), streamType: "agent-event", agentEvent: { type: "unknown" } },
 			{ ...streamBase(), eventSeq: 0, streamType: "agent-event", agentEvent: { type: "agent_start" } },
 		];

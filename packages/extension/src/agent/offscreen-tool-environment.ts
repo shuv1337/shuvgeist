@@ -20,6 +20,7 @@ import type {
 	OffscreenAgentToolRuntimeContext,
 } from "./offscreen-agent-session.js";
 import type {
+	OffscreenExplicitPageTarget,
 	OffscreenRuntimeArtifactsDelegate,
 	OffscreenRuntimeOperationContext,
 	OffscreenRuntimeReplDelegate,
@@ -135,6 +136,7 @@ export interface OffscreenParentExecutionIdentity {
 	requestId: string;
 	executionId: string;
 	trace?: RuntimeTraceContext;
+	explicitPageTarget?: OffscreenExplicitPageTarget;
 }
 
 export interface OffscreenPrivilegedOperationContext
@@ -787,12 +789,16 @@ export class OffscreenBrowserJsRuntimeProvider extends DeduplicatingRuntimeProvi
 		const context = this.contextFor(message);
 		throwIfAborted(context.signal);
 		const providerBundle = serializeRuntimeProviders(this.pageProviders());
+		const pageTarget = context.explicitPageTarget;
 		const result = await this.executor.execute(
 			"browser-js",
 			{
 				code: message.code,
 				...(typeof message.args === "string" ? { args: message.args } : {}),
 				...providerBundle,
+				// Explicit REPL --tab-id stays on the payload. The session target remains logical.
+				...(typeof pageTarget?.tabId === "number" ? { tabId: pageTarget.tabId } : {}),
+				...(typeof pageTarget?.frameId === "number" ? { frameId: pageTarget.frameId } : {}),
 			},
 			context,
 		);
@@ -1594,6 +1600,7 @@ export class OffscreenSessionToolEnvironment implements OffscreenAgentToolEnviro
 			requestId: context.requestId,
 			executionId: context.executionId,
 			...(context.trace ? { trace: { ...context.trace } } : {}),
+			...(context.explicitPageTarget ? { explicitPageTarget: { ...context.explicitPageTarget } } : {}),
 		};
 	}
 

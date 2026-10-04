@@ -61,6 +61,7 @@ import {
 	handleBgNavigate,
 	resolveBackgroundUserScriptMessage,
 } from "@shuvgeist/extension/bridge/background-runtime-handler";
+import { resolveTabTarget } from "@shuvgeist/extension/tools/helpers/browser-target";
 
 interface ChromeUserScriptsMock {
 	configureWorld: ReturnType<typeof vi.fn>;
@@ -99,6 +100,41 @@ describe("handleBgBrowserJs", () => {
 
 	afterEach(() => {
 		vi.restoreAllMocks();
+	});
+
+	it("executes browserjs on an explicit tab when another tab is active", async () => {
+		vi.mocked(resolveTabTarget).mockImplementationOnce(async (options = {}) => {
+			if (typeof options.tabId === "number") {
+				return {
+					tab: { id: options.tabId, url: "https://pinned.example" } as chrome.tabs.Tab,
+					tabId: options.tabId,
+					source: "explicit",
+				};
+			}
+			return {
+				tab: { id: 99, url: "https://active.example" } as chrome.tabs.Tab,
+				tabId: 99,
+				source: "active",
+			};
+		});
+
+		await expect(
+			handleBgBrowserJs(
+				{
+					code: "() => location.host",
+					args: "[]",
+					tabId: 17,
+				},
+				7,
+			),
+		).resolves.toMatchObject({ success: true, result: { title: "Example" } });
+
+		expect(resolveTabTarget).toHaveBeenCalledWith({ windowId: 7, tabId: 17, frameId: undefined });
+		expect(userScriptsMock().execute).toHaveBeenCalledWith(
+			expect.objectContaining({
+				target: { tabId: 17, allFrames: false },
+			}),
+		);
 	});
 
 	it("preserves the background browserjs success envelope", async () => {

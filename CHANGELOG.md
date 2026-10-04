@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- `shuvgeist repl --tab-id` keeps `browserjs()` on the requested tab when another tab becomes active. (`pc_92b3af2148a1`)
+
 ## [2.0.1] - 2026-09-21
 
 ### Breaking Changes

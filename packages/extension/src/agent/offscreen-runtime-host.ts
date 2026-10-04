@@ -79,11 +79,21 @@ export interface OffscreenRuntimeSessionFactory {
 	restore?(input: OffscreenRuntimeRestoreSessionInput): Promise<OffscreenRuntimeSessionAdapter>;
 }
 
+export interface OffscreenExplicitPageTarget {
+	tabId?: number;
+	frameId?: number;
+}
+
 export interface OffscreenRuntimeOperationContext extends OffscreenRuntimeSessionScope {
 	runtimeEpoch: string;
 	requestId: string;
 	executionId?: string;
 	trace?: RuntimeTraceContext;
+	/**
+	 * Tab pin for one REPL execution. The session target stays logical so an
+	 * unpinned call still resolves the active tab at execution time.
+	 */
+	explicitPageTarget?: OffscreenExplicitPageTarget;
 	signal: AbortSignal;
 	session: OffscreenRuntimeSessionAdapter;
 }
@@ -1669,8 +1679,23 @@ export class OffscreenRuntimeHost {
 			requestId: request.requestId,
 			...(executionId ? { executionId } : {}),
 			...(request.trace ? { trace: cloneWireValue(request.trace, "Operation trace") } : {}),
+			...this.explicitReplPageTarget(request),
 			signal,
 			session: session.adapter,
+		};
+	}
+
+	private explicitReplPageTarget(request: RuntimeRequestEnvelope): {
+		explicitPageTarget?: OffscreenExplicitPageTarget;
+	} {
+		if (request.operation.type !== "repl-execute") return {};
+		const { tabId, frameId } = request.operation;
+		if (tabId === undefined && frameId === undefined) return {};
+		return {
+			explicitPageTarget: {
+				...(tabId !== undefined ? { tabId } : {}),
+				...(frameId !== undefined ? { frameId } : {}),
+			},
 		};
 	}
 

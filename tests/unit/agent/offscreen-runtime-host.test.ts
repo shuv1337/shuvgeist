@@ -242,6 +242,49 @@ function errorCode(response: RuntimeResponseEnvelope): string | undefined {
 }
 
 describe("OffscreenRuntimeHost", () => {
+	it("keeps an explicit repl tab pin off the logical session target", async () => {
+		const factory = new TestSessionFactory();
+		const seen: OffscreenRuntimeOperationContext[] = [];
+		const host = new OffscreenRuntimeHost({
+			runtimeEpoch: "epoch-1",
+			sessionFactory: factory,
+			emit: () => {},
+			repl: {
+				async execute(_code, context) {
+					seen.push(context);
+					return { ok: true };
+				},
+			},
+		});
+
+		await host.handle(createRequest());
+		const pinned = await host.handle(
+			request(
+				{
+					type: "repl-execute",
+					executionId: "execution-repl-pin",
+					code: "return location.host",
+					tabId: 17,
+					frameId: 2,
+				},
+				{ requestId: "request-repl-pin" },
+			),
+		);
+		const unpinned = await host.handle(
+			request(
+				{ type: "repl-execute", executionId: "execution-repl-active", code: "return 1" },
+				{ requestId: "request-repl-active" },
+			),
+		);
+
+		expect(pinned.ok).toBe(true);
+		expect(unpinned.ok).toBe(true);
+		expect(seen[0]?.explicitPageTarget).toEqual({ tabId: 17, frameId: 2 });
+		expect(seen[0]?.target).toEqual(target);
+		expect(seen[1]?.explicitPageTarget).toBeUndefined();
+		expect(seen[1]?.target).toEqual(target);
+	});
+
 	it("isolates equal session and request ids by client window", async () => {
 		const factory = new TestSessionFactory();
 		const host = new OffscreenRuntimeHost({ runtimeEpoch: "epoch-1", sessionFactory: factory, emit: () => {} });
