@@ -940,8 +940,10 @@ shuvgeist perf trace-start --timeout 2m
 |------|---------|--------|
 | 0 | Success | Continue |
 | 1 | Assertion failed or command/runtime error | Inspect the returned assertion result or error |
-| 2 | No extension target connected | Connect or launch a browser target |
-| 3 | Auth/configuration/network error | Check token, URL, local bridge config, or discovery |
+| 2 | No extension target connected | Connect or launch a browser target. The error names `extension-registration` when the bridge is up and the extension is not. |
+| 3 | Auth/configuration/network error | Check token, URL, local bridge config, or discovery. The error names `bridge-status` when the status endpoint itself does not respond. |
+
+An already-reachable bridge fails that check within 2 seconds. The 30 second extension reconnect budget applies only after this command starts the bridge. `shuvgeist status` still prints the snapshot and exits 0 when the bridge answered; text mode also prints the blocked stage on stderr.
 
 ## Recommended operating patterns
 

@@ -1,5 +1,7 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { once } from "node:events";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -58,7 +60,7 @@ describe("CLI Node runtime composition", () => {
 		let ensuredOwner: NodeConfigOwner | undefined;
 		const ensureServer: EnsureCliBridgeServer = vi.fn(async (_flags, options) => {
 			ensuredOwner = options.owner;
-			return CONNECTION;
+			return { ...CONNECTION, alreadyHealthy: true };
 		});
 		const runtime = createCliNodeRuntime({ owner, ensureServer });
 		const commandFamilies = ["status", "one-shot", "record", "session-follow", "launch"] as const;
@@ -70,7 +72,10 @@ describe("CLI Node runtime composition", () => {
 					: runtime.requireConnection({ host: "ignored-by-fixture" });
 			expect(resolved).toBe(CONNECTION);
 		}
-		await expect(runtime.ensureServer({ host: "ignored-by-fixture" })).resolves.toBe(CONNECTION);
+		await expect(runtime.ensureServer({ host: "ignored-by-fixture" })).resolves.toEqual({
+			...CONNECTION,
+			alreadyHealthy: true,
+		});
 
 		expect(owner.resolveBridgeConnection).toHaveBeenCalledTimes(commandFamilies.length);
 		expect(ensureServer).toHaveBeenCalledOnce();
@@ -131,6 +136,93 @@ describe("CLI Node runtime composition", () => {
 			}
 		},
 		30_000,
+	);
+
+	it(
+		"names the blocked extension-registration stage within the fail-fast budget when the bridge is already healthy",
+		async () => {
+			const server = createServer((request, response) => {
+				if (request.url !== "/status") {
+					response.writeHead(404);
+					response.end();
+					return;
+				}
+				response.writeHead(200, { "content-type": "application/json" });
+				response.end(
+					JSON.stringify({
+						ok: true,
+						protocolVersion: 4,
+						minProtocolVersion: 4,
+						serverVersion: "dev",
+						extension: { connected: false },
+						clients: { total: 0, cli: 0, extension: 0 },
+						electron: { sessions: [] },
+						pendingRequests: 0,
+					}),
+				);
+			});
+			server.listen(0, "127.0.0.1");
+			await once(server, "listening");
+			const address = server.address();
+			if (address === null || typeof address === "string") throw new Error("expected the status server to bind a TCP port");
+			const directory = mkdtempSync(join(tmpdir(), "shuvgeist-cli-readiness-"));
+			const env = {
+				...process.env,
+				SHUVGEIST_BRIDGE_CONFIG: join(directory, "bridge.json"),
+				SHUVGEIST_CONFIG: join(directory, "discovery.json"),
+				SHUVGEIST_BRIDGE_URL: `ws://127.0.0.1:${address.port}/ws`,
+				SHUVGEIST_BRIDGE_TOKEN: "test-token",
+			};
+			const cliPath = join(process.cwd(), "packages", "cli", "src", "cli.ts");
+			const tsxPath = join(process.cwd(), "node_modules", ".bin", "tsx");
+			const runCli = (args: readonly string[]) =>
+				new Promise<{ code: number | null; stdout: string; stderr: string; elapsedMs: number }>((resolve, reject) => {
+					const startedAt = Date.now();
+					const child = spawn(tsxPath, [cliPath, ...args], {
+						cwd: process.cwd(),
+						env,
+						stdio: ["ignore", "pipe", "pipe"],
+					});
+					let stdout = "";
+					let stderr = "";
+					const timer = setTimeout(() => {
+						child.kill("SIGKILL");
+						reject(new Error(`timed out\n${stderr}\n${stdout}`));
+					}, 12_000);
+					child.stdout.setEncoding("utf8");
+					child.stderr.setEncoding("utf8");
+					child.stdout.on("data", (chunk: string) => {
+						stdout += chunk;
+					});
+					child.stderr.on("data", (chunk: string) => {
+						stderr += chunk;
+					});
+					child.on("error", (error) => {
+						clearTimeout(timer);
+						reject(error);
+					});
+					child.on("exit", (code) => {
+						clearTimeout(timer);
+						resolve({ code, stdout, stderr, elapsedMs: Date.now() - startedAt });
+					});
+				});
+			try {
+				const tabs = await runCli(["tabs", "--json"]);
+				expect(tabs.elapsedMs, tabs.stderr).toBeLessThan(12_000);
+				expect(tabs.code, tabs.stderr).toBe(2);
+				expect(tabs.stdout).toContain("Blocked at extension-registration");
+				expect(tabs.stderr).not.toContain("Waiting for Shuvgeist extension to connect");
+
+				const status = await runCli(["status"]);
+				expect(status.code, `${status.stdout}\n${status.stderr}`).toBe(0);
+				expect(status.stderr).toContain("Blocked at extension-registration");
+				expect(status.stdout).toContain("Connected: no");
+			} finally {
+				server.close();
+				rmSync(directory, { recursive: true, force: true });
+			}
+		},
+		45_000,
 	);
 
 	it("contains invalid config-path overrides while help, version, and skill remain recovery-safe", () => {

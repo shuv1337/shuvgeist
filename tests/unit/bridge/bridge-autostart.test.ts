@@ -241,6 +241,7 @@ describe("bridge source-tree autostart", () => {
 		);
 
 		expect(result.token).toBe("generated-token");
+		expect(result.alreadyHealthy).toBe(false);
 		expect(spawnCall).toEqual({
 			command: TSX_PATH,
 			args: [
@@ -511,6 +512,7 @@ describe("bridge source-tree autostart", () => {
 		const result = await ensureBridgeServer({}, { owner, fs, spawn, probe: sequenceProbe([true]) });
 
 		expect(result.url).toBe("wss://remote.example/ws");
+		expect(result.alreadyHealthy).toBe(true);
 		expect(spawn).not.toHaveBeenCalled();
 		expect(configFs.writePaths).toEqual([]);
 	});
@@ -681,7 +683,7 @@ describe("bridge source-tree autostart", () => {
 					startupDelaysMs: [1],
 				},
 			),
-		).resolves.toMatchObject({ token: "token" });
+		).resolves.toMatchObject({ token: "token", alreadyHealthy: false });
 		expect(spawn).toHaveBeenCalledOnce();
 	});
 });

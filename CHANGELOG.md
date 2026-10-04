@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- `shuvgeist status` and extension-backed commands such as `tabs` name the blocked bridge stage (`bridge-status` or `extension-registration`) instead of waiting out a generic 30 second reconnect budget when the bridge is already reachable. A bridge this process just started still waits up to 30 seconds. `status` keeps printing a disconnected snapshot when the bridge answered. (`pc_911a3e182740`)
+
 ## [2.0.1] - 2026-09-21
 
 ### Breaking Changes
