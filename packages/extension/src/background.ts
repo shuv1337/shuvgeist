@@ -777,6 +777,8 @@ function createReplRouter(windowId: number): ReplRouter {
 					executionId: crypto.randomUUID(),
 					code: params.code,
 					language: "javascript",
+					...(typeof params.tabId === "number" ? { tabId: params.tabId } : {}),
+					...(typeof params.frameId === "number" ? { frameId: params.frameId } : {}),
 				},
 				{ signal, trace: traceContext },
 			);

@@ -426,6 +426,80 @@ describe("PureOffscreenAgentToolRuntime", () => {
 		}
 	});
 
+	it("pins browserjs to an explicit REPL tab when the session target stays logical", async () => {
+		const calls: Array<{ operation: string; params: RuntimeValue }> = [];
+		const runtime = new PureOffscreenAgentToolRuntime({
+			privilegedOperations: {
+				async execute(operation, params) {
+					calls.push({ operation, params });
+					return { success: true, result: "pinned-host" };
+				},
+			},
+		});
+		const environment = await runtime.create(context());
+		const browserProvider = environment
+			.getRuntimeProviders()
+			.find((provider) => provider instanceof OffscreenBrowserJsRuntimeProvider);
+		if (!(browserProvider instanceof OffscreenBrowserJsRuntimeProvider)) throw new Error("browser provider missing");
+
+		const unpinned = operationContext();
+		await environment.withParentExecution(unpinned, async () => {
+			browserProvider.onExecutionStart?.("sandbox-active", unpinned.signal);
+			try {
+				await browserProvider.handleMessage?.(
+					{
+						type: "browser-js",
+						code: "() => location.host",
+						args: "[]",
+						sandboxId: "sandbox-active",
+						messageId: "message-active",
+					},
+					() => {},
+				);
+			} finally {
+				browserProvider.onExecutionEnd?.("sandbox-active");
+			}
+		});
+
+		const pinnedSignal = new AbortController().signal;
+		const pinned = {
+			...operationContext(pinnedSignal),
+			requestId: "request-pinned",
+			executionId: "execution-pinned",
+			explicitPageTarget: { tabId: 17, frameId: 3 },
+		};
+		await environment.withParentExecution(pinned, async () => {
+			browserProvider.onExecutionStart?.("sandbox-pinned", pinned.signal);
+			try {
+				await browserProvider.handleMessage?.(
+					{
+						type: "browser-js",
+						code: "() => location.host",
+						args: "[]",
+						sandboxId: "sandbox-pinned",
+						messageId: "message-pinned",
+					},
+					() => {},
+				);
+			} finally {
+				browserProvider.onExecutionEnd?.("sandbox-pinned");
+			}
+		});
+
+		expect(calls[0]?.params).toMatchObject({ code: "() => location.host", args: "[]" });
+		expect(calls[0]?.params).not.toHaveProperty("tabId");
+		expect(calls[0]?.params).not.toHaveProperty("frameId");
+		expect(calls[1]).toEqual({
+			operation: "browser-js",
+			params: expect.objectContaining({
+				code: "() => location.host",
+				args: "[]",
+				tabId: 17,
+				frameId: 3,
+			}),
+		});
+	});
+
 	it("rejects unbound and late privileged work instead of borrowing a session identity", async () => {
 		const execute = vi.fn(async () => ({ ok: true }));
 		const runtime = new PureOffscreenAgentToolRuntime({ privilegedOperations: { execute } });
