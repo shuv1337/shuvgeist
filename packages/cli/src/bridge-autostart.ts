@@ -21,6 +21,15 @@ import {
 	type ResolvedBridgeConnection,
 } from "@shuvgeist/server/node-config";
 
+export interface EnsuredBridgeConnection extends ResolvedBridgeConnection {
+	/**
+	 * True when the status endpoint was already healthy before this call did
+	 * any startup work. False when this call spawned the bridge or waited for
+	 * another process to bring it up.
+	 */
+	alreadyHealthy: boolean;
+}
+
 export { bridgeStatusUrl } from "@shuvgeist/server/node-config";
 
 // Injected by scripts/build-cli.mjs (esbuild `define`). Absent in unit tests.
@@ -138,7 +147,11 @@ const DEFAULT_AUTOSTART_FILE_SYSTEM: BridgeAutostartFileSystem = {
 
 interface StartInFlight {
 	identity: string;
-	promise: Promise<ResolvedBridgeConnection>;
+	promise: Promise<EnsuredBridgeConnection>;
+}
+
+function finishConnection(connection: ResolvedBridgeConnection, alreadyHealthy: boolean): EnsuredBridgeConnection {
+	return { ...connection, alreadyHealthy };
 }
 
 const STARTS_IN_FLIGHT = new Map<string, StartInFlight>();
@@ -301,12 +314,12 @@ async function ensureBridgeServerExclusive(
 	flags: BridgeConnectionOverrides,
 	options: EnsureBridgeServerOptions,
 	initialConnection: ResolvedBridgeConnection,
-): Promise<ResolvedBridgeConnection> {
+): Promise<EnsuredBridgeConnection> {
 	let connection = initialConnection;
 	let statusUrl = bridgeStatusUrl(connection.url);
 	const probe = options.probe ?? probeBridgeStatus;
 	const probeTimeoutMs = options.probeTimeoutMs ?? 3_000;
-	if (await safelyProbe(probe, statusUrl, probeTimeoutMs)) return connection;
+	if (await safelyProbe(probe, statusUrl, probeTimeoutMs)) return finishConnection(connection, true);
 	if (!connection.canAutoStart || !isBridgeUrlSafeForAutoStart(connection.url)) {
 		// createBridgeAutostartPlan owns the stable, actionable policy error.
 		createBridgeAutostartPlan(connection, { developmentRoot: options.developmentRoot });
@@ -348,7 +361,10 @@ async function ensureBridgeServerExclusive(
 		);
 	}
 	if (!acquiredLock) {
-		return waitForCompetingStart(owner, flags, options, statusUrl, probe, probeTimeoutMs, lockPath);
+		return finishConnection(
+			await waitForCompetingStart(owner, flags, options, statusUrl, probe, probeTimeoutMs, lockPath),
+			false,
+		);
 	}
 
 	try {
@@ -360,7 +376,7 @@ async function ensureBridgeServerExclusive(
 			createBridgeAutostartPlan(connection, { developmentRoot });
 		}
 		// The endpoint may have become healthy between the initial probe and lock.
-		if (await safelyProbe(probe, statusUrl, probeTimeoutMs)) return connection;
+		if (await safelyProbe(probe, statusUrl, probeTimeoutMs)) return finishConnection(connection, false);
 
 		if (!connection.token) {
 			const token = (options.createToken ?? createDefaultToken)().trim();
@@ -387,7 +403,7 @@ async function ensureBridgeServerExclusive(
 
 		const plan = createBridgeAutostartPlan(connection, { developmentRoot });
 		// Re-probe after config/token work to avoid racing an unmanaged starter.
-		if (await safelyProbe(probe, statusUrl, probeTimeoutMs)) return connection;
+		if (await safelyProbe(probe, statusUrl, probeTimeoutMs)) return finishConnection(connection, false);
 
 		const environment: NodeJS.ProcessEnv = {
 			...(options.processEnvironment ?? process.env),
@@ -441,7 +457,7 @@ async function ensureBridgeServerExclusive(
 		const delay = options.delay ?? defaultDelay;
 		for (const milliseconds of options.startupDelaysMs ?? DEFAULT_STARTUP_DELAYS_MS) {
 			await delay(milliseconds);
-			if (await safelyProbe(probe, statusUrl, probeTimeoutMs)) return connection;
+			if (await safelyProbe(probe, statusUrl, probeTimeoutMs)) return finishConnection(connection, false);
 		}
 		throw new NodeConfigError(
 			"AUTOSTART_FAILED",
@@ -475,7 +491,7 @@ function propagateResolvedToken(flags: BridgeConnectionOverrides, connection: Re
 export async function ensureBridgeServer(
 	flags: BridgeConnectionOverrides = {},
 	options: EnsureBridgeServerOptions = {},
-): Promise<ResolvedBridgeConnection> {
+): Promise<EnsuredBridgeConnection> {
 	const owner = options.owner ?? createNodeConfigOwner();
 	const initialConnection = owner.resolveBridgeConnection(flags, options.connectionDefaults);
 	const key = `${initialConnection.configPath}\0${initialConnection.url}`;

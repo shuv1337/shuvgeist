@@ -68,8 +68,9 @@ import {
 	withEncodedRecordingStats,
 } from "./cli-core.js";
 import { type CliNodeRuntime, createCliNodeRuntime } from "./cli-node-runtime.js";
-import { formatBridgeStatusText, isBridgeStatusReady } from "./cli-status.js";
+import { formatBridgeStatusText } from "./cli-status.js";
 import { collectDoctorReport, formatDoctorReportText } from "./doctor.js";
+import { extensionConnectBudgetMs, extensionWaitDisposition, waitForBridgeReadiness } from "./extension-readiness.js";
 import { closeBrowser, type LaunchOptions, launchBrowser, setupForegroundHandlers } from "./launcher.js";
 import { assertFfmpegAvailable, FfmpegWebmEncoder } from "./recording/ffmpeg-encoder.js";
 import { ensureSkillInstalled, installSkill, resolveSkillTargetDir } from "./skill-install.js";
@@ -1266,22 +1267,6 @@ function generateToken(): string {
 	return result;
 }
 
-/**
- * How long to wait for the browser extension to (re)connect to the bridge
- * after the server has come up. The extension-side BridgeClient uses
- * exponential backoff capped at 15 seconds plus a keepalive alarm nudge, so
- * 30 seconds comfortably covers the worst case where the extension just hit
- * its backoff ceiling right before the bridge process came back up. Most
- * warm paths connect in well under 2 seconds.
- */
-const EXTENSION_CONNECT_WAIT_MS = 30_000;
-
-/**
- * After this long without the extension connecting, print a single stderr
- * hint so the user knows we are still waiting (instead of silently hanging).
- */
-const EXTENSION_CONNECT_HINT_MS = 1_500;
-
 async function fetchStatusSnapshot(statusUrl: string): Promise<BridgeServerStatus | null> {
 	try {
 		const controller = new AbortController();
@@ -1306,45 +1291,6 @@ function assertBridgeStatusProtocol(status: BridgeServerStatus): void {
 				formatBridgeProtocolMismatch("extension", status.extension.protocolVersion, extensionMinProtocolVersion),
 			);
 		}
-	}
-}
-
-/**
- * Poll the bridge's /status endpoint until the extension has registered, an
- * Electron session is usable when explicitly accepted, or the timeout elapses.
- * Returns `true` when one of the accepted target surfaces is ready.
- *
- * Called after ensureBridgeServer() so that even cold-start commands like
- * `shuvgeist status` reflect the live extension state instead of reporting
- * "not connected" during the normal extension reconnect window.
- */
-async function waitForExtensionConnection(
-	statusUrl: string,
-	timeoutMs: number,
-	options: { silent?: boolean; acceptElectron?: boolean } = {},
-): Promise<boolean> {
-	const startedAt = Date.now();
-	let hintPrinted = false;
-	let delay = 100;
-	while (true) {
-		const status = await fetchStatusSnapshot(statusUrl);
-		if (status && isBridgeStatusReady(status, options.acceptElectron === true)) return true;
-
-		const elapsed = Date.now() - startedAt;
-		if (elapsed >= timeoutMs) return false;
-
-		if (!hintPrinted && !options.silent && elapsed >= EXTENSION_CONNECT_HINT_MS) {
-			process.stderr.write("Waiting for Shuvgeist extension to connect...\n");
-			hintPrinted = true;
-		}
-
-		const remaining = timeoutMs - elapsed;
-		const sleepMs = Math.min(delay, remaining);
-		if (sleepMs <= 0) return false;
-		await new Promise((resolve) => {
-			setTimeout(resolve, sleepMs);
-		});
-		delay = Math.min(delay * 2, 500);
 	}
 }
 
@@ -1735,15 +1681,19 @@ async function main(): Promise<void> {
 	// `flags.url` is the URL to open in the launched browser (not the bridge
 	// URL), so strip it before passing to the bridge server helpers.
 	//
-	// After the bridge process is up, also wait for the browser extension to
-	// (re)register. Status may return as soon as an Electron session is usable,
+	// After the bridge process is up, wait for the browser extension to
+	// register. Status may return as soon as an Electron session is usable,
 	// because bridge-local Electron control does not depend on the extension.
+	// An already-healthy bridge gets a short fail-fast budget. Extension-backed
+	// commands then exit with the blocked stage. The full reconnect budget is
+	// reserved for a bridge this process just started.
 	//
 	// `launch` has its own extension-registration wait inside launchBrowser()
 	// and `close` is a local browser-lifecycle operation, so both skip the
-	// extra wait here. JSON callers still get a single-shot view: the wait is
-	// silent and bounded, and commands that do not require an extension target
-	// (e.g. a disconnected `status --json`) still complete after the timeout.
+	// extra wait here. JSON callers stay silent during the wait. `status`
+	// still prints a disconnected snapshot when the bridge answered. Other
+	// extension-backed commands exit with the blocked stage instead of falling
+	// through into a generic connection timeout.
 	if (plan.kind !== "serve" && plan.kind !== "doctor" && plan.kind !== "usage-error") {
 		const runtime = requireNodeRuntime();
 		const bridgeFlags = plan.kind === "launch" ? { host: flags.host, port: flags.port, token: flags.token } : flags;
@@ -1760,12 +1710,37 @@ async function main(): Promise<void> {
 		if (!skipsExtensionWait) {
 			const wsUrl = runtime.resolveConnection(bridgeFlags).url;
 			const statusUrl = bridgeStatusUrl(wsUrl);
-			await waitForExtensionConnection(statusUrl, EXTENSION_CONNECT_WAIT_MS, {
-				silent: flags.json === true,
+			const readiness = await waitForBridgeReadiness({
+				statusUrl,
+				timeoutMs: extensionConnectBudgetMs(connection.alreadyHealthy),
+				alreadyHealthy: connection.alreadyHealthy,
 				acceptElectron: plan.kind === "status",
+				silent: flags.json === true,
+				fetchStatus: fetchStatusSnapshot,
+				onHint: (message) => {
+					process.stderr.write(message);
+				},
 			});
-			const status = await fetchStatusSnapshot(statusUrl);
-			if (status) assertBridgeStatusProtocol(status);
+			if (readiness.status) assertBridgeStatusProtocol(readiness.status);
+			const disposition = extensionWaitDisposition(
+				plan.kind === "status" ? "status" : "extension-command",
+				readiness,
+			);
+			switch (disposition.action) {
+				case "continue":
+					break;
+				case "report-status":
+					if (flags.json !== true) process.stderr.write(`${disposition.notice}\n`);
+					break;
+				case "fail":
+					printError(disposition.message, flags.json === true);
+					process.exit(disposition.exitCode);
+					break;
+				default: {
+					const unreachable: never = disposition;
+					throw new Error(`Unhandled extension wait disposition: ${JSON.stringify(unreachable)}`);
+				}
+			}
 		}
 	}
 
