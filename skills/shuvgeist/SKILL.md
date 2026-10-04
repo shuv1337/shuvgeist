@@ -93,6 +93,8 @@ Use this to confirm:
 - active bridge-local Electron sessions and renderer-window health
 - bridge skill-snapshot state (`missing`, `fresh`, `stale`, or `invalid`)
 
+`status` waits at most 5 seconds by default. `--timeout` overrides that deadline, and `--timeout none` waits without one. A connected extension or usable Electron session returns immediately. A reachable bridge with nothing connected still returns the current status when the deadline expires. If the bridge does not answer, the command exits 3. `--json` then includes `error.diagnostics` with the status URL, timeout, and connectivity reason (`timeout`, `connection_refused`, `http_error`, `autostart_failed`, and related codes).
+
 `status` does not report Chrome tab state or prove that a sidepanel session has been accepted. Use `shuvgeist tabs --json` for tab/window state and `shuvgeist session --json` for the active sidepanel session.
 
 If you only need a quick human-readable check:

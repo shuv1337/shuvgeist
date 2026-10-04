@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- `shuvgeist status` now stops within 5 seconds by default and reports bridge connectivity diagnostics instead of hanging with no output. (`pc_9052910338bd`)
+
 ## [2.0.1] - 2026-09-21
 
 ### Breaking Changes

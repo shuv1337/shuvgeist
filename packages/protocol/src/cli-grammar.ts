@@ -202,7 +202,7 @@ export const GlobalCliFlagKeys = [
 export const LocalCliCommandDefinitions = [
 	{
 		family: "status",
-		usage: "Usage: shuvgeist status",
+		usage: "Usage: shuvgeist status [--json] [--timeout 5s]",
 		flags: [],
 		positionals: [],
 		codec: "local-status",

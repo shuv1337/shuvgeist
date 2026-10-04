@@ -68,7 +68,18 @@ import {
 	withEncodedRecordingStats,
 } from "./cli-core.js";
 import { type CliNodeRuntime, createCliNodeRuntime } from "./cli-node-runtime.js";
-import { formatBridgeStatusText, isBridgeStatusReady } from "./cli-status.js";
+import {
+	type BridgeStatusFailure,
+	bridgeConnectivityDiagnostics,
+	decideStatusPoll,
+	formatBridgeConnectivityMessage,
+	formatBridgeStatusText,
+	isBridgeStatusReady,
+	readBridgeStatus,
+	STATUS_COMMAND_TIMEOUT_MS,
+	StatusDeadlineError,
+	statusPollDelayMs,
+} from "./cli-status.js";
 import { collectDoctorReport, formatDoctorReportText } from "./doctor.js";
 import { closeBrowser, type LaunchOptions, launchBrowser, setupForegroundHandlers } from "./launcher.js";
 import { assertFfmpegAvailable, FfmpegWebmEncoder } from "./recording/ffmpeg-encoder.js";
@@ -408,38 +419,194 @@ function printFollowEvent(event: BridgeEvent, jsonMode: boolean): void {
 	console.log(`event:${event.event} ${JSON.stringify(event.data || {})}`);
 }
 
-async function fetchBridgeStatus(flags: { url?: string; host?: string; port?: string; json?: boolean }): Promise<void> {
-	const wsUrl = requireNodeRuntime().resolveConnection(flags).url;
-	const statusUrl = bridgeStatusUrl(wsUrl);
-	const jsonMode = flags.json || false;
+interface StatusCommandFlags {
+	url?: string;
+	host?: string;
+	port?: string;
+	token?: string;
+	json?: boolean;
+	timeout?: string;
+}
+
+function printBridgeStatus(status: BridgeServerStatus, statusUrl: string, jsonMode: boolean): void {
+	if (jsonMode) {
+		console.log(JSON.stringify(status, null, 2));
+		return;
+	}
+	for (const line of formatBridgeStatusText(status, {
+		cliVersion: VERSION,
+		cliBuild: requireCliBuildIdentity(),
+		statusUrl,
+	})) {
+		console.log(line);
+	}
+}
+
+function printStatusFailure(diagnostics: ReturnType<typeof bridgeConnectivityDiagnostics>, jsonMode: boolean): void {
+	const message = formatBridgeConnectivityMessage(diagnostics);
+	if (jsonMode) {
+		console.log(JSON.stringify({ error: { code: -1, message, diagnostics } }, null, 2));
+		return;
+	}
+	console.error("Error: " + message);
+}
+
+function remainingUntil(deadlineAt: number | undefined): number | undefined {
+	if (deadlineAt === undefined) return undefined;
+	return Math.max(0, deadlineAt - Date.now());
+}
+
+function delayWithinStatusDeadline(
+	milliseconds: number,
+	signal: AbortSignal,
+	remainingMs: () => number | undefined,
+): Promise<void> {
+	const remaining = remainingMs();
+	if (signal.aborted || (remaining !== undefined && remaining <= 0)) {
+		return Promise.reject(new StatusDeadlineError());
+	}
+	const sleepMs = remaining === undefined ? milliseconds : Math.min(milliseconds, remaining);
+	if (sleepMs <= 0) return Promise.reject(new StatusDeadlineError());
+	return new Promise((resolve, reject) => {
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const onAbort = (): void => {
+			if (timer !== undefined) clearTimeout(timer);
+			reject(new StatusDeadlineError());
+		};
+		timer = setTimeout(() => {
+			signal.removeEventListener("abort", onAbort);
+			const left = remainingMs();
+			if (signal.aborted || (left !== undefined && left <= 0)) reject(new StatusDeadlineError());
+			else resolve();
+		}, sleepMs);
+		signal.addEventListener("abort", onAbort, { once: true });
+	});
+}
+
+function sleepUntilAbort(milliseconds: number, signal: AbortSignal): Promise<void> {
+	if (milliseconds <= 0 || signal.aborted) return Promise.resolve();
+	return new Promise((resolve) => {
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const onAbort = (): void => {
+			if (timer !== undefined) clearTimeout(timer);
+			resolve();
+		};
+		timer = setTimeout(() => {
+			signal.removeEventListener("abort", onAbort);
+			resolve();
+		}, milliseconds);
+		signal.addEventListener("abort", onAbort, { once: true });
+	});
+}
+
+/**
+ * `status` is a connectivity probe. One deadline covers bridge autostart, the
+ * extension reconnect wait, and the status body so `--json` cannot sit silent
+ * past the caller's discovery budget.
+ */
+async function cmdStatus(flags: StatusCommandFlags): Promise<void> {
+	const jsonMode = flags.json === true;
+	const timeoutMs = parseTimeout(flags.timeout, STATUS_COMMAND_TIMEOUT_MS);
+	const startedAt = Date.now();
+	const deadlineAt = timeoutMs === undefined ? undefined : startedAt + timeoutMs;
+	const abort = new AbortController();
+	let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+	if (deadlineAt !== undefined) {
+		deadlineTimer = setTimeout(() => abort.abort(), Math.max(0, deadlineAt - Date.now()));
+	}
+	const remainingMs = (): number | undefined => remainingUntil(deadlineAt);
+	const runtime = requireNodeRuntime();
+	const bridgeFlags: StatusCommandFlags = {
+		url: flags.url,
+		host: flags.host,
+		port: flags.port,
+		token: flags.token,
+	};
+	let statusUrl = "unresolved";
+	let lastFailure: BridgeStatusFailure | undefined;
+	let hintPrinted = false;
 	try {
-		const controller = new AbortController();
-		const timeoutMs = parseTimeout((flags as { timeout?: string }).timeout, BridgeDefaults.STATUS_TIMEOUT_MS);
-		let timeout: ReturnType<typeof setTimeout> | undefined;
-		if (timeoutMs && timeoutMs > 0) {
-			timeout = setTimeout(() => controller.abort(), timeoutMs);
-		}
-		const response = await fetch(statusUrl, { signal: controller.signal });
-		if (timeout) clearTimeout(timeout);
-		if (!response.ok) {
-			throw new Error(`Status request failed: HTTP ${response.status}`);
-		}
-		const status = (await response.json()) as BridgeServerStatus;
-		assertBridgeStatusProtocol(status);
-		if (jsonMode) {
-			console.log(JSON.stringify(status, null, 2));
-		} else {
-			for (const line of formatBridgeStatusText(status, {
-				cliVersion: VERSION,
-				cliBuild: requireCliBuildIdentity(),
-				statusUrl,
-			})) {
-				console.log(line);
+		const resolved = runtime.resolveConnection(bridgeFlags);
+		statusUrl = bridgeStatusUrl(resolved.url);
+		const connection = await runtime.ensureServer(bridgeFlags, {
+			probeTimeoutMs: timeoutMs === undefined ? 3_000 : Math.min(1_000, Math.max(1, timeoutMs)),
+			delay: (milliseconds) => delayWithinStatusDeadline(milliseconds, abort.signal, remainingMs),
+			probe: async (url, probeTimeoutMs) => {
+				const budget = remainingMs();
+				const effective = budget === undefined ? probeTimeoutMs : Math.min(probeTimeoutMs, budget);
+				if (effective <= 0 || abort.signal.aborted) return false;
+				const result = await readBridgeStatus(url, effective, abort.signal);
+				if (!result.ok) {
+					lastFailure = result;
+					return false;
+				}
+				return true;
+			},
+		});
+		if (!bridgeFlags.token && connection.token) bridgeFlags.token = connection.token;
+		if (!flags.token && connection.token) flags.token = connection.token;
+		statusUrl = bridgeStatusUrl(runtime.resolveConnection(bridgeFlags).url);
+
+		let latest: BridgeServerStatus | undefined;
+		let delayMs = 100;
+		while (!abort.signal.aborted) {
+			const budget = remainingMs();
+			if (budget !== undefined && budget <= 0) break;
+			const readTimeout = budget === undefined ? 3_000 : Math.min(3_000, budget);
+			const result = await readBridgeStatus(statusUrl, readTimeout, abort.signal);
+			if (result.ok) {
+				latest = result.status;
+			} else {
+				const abortedAtDeadline = abort.signal.aborted && result.reason === "timeout";
+				if (!abortedAtDeadline || lastFailure === undefined) lastFailure = result;
 			}
+			const snapshotReady = latest !== undefined && statusSnapshotReady(latest);
+			if (
+				!jsonMode &&
+				!hintPrinted &&
+				latest !== undefined &&
+				!snapshotReady &&
+				Date.now() - startedAt >= EXTENSION_CONNECT_HINT_MS
+			) {
+				process.stderr.write("Waiting for Shuvgeist extension to connect...\n");
+				hintPrinted = true;
+			}
+			const decision = decideStatusPoll({
+				snapshotReady,
+				hasSnapshot: latest !== undefined,
+				remainingMs: remainingMs(),
+			});
+			if (decision === "return") break;
+			if (decision === "fail") break;
+			const sleepMs = statusPollDelayMs(delayMs, remainingMs());
+			if (sleepMs <= 0) break;
+			await sleepUntilAbort(sleepMs, abort.signal);
+			delayMs = Math.min(delayMs * 2, 500);
 		}
-		process.exit(0);
-	} catch (err) {
-		printError(err instanceof Error ? err.message : String(err), jsonMode);
+
+		if (latest) {
+			assertBridgeStatusProtocol(latest);
+			if (deadlineTimer) clearTimeout(deadlineTimer);
+			printBridgeStatus(latest, statusUrl, jsonMode);
+			process.exit(0);
+		}
+		throw new StatusDeadlineError();
+	} catch (error) {
+		if (deadlineTimer) clearTimeout(deadlineTimer);
+		if (error instanceof Error && error.message.startsWith("Bridge protocol mismatch:")) {
+			printError(error.message, jsonMode);
+			process.exit(3);
+		}
+		// Config parsing stays on the process-level fatal path so `--json` does not
+		// hide the config file path from stderr.
+		if (isFatalConfigError(error)) throw error;
+		const diagnostics = bridgeConnectivityDiagnostics({
+			statusUrl,
+			...(timeoutMs !== undefined ? { timeoutMs } : {}),
+			error,
+			...(lastFailure ? { lastFailure } : {}),
+		});
+		printStatusFailure(diagnostics, jsonMode);
 		process.exit(3);
 	}
 }
@@ -1283,16 +1450,19 @@ const EXTENSION_CONNECT_WAIT_MS = 30_000;
 const EXTENSION_CONNECT_HINT_MS = 1_500;
 
 async function fetchStatusSnapshot(statusUrl: string): Promise<BridgeServerStatus | null> {
-	try {
-		const controller = new AbortController();
-		const timeout = setTimeout(() => controller.abort(), 3000);
-		const response = await fetch(statusUrl, { signal: controller.signal });
-		clearTimeout(timeout);
-		if (!response.ok) return null;
-		return (await response.json()) as BridgeServerStatus;
-	} catch {
-		return null;
-	}
+	const result = await readBridgeStatus(statusUrl, 3_000);
+	return result.ok ? result.status : null;
+}
+
+function isFatalConfigError(error: unknown): boolean {
+	if (!(error instanceof Error) || error.name !== "NodeConfigError" || !("code" in error)) return false;
+	return error.code !== "AUTOSTART_FAILED" && error.code !== "AUTOSTART_UNSAFE";
+}
+
+function statusSnapshotReady(status: BridgeServerStatus): boolean {
+	if (status.extension?.connected === true) return true;
+	if (!Array.isArray(status.electron?.sessions)) return false;
+	return isBridgeStatusReady(status, true);
 }
 
 function assertBridgeStatusProtocol(status: BridgeServerStatus): void {
@@ -1447,7 +1617,7 @@ Usage:
                    [--headless] [--foreground] [--profile name]
                    [--user-data-dir path] [--use-default-profile]
   shuvgeist close
-  shuvgeist status [--json] [--timeout 10s]
+  shuvgeist status [--json] [--timeout 5s]
   shuvgeist navigate <url> [--new-tab] [--json] [--timeout 60s]
   shuvgeist tabs [list] [--json] [--timeout 60s]
   shuvgeist tabs close <tabId...> [--json]
@@ -1587,6 +1757,8 @@ Notes:
   screenshot --json includes those same metadata fields in the response.
   The packaged agent skill auto-installs to ~/.agents/skills/shuvgeist on each run
   (run "shuvgeist skill install --force" to reinstall it explicitly).
+  status waits at most 5s by default (--timeout overrides; --timeout none waits without a deadline).
+  If the bridge does not answer, status exits 3 and --json includes error.diagnostics.
 
 Examples:
   shuvgeist launch --url http://127.0.0.1:3000 --headless --user-data-dir /tmp/shuvgeist-profile --json
@@ -1736,15 +1908,17 @@ async function main(): Promise<void> {
 	// URL), so strip it before passing to the bridge server helpers.
 	//
 	// After the bridge process is up, also wait for the browser extension to
-	// (re)register. Status may return as soon as an Electron session is usable,
-	// because bridge-local Electron control does not depend on the extension.
+	// (re)register. `status` does this inside its own short deadline so a
+	// disconnected extension cannot block discovery for the full reconnect
+	// backoff. Electron control does not depend on the extension, so status
+	// treats a usable Electron session as ready.
 	//
 	// `launch` has its own extension-registration wait inside launchBrowser()
 	// and `close` is a local browser-lifecycle operation, so both skip the
-	// extra wait here. JSON callers still get a single-shot view: the wait is
-	// silent and bounded, and commands that do not require an extension target
-	// (e.g. a disconnected `status --json`) still complete after the timeout.
-	if (plan.kind !== "serve" && plan.kind !== "doctor" && plan.kind !== "usage-error") {
+	// extra wait here. JSON callers of other commands still get a silent,
+	// bounded wait, and commands that do not require an extension target still
+	// complete after that timeout.
+	if (plan.kind !== "serve" && plan.kind !== "doctor" && plan.kind !== "usage-error" && plan.kind !== "status") {
 		const runtime = requireNodeRuntime();
 		const bridgeFlags = plan.kind === "launch" ? { host: flags.host, port: flags.port, token: flags.token } : flags;
 		const connection = await runtime.ensureServer(bridgeFlags);
@@ -1762,7 +1936,6 @@ async function main(): Promise<void> {
 			const statusUrl = bridgeStatusUrl(wsUrl);
 			await waitForExtensionConnection(statusUrl, EXTENSION_CONNECT_WAIT_MS, {
 				silent: flags.json === true,
-				acceptElectron: plan.kind === "status",
 			});
 			const status = await fetchStatusSnapshot(statusUrl);
 			if (status) assertBridgeStatusProtocol(status);
@@ -1780,7 +1953,7 @@ async function main(): Promise<void> {
 			await cmdClose(flags);
 			break;
 		case "status":
-			await fetchBridgeStatus(flags);
+			await cmdStatus(flags);
 			break;
 		case "doctor":
 			await cmdDoctor(flags);
