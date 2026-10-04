@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Screenshot and eval no longer abort when another extension injects a `chrome-extension://` frame. Debugger attach removes that foreign frame from the top document and retries, so the command continues against the top frame. (`pc_e84dbc2d5f2d`, #91)
+
 ## [2.0.1] - 2026-09-21
 
 ### Breaking Changes
