@@ -1,6 +1,7 @@
 import { type ChromeDebuggerSession, ChromeDebuggerSessionPool } from "@shuvgeist/driver/cdp-session";
 import { bridgeLog } from "@shuvgeist/protocol/logging";
 import type { BridgeTelemetry, TelemetryAttributes, TraceContext } from "@shuvgeist/protocol/telemetry";
+import { isForeignExtensionFrameAccessError, skipForeignExtensionFrames } from "./foreign-extension-frames.js";
 
 export type DebuggerDomain = "Runtime" | "Network" | "Page" | "Performance" | "Tracing";
 
@@ -94,7 +95,7 @@ export class DebuggerManager {
 		try {
 			await this.runSerialized(tabId, async (state) => {
 				if (state.refCount === 0) {
-					await chrome.debugger.attach({ tabId }, "1.3");
+					await this.attachToTab(tabId);
 					bridgeLog("info", "debugger attached", {
 						role: "extension",
 						tabId,
@@ -248,6 +249,40 @@ export class DebuggerManager {
 
 	cdpSession(tabId: number): ChromeDebuggerSession {
 		return this.sessions.get(tabId);
+	}
+
+	private async attachToTab(tabId: number): Promise<void> {
+		try {
+			await chrome.debugger.attach({ tabId }, "1.3");
+		} catch (error) {
+			if (!isForeignExtensionFrameAccessError(error)) throw error;
+			const removed = await this.skipForeignFrames(tabId, error);
+			if (removed === 0) throw error;
+			await chrome.debugger.attach({ tabId }, "1.3");
+		}
+	}
+
+	private async skipForeignFrames(tabId: number, error: unknown): Promise<number> {
+		try {
+			const removed = await skipForeignExtensionFrames(tabId);
+			if (removed > 0) {
+				bridgeLog("info", "skipped foreign extension frames", {
+					role: "extension",
+					tabId,
+					outcome: "success",
+					removed,
+				});
+			}
+			return removed;
+		} catch (stripError) {
+			bridgeLog("warn", "failed to skip foreign extension frames", {
+				role: "extension",
+				tabId,
+				outcome: "error",
+				error: stripError instanceof Error ? stripError.message : String(stripError),
+			});
+			throw error;
+		}
 	}
 
 	private async runSerialized(tabId: number, action: (state: TabDebuggerState) => Promise<void>): Promise<void> {
