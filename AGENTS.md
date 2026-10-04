@@ -19,6 +19,7 @@ This repository uses a single root domain context. See `docs/agents/domain.md`.
 
 ## Commands
 - After code changes: run `./check.sh`. Fix all errors and warnings before committing.
+- Run a single test file with `npx vitest run tests/unit/<file>.test.ts`. `npm test` forwards extra arguments to the integration script (`npm run test:unit && npm run test:integration`), so the full unit suite still runs and the integration script receives those arguments. `test:unit` is `vitest run tests/unit proxy/tests`; Vitest ORs positional filters, so an extra path still matches every unit test.
 - After code changes that affect the extension UI or runtime: rebuild with `npm run build` so `dist-chrome/` is updated. There is no persistent dev watcher; the agent must rebuild explicitly.
 - After code changes that affect the CLI bridge: rebuild with `npm run build:cli`.
 - NEVER commit unless the user asks.
