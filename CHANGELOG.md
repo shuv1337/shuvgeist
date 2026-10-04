@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Chrome device emulation is reapplied after debugger reattach so screenshots keep the emulated DPR instead of a zoomed host-scale crop. (#94)
+
 ## [2.0.1] - 2026-09-21
 
 ### Breaking Changes

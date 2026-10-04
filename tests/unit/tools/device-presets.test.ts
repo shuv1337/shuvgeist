@@ -14,6 +14,8 @@ class FakeDebuggerManager {
 		) => undefined,
 	);
 	sendCommand = vi.fn(async (_tabId: number, _method: string, _params?: Record<string, unknown>) => ({}));
+	rememberDeviceEmulation = vi.fn();
+	forgetDeviceEmulation = vi.fn();
 	addEventListener = vi.fn(
 		(
 			_tabId: number,
@@ -64,10 +66,19 @@ describe("device-presets", () => {
 		expect(manager.sendCommand).toHaveBeenCalledWith(22, "Emulation.setDeviceMetricsOverride", expect.any(Object));
 		expect(manager.sendCommand).toHaveBeenCalledWith(22, "Emulation.setTouchEmulationEnabled", expect.any(Object));
 		expect(manager.sendCommand).toHaveBeenCalledWith(22, "Emulation.setUserAgentOverride", expect.any(Object));
+		expect(manager.rememberDeviceEmulation).toHaveBeenCalledWith(
+			22,
+			expect.objectContaining({
+				width: applied.width,
+				height: applied.height,
+				deviceScaleFactor: applied.deviceScaleFactor,
+			}),
+		);
 
 		const reset = await controller.reset(22);
 		expect(reset).toEqual({ tabId: 22, wasEmulated: true });
 		expect(controller.getActive(22)).toBeUndefined();
 		expect(manager.sendCommand).toHaveBeenCalledWith(22, "Emulation.clearDeviceMetricsOverride");
+		expect(manager.forgetDeviceEmulation).toHaveBeenCalledWith(22);
 	});
 });

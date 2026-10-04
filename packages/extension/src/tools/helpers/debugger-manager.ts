@@ -27,8 +27,19 @@ interface DebuggerTraceOptions {
 	attributes?: TelemetryAttributes;
 }
 
+/** Emulation overrides Chrome drops when the debugger session ends. */
+export interface DebuggerDeviceEmulation {
+	width: number;
+	height: number;
+	deviceScaleFactor: number;
+	mobile: boolean;
+	touch: boolean;
+	userAgent: string;
+}
+
 export class DebuggerManager {
 	private readonly tabStates = new Map<number, TabDebuggerState>();
+	private readonly deviceEmulation = new Map<number, DebuggerDeviceEmulation>();
 	private readonly sessions = new ChromeDebuggerSessionPool(this);
 	private telemetry?: BridgeTelemetry;
 
@@ -50,6 +61,9 @@ export class DebuggerManager {
 		chrome.debugger.onDetach.addListener((source, reason) => {
 			const tabId = source.tabId;
 			if (typeof tabId !== "number") return;
+			if (reason === "target_closed") {
+				this.deviceEmulation.delete(tabId);
+			}
 			const state = this.tabStates.get(tabId);
 			if (!state) return;
 			bridgeLog("warn", "debugger detached", {
@@ -72,6 +86,14 @@ export class DebuggerManager {
 			}
 			this.tabStates.delete(tabId);
 		});
+	}
+
+	rememberDeviceEmulation(tabId: number, emulation: DebuggerDeviceEmulation): void {
+		this.deviceEmulation.set(tabId, { ...emulation });
+	}
+
+	forgetDeviceEmulation(tabId: number): void {
+		this.deviceEmulation.delete(tabId);
 	}
 
 	async acquire(tabId: number, owner: string): Promise<void> {
@@ -100,6 +122,16 @@ export class DebuggerManager {
 						tabId,
 						outcome: "success",
 					});
+					try {
+						await this.reapplyDeviceEmulation(tabId);
+					} catch (error) {
+						try {
+							await chrome.debugger.detach({ tabId });
+						} catch {
+							// Keep the reapply failure as the acquire error.
+						}
+						throw error;
+					}
 				}
 
 				state.refCount += 1;
@@ -248,6 +280,40 @@ export class DebuggerManager {
 
 	cdpSession(tabId: number): ChromeDebuggerSession {
 		return this.sessions.get(tabId);
+	}
+
+	/**
+	 * Chrome clears Emulation overrides when the debugger detaches. A later attach
+	 * leaves layout width in place while screenshots use the host device pixel ratio,
+	 * which captures a zoomed top-left crop. Restore the last successful override
+	 * before any caller uses the new session.
+	 */
+	private async reapplyDeviceEmulation(tabId: number): Promise<void> {
+		const emulation = this.deviceEmulation.get(tabId);
+		if (!emulation) return;
+		await chrome.debugger.sendCommand({ tabId }, "Emulation.setDeviceMetricsOverride", {
+			width: emulation.width,
+			height: emulation.height,
+			deviceScaleFactor: emulation.deviceScaleFactor,
+			mobile: emulation.mobile,
+		});
+		await chrome.debugger.sendCommand({ tabId }, "Emulation.setTouchEmulationEnabled", {
+			enabled: emulation.touch,
+			configuration: emulation.touch ? "mobile" : "desktop",
+		});
+		if (emulation.userAgent) {
+			await chrome.debugger.sendCommand({ tabId }, "Emulation.setUserAgentOverride", {
+				userAgent: emulation.userAgent,
+			});
+		}
+		bridgeLog("debug", "reapplied device emulation", {
+			role: "extension",
+			tabId,
+			outcome: "success",
+			width: emulation.width,
+			height: emulation.height,
+			deviceScaleFactor: emulation.deviceScaleFactor,
+		});
 	}
 
 	private async runSerialized(tabId: number, action: (state: TabDebuggerState) => Promise<void>): Promise<void> {

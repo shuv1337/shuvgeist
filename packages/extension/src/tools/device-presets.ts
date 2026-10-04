@@ -131,6 +131,7 @@ export class DevicePresetController {
 				userAgent: normalized.userAgent,
 			});
 			this.active.set(tabId, normalized);
+			this.debuggerManager.rememberDeviceEmulation(tabId, normalized);
 			return { tabId, ...normalized };
 		} finally {
 			await this.debuggerManager.release(tabId, owner);
@@ -150,6 +151,7 @@ export class DevicePresetController {
 				userAgent: "",
 			});
 			const wasEmulated = this.active.delete(tabId);
+			this.debuggerManager.forgetDeviceEmulation(tabId);
 			return { tabId, wasEmulated };
 		} finally {
 			await this.debuggerManager.release(tabId, owner);

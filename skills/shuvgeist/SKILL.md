@@ -774,6 +774,10 @@ shuvgeist device reset
 
 Use this for responsive bugs, mobile-only flows, touch behavior, or user-agent-sensitive pages.
 
+Chrome drops device-emulation overrides when the debugger detaches. Shuvgeist stores the active override and reapplies metrics, touch emulation, and the user-agent override on the next debugger attach, including after `eval`, native input, and screenshot capture. Layout size and screenshot scale stay on the emulated viewport and device pixel ratio.
+
+On a build that does not reapply overrides, a screenshot taken after `eval`, `nativeClick`, `nativePress`, or a timed-out screenshot can be a zoomed top-left crop (host DPR, often 2, so a 1440x900 emulation looks like 720x450 CSS) while `innerWidth` still reports the emulated width. Workaround: reload the tab, run `shuvgeist device reset`, run `device emulate` again, and capture the screenshot before `eval` or native input.
+
 ### Performance tools
 
 ```bash
